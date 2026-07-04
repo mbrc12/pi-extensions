@@ -27,6 +27,12 @@ import { COMMAND_PREVIEW_LENGTH } from "./types";
 const STATE_KEY = "permissions-mode";
 let currentMode: PermissionMode = "classify"; // default
 
+/** Ring the terminal bell so tmux can flag the window as alerted. */
+function bell(): void {
+  // \x07 = BEL. Requires tmux `bell-action` to be on (default `any`).
+  process.stdout.write("\x07");
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -156,6 +162,7 @@ async function handleToolCall(
     const summary = summarizeToolCall(event.toolName, event.input);
 
     if (ctx.hasUI) {
+      bell();
       const choice = await ctx.ui.select(
         summary.isLarge
           ? `Allow? ${summary.title}`
@@ -279,6 +286,7 @@ async function askUserForClassification(
     ? `${summary.title}\n\n${summary.detail.slice(0, 300)}`
     : summary.detail;
 
+  bell();
   const choice = await ctx.ui.select(
     `${header}\n\n${body}`,
     isDangerous
