@@ -5,19 +5,22 @@
  */
 
 import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 const PREFIX = "» ";
 
 class PromptPrefixEditor extends CustomEditor {
   render(width: number): string[] {
-    const lines = super.render(width);
+    const prefixWidth = visibleWidth(PREFIX);
+    const lines = super.render(width - prefixWidth);
     // lines layout: [0] = top border, [1..] = content lines, [last] = bottom border
-    // Prepend prefix only to the first content line (the input line)
     if (lines.length > 1) {
-      const prefixWidth = visibleWidth(PREFIX);
-      // Truncate the original line to fit, then prepend prefix
-      const truncated = truncateToWidth(lines[1]!, width - prefixWidth);
-      lines[1] = PREFIX + truncated;
+      // First content line gets the prefix
+      lines[1] = PREFIX + lines[1]!;
+      // Continuation lines are indented to align with the text after the prefix
+      const indent = " ".repeat(prefixWidth);
+      for (let i = 2; i < lines.length - 1; i++) {
+        lines[i] = indent + lines[i]!;
+      }
     }
 
     return lines;
