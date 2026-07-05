@@ -91,8 +91,6 @@ export default function (pi: ExtensionAPI) {
           // ----- cumulative token / cost stats -----
           let totalInput = 0;
           let totalOutput = 0;
-          let totalCacheRead = 0;
-          let totalCacheWrite = 0;
           let totalCost = 0;
 
           for (const entry of ctx.sessionManager.getEntries()) {
@@ -103,8 +101,6 @@ export default function (pi: ExtensionAPI) {
               const m = entry.message as AssistantMessage;
               totalInput += m.usage.input;
               totalOutput += m.usage.output;
-              totalCacheRead += m.usage.cacheRead ?? 0;
-              totalCacheWrite += m.usage.cacheWrite ?? 0;
               totalCost += m.usage.cost.total;
             }
           }
@@ -161,12 +157,8 @@ export default function (pi: ExtensionAPI) {
           // 3. Token I/O (and cache if present)
           if (totalInput > 0 || totalOutput > 0) {
             const io = `↑${fmt(totalInput)} ↓${fmt(totalOutput)}`;
-            const cache =
-              totalCacheRead > 0 || totalCacheWrite > 0
-                ? ` R${fmt(totalCacheRead)} W${fmt(totalCacheWrite)}`
-                : "";
             segments.push(
-              theme.fg("dim", "tok") + " " + theme.fg("muted", io + cache),
+              theme.fg("dim", "tok") + " " + theme.fg("muted", io),
             );
           }
 
