@@ -192,7 +192,7 @@ const TEST_CASES: TestCase[] = [
     tool: "bash",
     input: { command: "sort file.txt | uniq" },
     description: "sort | uniq pipe",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
@@ -222,37 +222,37 @@ const TEST_CASES: TestCase[] = [
     tool: "bash",
     input: { command: "cargo build" },
     description: "cargo build",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
     input: { command: "cargo test" },
     description: "cargo test",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
     input: { command: "cargo clippy" },
     description: "cargo clippy",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
     input: { command: "npm test" },
     description: "npm test",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
     input: { command: "npm run build" },
     description: "npm run build",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
     input: { command: "npx tsc --noEmit" },
     description: "npx tsc",
-    expectRule: "allow",
+    expectRule: "defer",
   },
 
   // =====================================================================
@@ -262,7 +262,7 @@ const TEST_CASES: TestCase[] = [
     tool: "bash",
     input: { command: "cd /tmp && ls" },
     description: "cd && ls",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
@@ -274,13 +274,13 @@ const TEST_CASES: TestCase[] = [
     tool: "bash",
     input: { command: "for f in *.txt; do wc -l \"$f\"; done" },
     description: "for loop (read-only)",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
     input: { command: "if [ -f file.txt ]; then cat file.txt; fi" },
     description: "if/then shell construct",
-    expectRule: "allow",
+    expectRule: "defer",
   },
 
   // =====================================================================
@@ -424,6 +424,24 @@ const TEST_CASES: TestCase[] = [
   },
   {
     tool: "bash",
+    input: { command: "git -C /Users/subwave/kiki/twin push" },
+    description: "git -C push (no force flag)",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: { command: "git -c core.sshCommand=ssh push" },
+    description: "git -c push (no force flag)",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: { command: "git -C /Users/subwave/kiki/twin push --force" },
+    description: "git -C push --force",
+    expectRule: "dangerous",
+  },
+  {
+    tool: "bash",
     input: { command: "git reset HEAD~1" },
     description: "git reset (no --hard)",
     expectRule: "defer",
@@ -500,9 +518,15 @@ const TEST_CASES: TestCase[] = [
   },
   {
     tool: "bash",
-    input: { command: "git tag v2.0.0" },
-    description: "git tag",
+    input: { command: "git tag" },
+    description: "git tag list",
     expectRule: "allow",
+  },
+  {
+    tool: "bash",
+    input: { command: "git tag v2.0.0" },
+    description: "git tag create",
+    expectRule: "defer",
   },
 
   // =====================================================================
@@ -534,7 +558,7 @@ const TEST_CASES: TestCase[] = [
     tool: "bash",
     input: { command: "cat file | tee /dev/null" },
     description: "tee to /dev/null — safe",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
@@ -968,13 +992,13 @@ PY`,
     tool: "bash",
     input: { command: "sed 's/foo/bar/g' file.txt" },
     description: "sed without -i — safe",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
     input: { command: "awk '{print $1}' file.txt" },
     description: "awk read-only",
-    expectRule: "allow",
+    expectRule: "defer",
   },
   {
     tool: "bash",
@@ -1022,7 +1046,7 @@ PY`,
     tool: "bash",
     input: { command: "ps aux | grep node" },
     description: "ps aux — safe (first word 'ps')",
-    expectRule: "allow",
+    expectRule: "defer",
   },
 
   // =====================================================================
@@ -1080,13 +1104,13 @@ PY`,
     tool: "bash",
     input: { command: "go build ./..." },
     description: "go build",
-    expectRule: "allow",  // go is now in SAFE_COMMANDS with checker
+    expectRule: "defer",  // go commands now go to LLM
   },
   {
     tool: "bash",
     input: { command: "go test ./..." },
     description: "go test",
-    expectRule: "allow",  // go is now in SAFE_COMMANDS with checker
+    expectRule: "defer",  // go commands now go to LLM
   },
 
   // =====================================================================

@@ -61,7 +61,7 @@ function modeColor(mode: PermissionMode): "success" | "warning" | "error" {
 
 function classificationColor(
   classification: Classification | "unavailable",
-): "success" | "warning" | "error" | "info" {
+): "success" | "warning" | "error" {
   switch (classification) {
     case "allow":
       return "success";
@@ -71,20 +71,20 @@ function classificationColor(
     case "escalate":
       return "warning";
     case "unavailable":
-      return "info";
+      return "warning";
   }
 }
 
 function showClassification(
   ctx: ExtensionContext,
-  source: "rule" | "llm",
+  label: string,
   classification: Classification | "unavailable",
 ): void {
   if (ctx.hasUI) {
-    ctx.ui.notify(
-      `${source}: ${classification}`,
-      classificationColor(classification),
-    );
+    const text = ctx.ui.theme?.fg
+      ? ctx.ui.theme.fg(classificationColor(classification), label)
+      : label;
+    ctx.ui.setStatus("permissions-classification", text);
   }
 }
 
@@ -223,14 +223,11 @@ async function handleToolCall(
     let classification: Classification;
     let reason: string;
 
-    if (ruleResult) {
-      showClassification(ctx, "rule", ruleResult.classification);
-    }
-
     if (ruleResult && ruleResult.classification !== "defer") {
       // Rule-based check gave a definitive answer (allow or dangerous)
       classification = ruleResult.classification;
       reason = ruleResult.reason;
+      showClassification(ctx, `rule:${classification}`, classification);
     } else {
       // Rule-based says "defer" or couldn't decide — try LLM
       const llmResult = await classifyWithLLM(
@@ -242,16 +239,22 @@ async function handleToolCall(
       );
 
       if (llmResult) {
-        showClassification(ctx, "llm", llmResult.classification);
         classification = llmResult.classification;
         reason = llmResult.reason;
+        showClassification(
+          ctx,
+          ruleResult
+            ? `rule:${ruleResult.classification} → llm:${classification}`
+            : `llm:${classification}`,
+          classification,
+        );
       } else if (ruleResult) {
-        showClassification(ctx, "llm", "unavailable");
         // No LLM available — use rule result ("defer")
         classification = ruleResult.classification;
         reason = ruleResult.reason;
+        showClassification(ctx, `rule:${classification} → llm:unavailable`, "unavailable");
       } else {
-        showClassification(ctx, "llm", "unavailable");
+        showClassification(ctx, "llm:unavailable", "unavailable");
         // No LLM and no rule result — ask user directly
         return await askUserForClassification(
           event.toolName,

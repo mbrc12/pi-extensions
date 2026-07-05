@@ -135,7 +135,12 @@ function classifyBash(
   const pythonResult = checkPythonHeredoc(command);
   if (pythonResult) return pythonResult;
 
-  // 5. Quick heuristic: if the command looks like a simple safe command, allow
+  // 5. Compound shell syntax is easy to misclassify with regex. Let the LLM
+  // inspect it unless an earlier rule already caught it as dangerous/defer.
+  const complexityResult = checkShellComplexity(command);
+  if (complexityResult) return complexityResult;
+
+  // 6. Quick heuristic: if the command looks like a simple safe command, allow
   const safeResult = checkSafeCommand(command);
   if (safeResult) return safeResult;
 
@@ -215,6 +220,16 @@ function checkPythonHeredoc(command: string): ClassificationResult | undefined {
   };
 }
 
+function checkShellComplexity(command: string): ClassificationResult | undefined {
+  if (/(?:&&|\|\||;|`|\$\(|\|)/.test(command)) {
+    return {
+      classification: "defer",
+      reason: "Compound shell command requires LLM review",
+    };
+  }
+  return undefined;
+}
+
 function checkSafeCommand(command: string): ClassificationResult | undefined {
   // Strip leading environment var assignments and redirections for the check
   const cleanCommand = command
@@ -252,34 +267,18 @@ function checkSafeCommand(command: string): ClassificationResult | undefined {
       return checkGitCommand(cleanCommand);
     }
     if (firstWord === "npm" || firstWord === "npx" || firstWord === "pnpm" || firstWord === "yarn") {
-      return checkNodePackageCommand(cleanCommand);
+      return { classification: "defer", reason: "Package manager command requires LLM review" };
     }
     if (firstWord === "cargo") {
-      return checkCargoCommand(cleanCommand);
+      return { classification: "defer", reason: "Cargo command requires LLM review" };
     }
     if (firstWord === "go") {
-      return checkGoCommand(cleanCommand);
+      return { classification: "defer", reason: "Go command requires LLM review" };
     }
-    if (firstWord === "sed") {
-      // sed -i is an in-place edit → review
-      if (/\bsed\b.*-i/.test(cleanCommand)) {
-        return {
-          classification: "defer",
-          reason: "sed -i modifies files in-place",
-        };
-      }
-    }
-    if (firstWord === "awk") {
-      // awk with redirect → review
-      if (FILE_REDIRECT.test(cleanCommand)) {
-        return { classification: "defer", reason: "awk with file redirect" };
-      }
-    }
-    if (firstWord === "tee") {
-      return checkTeeCommand(cleanCommand);
+    if (firstWord === "sed" || firstWord === "awk" || firstWord === "xargs" || firstWord === "tee") {
+      return { classification: "defer", reason: `${firstWord} command requires LLM review` };
     }
     if (firstWord === "kill" || firstWord === "killall") {
-      // Sending signals could be dangerous but is common in dev workflows
       return {
         classification: "defer",
         reason: "Signal command may affect running processes",
@@ -324,20 +323,95 @@ function checkTeeCommand(command: string): ClassificationResult | undefined {
 }
 
 function checkGitCommand(command: string): ClassificationResult | undefined {
-  // Note: git push, git reset --hard, git clean, git branch -D are already
-  // caught by DANGEROUS_INDICATORS / REVIEW_INDICATORS which run first.
-  // This handler catches the remaining git subcommands.
-  if (/\bgit\s+checkout\b/.test(command)) {
-    return { classification: "defer", reason: "git checkout changes working tree" };
+  const tokens = tokenizeShellWords(command);
+  const subcommandInfo = getGitSubcommand(tokens);
+  const subcommand = subcommandInfo?.subcommand;
+  const args = subcommandInfo?.args ?? [];
+
+  if (!subcommand) {
+    return { classification: "defer", reason: "Unable to identify git subcommand" };
   }
-  if (/\bgit\s+(?:rebase|merge|cherry-pick|revert|stash\s+drop|stash\s+clear)\b/.test(command)) {
-    return { classification: "defer", reason: "git operation may modify history" };
+
+  // Handle dangerous forms even when git has global options, e.g.
+  // `git -C repo push --force` or `git -c x=y reset --hard`.
+  if (subcommand === "push" && args.some((a) => a === "--force" || a === "-f" || a.startsWith("--force-") || a === "--delete")) {
+    return { classification: "dangerous", reason: "Destructive git push" };
   }
-  // safe: git status, git log, git diff, git show, git branch, git tag, git add, etc.
+  if (subcommand === "reset" && args.includes("--hard")) {
+    return { classification: "dangerous", reason: "git reset --hard" };
+  }
+
+  // Be conservative: only explicitly read-only git subcommands are auto-allowed.
+  // Everything that may mutate refs, the index, the working tree, history, or a
+  // remote should go to the LLM/user instead of being regex-guessed as safe.
+  const readOnly = new Set([
+    "status", "log", "diff", "show", "grep", "ls-files", "rev-parse",
+    "remote", "config", "describe", "blame", "shortlog", "reflog",
+  ]);
+
+  if (readOnly.has(subcommand)) {
+    return {
+      classification: "allow",
+      reason: `Read-only git subcommand: ${subcommand}`,
+    };
+  }
+
+  if (subcommand === "branch" || subcommand === "tag") {
+    // `git branch` / `git tag` list; arguments may create/delete/modify refs.
+    const nonFlagArgs = args.filter((a) => !a.startsWith("-"));
+    if (nonFlagArgs.length === 0) {
+      return { classification: "allow", reason: `Read-only git ${subcommand}` };
+    }
+  }
+
   return {
-    classification: "allow",
-    reason: "Safe git command (read-only or non-destructive)",
+    classification: "defer",
+    reason: `Git subcommand requires review: ${subcommand}`,
   };
+}
+
+function tokenizeShellWords(command: string): string[] {
+  // Lightweight tokenizer for classifier heuristics. This is intentionally not
+  // a shell parser; when it cannot understand something, callers should defer.
+  return command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((token) =>
+    token.replace(/^(['"])(.*)\1$/, "$2"),
+  ) ?? [];
+}
+
+function getGitSubcommand(
+  tokens: string[],
+): { subcommand: string; args: string[] } | undefined {
+  if (tokens[0] !== "git") return undefined;
+
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token) continue;
+
+    // Common git global options that consume the next token.
+    if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"].includes(token)) {
+      i++;
+      continue;
+    }
+
+    // Common git global flags / inline options.
+    if (
+      token === "--no-pager" ||
+      token === "--bare" ||
+      token === "--version" ||
+      token === "--help" ||
+      token.startsWith("-c") ||
+      token.startsWith("--git-dir=") ||
+      token.startsWith("--work-tree=") ||
+      token.startsWith("--namespace=") ||
+      token.startsWith("--exec-path=")
+    ) {
+      continue;
+    }
+
+    return { subcommand: token, args: tokens.slice(i + 1) };
+  }
+
+  return undefined;
 }
 
 function checkGoCommand(command: string): ClassificationResult | undefined {
