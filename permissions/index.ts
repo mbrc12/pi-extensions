@@ -59,6 +59,35 @@ function modeColor(mode: PermissionMode): "success" | "warning" | "error" {
   }
 }
 
+function classificationColor(
+  classification: Classification | "unavailable",
+): "success" | "warning" | "error" | "info" {
+  switch (classification) {
+    case "allow":
+      return "success";
+    case "dangerous":
+      return "error";
+    case "defer":
+    case "escalate":
+      return "warning";
+    case "unavailable":
+      return "info";
+  }
+}
+
+function showClassification(
+  ctx: ExtensionContext,
+  source: "rule" | "llm",
+  classification: Classification | "unavailable",
+): void {
+  if (ctx.hasUI) {
+    ctx.ui.notify(
+      `${source}: ${classification}`,
+      classificationColor(classification),
+    );
+  }
+}
+
 /** Build a human-readable summary of a tool call for the ask dialog. */
 function summarizeToolCall(
   toolName: string,
@@ -194,6 +223,10 @@ async function handleToolCall(
     let classification: Classification;
     let reason: string;
 
+    if (ruleResult) {
+      showClassification(ctx, "rule", ruleResult.classification);
+    }
+
     if (ruleResult && ruleResult.classification !== "defer") {
       // Rule-based check gave a definitive answer (allow or dangerous)
       classification = ruleResult.classification;
@@ -209,13 +242,16 @@ async function handleToolCall(
       );
 
       if (llmResult) {
+        showClassification(ctx, "llm", llmResult.classification);
         classification = llmResult.classification;
         reason = llmResult.reason;
       } else if (ruleResult) {
+        showClassification(ctx, "llm", "unavailable");
         // No LLM available — use rule result ("defer")
         classification = ruleResult.classification;
         reason = ruleResult.reason;
       } else {
+        showClassification(ctx, "llm", "unavailable");
         // No LLM and no rule result — ask user directly
         return await askUserForClassification(
           event.toolName,
@@ -491,12 +527,16 @@ PY` }, expectRule: "dangerous" },
 from pathlib import Path
 Path('/opt/config.ini').write_text('x')
 PY` }, expectRule: "dangerous" },
-        // Python writes — /tmp paths → REVIEW (escalate)
+        // Python writes — /tmp paths → ALLOW; deletes still REVIEW
         { label: "write_parquet to /tmp", tool: "bash", input: { command: `python3 << 'PY'
 import polars as pl
 df = pl.read_csv('data.csv')
 df.write_parquet('/tmp/out.parquet')
-PY` }, expectRule: "review" },
+PY` }, expectRule: "allow" },
+        { label: "Path.write_text to /tmp", tool: "bash", input: { command: `python3 << 'PY'
+from pathlib import Path
+Path('/tmp/out.txt').write_text('x')
+PY` }, expectRule: "allow" },
         { label: "shutil.rmtree /var/tmp", tool: "bash", input: { command: `python -c "import shutil; shutil.rmtree('/var/tmp/build')"` }, expectRule: "review" },
         // Python writes — variable-based paths → REVIEW (unclear target)
         { label: "write_parquet var path", tool: "bash", input: { command: `python3 << 'PY'

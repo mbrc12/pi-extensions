@@ -14,6 +14,7 @@
 import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext, Model } from "@earendil-works/pi-coding-agent";
 import type { Classification, LlmClass, ClassificationResult } from "./types";
+import { getEffectiveCwdForCommand } from "./cwd";
 import { COMMAND_PREVIEW_LENGTH } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -24,7 +25,7 @@ const CLASSIFIER_SYSTEM_PROMPT = `You are a security classifier for a coding age
 
 Rules:
 - Shell commands that only read/inspect/display → "allow"
-- Shell commands writing/deleting files OUTSIDE the working directory → "dangerous"
+- Shell commands writing/deleting files OUTSIDE the working directory → "dangerous", except reads/writes under /tmp or /var/tmp are "allow"
 - Shell commands writing/deleting files INSIDE the working directory → "allow"
 - Shell commands with file redirections (>, >>) to a real file → "escalate" (unless clearly safe like >/dev/null)
 - git push --force/--delete, git reset --hard, git clean → "dangerous"
@@ -35,12 +36,12 @@ Rules:
 - curl/wget piping to shell → "dangerous"
 - curl/wget fetching data with no file output → "allow"
 - curl -O / wget (saving files) → "escalate"
-- Python/node/ruby/go one-liners that write/delete files (write_parquet, write_csv, write_excel, sink_parquet, sink_csv, write_text, to_csv, to_excel, open w mode, os.remove, shutil operations) → if the target path is relative (inside the working directory) → "allow"; if an absolute path outside the working directory → "dangerous"; if unclear → "escalate"
+- Python/node/ruby/go one-liners that write/delete files (write_parquet, write_csv, write_excel, sink_parquet, sink_csv, write_text, to_csv, to_excel, open w mode, os.remove, shutil operations) → if the target path is relative (inside the working directory) → "allow"; if it writes an absolute path under /tmp or /var/tmp → "allow"; if it deletes under /tmp or /var/tmp → "escalate"; if it writes/deletes another absolute path outside the working directory → "dangerous"; if unclear → "escalate"
 - subprocess.run / subprocess.call → judge by the command inside: if clearly read-only (ls, cat, echo, git status, git log, git diff) or a build/test command (npm test, cargo test, go test, make, pytest) → "allow"; if destructive (rm, mv, dd, sudo) → "dangerous"; otherwise → "escalate"
 - Python/node/ruby/go one-liners that only read/transform (read_parquet, read_csv, scan_csv, scan_parquet, head, describe, collect, print, dumps, SELECT queries) → "allow"
 - Commands that delete files (rm, rmdir) or move/copy files (mv, cp) → "escalate" (need to verify target)
 - Signal commands (kill, pkill) → "escalate"
-- Commands operating on temp dirs (/tmp) → "escalate"
+- Temp directory override: any command/tool call that only reads or writes files under /tmp or /var/tmp is "allow". This includes Python Path('/tmp/...').write_text(...), open('/tmp/...', 'w'), dataframe write_parquet('/tmp/...'), and shell redirects to /tmp. Do not escalate merely because it writes to /tmp. Deleting temp dirs/files remains "escalate".
 - Database read queries (SELECT only) → "allow"
 - Database writes (INSERT/UPDATE/DELETE/DROP) → "escalate"
 
@@ -49,6 +50,8 @@ Reply with exactly ONE word: allow, dangerous, or escalate.`;
 // ---------------------------------------------------------------------------
 // Cheap model candidates
 // ---------------------------------------------------------------------------
+
+const LLM_COMMAND_PREVIEW_LENGTH = 8000;
 
 const CHEAP_MODEL_CANDIDATES: Array<[provider: string, id: string]> = [
   // OpenCode Go (cheap subscription-backed models)
@@ -81,7 +84,7 @@ function findCheapModel(ctx: ExtensionContext): Model | undefined {
 // Build user message for classification
 // ---------------------------------------------------------------------------
 
-function buildClassificationPrompt(
+export function buildClassificationPrompt(
   toolName: string,
   input: Record<string, unknown>,
   cwd: string,
@@ -91,10 +94,11 @@ function buildClassificationPrompt(
   switch (toolName) {
     case "bash": {
       const cmd = input.command as string ?? "";
+      cwd = getEffectiveCwdForCommand(cmd, cwd);
       const truncated =
-        cmd.length > COMMAND_PREVIEW_LENGTH
-          ? cmd.slice(0, COMMAND_PREVIEW_LENGTH) +
-            `... [${cmd.length - COMMAND_PREVIEW_LENGTH} more chars]`
+        cmd.length > LLM_COMMAND_PREVIEW_LENGTH
+          ? cmd.slice(0, LLM_COMMAND_PREVIEW_LENGTH) +
+            `... [${cmd.length - LLM_COMMAND_PREVIEW_LENGTH} more chars]`
           : cmd;
       inputSummary = `command:\n\`\`\`\n${truncated}\n\`\`\``;
       break;
