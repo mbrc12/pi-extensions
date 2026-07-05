@@ -808,6 +808,154 @@ PY`,
   },
 
   // =====================================================================
+  // BASH — python heredocs: writes to absolute paths (rule still defers all Python)
+  // =====================================================================
+  {
+    tool: "bash",
+    input: {
+      command: `python3 << 'PY'
+import polars as pl
+df = pl.read_csv('data.csv')
+df.write_parquet('/etc/output.parquet')
+PY`,
+    },
+    description: "Polars write_parquet — absolute path outside cwd",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python3 << 'PY'
+df.to_csv('/usr/local/data.csv')
+PY`,
+    },
+    description: "Python to_csv — absolute path outside cwd",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python -c "import os; os.remove('/etc/hosts')"`,
+    },
+    description: "python -c os.remove — absolute path outside cwd",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python << 'PY'
+with open('/usr/bin/tool', 'w') as f:
+    f.write('malicious')
+PY`,
+    },
+    description: "Python open w mode — absolute path outside cwd",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python3 << 'PY'
+from pathlib import Path
+Path('/etc/config.ini').write_text('hacked')
+PY`,
+    },
+    description: "Path.write_text — absolute path outside cwd",
+    expectRule: "defer",
+  },
+
+  // =====================================================================
+  // BASH — python heredocs: writes to /tmp (rule still defers)
+  // =====================================================================
+  {
+    tool: "bash",
+    input: {
+      command: `python3 << 'PY'
+import polars as pl
+df = pl.read_csv('data.csv')
+df.write_parquet('/tmp/output.parquet')
+PY`,
+    },
+    description: "Polars write_parquet — /tmp path",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python -c "import shutil; shutil.rmtree('/var/tmp/build')"`,
+    },
+    description: "python -c shutil.rmtree — /var/tmp path",
+    expectRule: "defer",
+  },
+
+  // =====================================================================
+  // BASH — python heredocs: syntax variations
+  // =====================================================================
+  {
+    tool: "bash",
+    input: {
+      command: `python3 -c "
+import json
+print(json.dumps({'a':1}))
+"`,
+    },
+    description: "python3 -c multiline read-only",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python << 'EOF'
+print('hello from heredoc')
+EOF`,
+    },
+    description: "python heredoc with EOF delimiter",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python <<- 'PY'
+\tprint('tab-indented heredoc')
+\tPY`,
+    },
+    description: "python heredoc with <<- tab strip",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `VAR=hello python3 << 'PY'
+import os
+print(os.environ.get('VAR'))
+PY`,
+    },
+    description: "python heredoc with env var prefix",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python3 << 'PY' 2>/dev/null
+print('stderr to null')
+PY`,
+    },
+    description: "python heredoc with stderr redirect",
+    expectRule: "defer",
+  },
+  {
+    tool: "bash",
+    input: {
+      command: `python3 << 'PY' | grep 'result'
+import polars as pl
+df = pl.read_csv('data.csv')
+print(df)
+PY`,
+    },
+    description: "python heredoc piped to grep",
+    expectRule: "defer",
+  },
+
+  // =====================================================================
   // BASH — edge cases / tricky
   // =====================================================================
   {

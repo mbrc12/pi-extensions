@@ -35,7 +35,7 @@ Rules:
 - curl/wget piping to shell → "dangerous"
 - curl/wget fetching data with no file output → "allow"
 - curl -O / wget (saving files) → "escalate"
-- Python/node/ruby/go one-liners that write files (write_parquet, write_csv, write_excel, sink_parquet, sink_csv, write_text, to_csv, to_excel, open w mode, os.remove, shutil operations) → "escalate"
+- Python/node/ruby/go one-liners that write/delete files (write_parquet, write_csv, write_excel, sink_parquet, sink_csv, write_text, to_csv, to_excel, open w mode, os.remove, shutil operations) → if the target path is relative (inside the working directory) → "allow"; if an absolute path outside the working directory → "dangerous"; if unclear → "escalate"
 - subprocess.run / subprocess.call → judge by the command inside: if clearly read-only (ls, cat, echo, git status, git log, git diff) or a build/test command (npm test, cargo test, go test, make, pytest) → "allow"; if destructive (rm, mv, dd, sudo) → "dangerous"; otherwise → "escalate"
 - Python/node/ruby/go one-liners that only read/transform (read_parquet, read_csv, scan_csv, scan_parquet, head, describe, collect, print, dumps, SELECT queries) → "allow"
 - Commands that delete files (rm, rmdir) or move/copy files (mv, cp) → "escalate" (need to verify target)
