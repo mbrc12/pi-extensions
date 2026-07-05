@@ -24,10 +24,10 @@ const FETCH_SYSTEM_PROMPT = [
 ].join(" ");
 
 const SUMMARY_MODEL_PREFERENCES: Array<readonly [string, string]> = [
-  ["github-copilot", "gemini-3.5-flash"],
-  ["github-copilot", "claude-haiku-4.5"],
-  ["github-copilot", "gpt-5-mini"],
-  ["github-copilot", "gpt-5.4-mini"],
+  ["opencode-go", "deepseek-v4-flash"],
+  ["opencode-go", "mimo-v2.5"],
+  ["opencode-go", "minimax-m2.7"],
+  ["opencode-go", "kimi-k2.6"],
 ];
 
 function formatSearchResult(result: {

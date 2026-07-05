@@ -5,11 +5,10 @@
  * Calls a cheap classification model to decide: allow / dangerous / review.
  *
  * Model selection priority:
- *  1. github-copilot/gpt-5.4-mini (subscription, no extra key)
- *  2. github-copilot/gpt-5-mini / claude-haiku-4.5 / gemini-3.5-flash
- *  3. Standard API cheap models (openai gpt-4o-mini, anthropic haiku, etc.)
- *  4. Fall back to current session model
- *  5. Fall back to "review" (ask user)
+ *  1. Cheap opencode-go models (deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6)
+ *  2. Standard API cheap models (openai gpt-4o-mini, anthropic haiku, etc.)
+ *  3. Fall back to current session model
+ *  4. Fall back to "review" (ask user)
  */
 
 import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
@@ -52,11 +51,11 @@ Reply with exactly ONE word: allow, dangerous, or escalate.`;
 // ---------------------------------------------------------------------------
 
 const CHEAP_MODEL_CANDIDATES: Array<[provider: string, id: string]> = [
-  // GitHub Copilot (subscription-based, no extra API key needed)
-  ["github-copilot", "gpt-5.4-mini"],
-  ["github-copilot", "gpt-5-mini"],
-  ["github-copilot", "claude-haiku-4.5"],
-  ["github-copilot", "gemini-3.5-flash"],
+  // OpenCode Go (cheap subscription-backed models)
+  ["opencode-go", "deepseek-v4-flash"],
+  ["opencode-go", "mimo-v2.5"],
+  ["opencode-go", "minimax-m2.7"],
+  ["opencode-go", "kimi-k2.6"],
   // Standard API-based cheap models
   ["openai", "gpt-4o-mini"],
   ["openai", "gpt-4.1-mini"],
