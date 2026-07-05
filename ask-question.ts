@@ -150,6 +150,10 @@ function askViaUI(
 	},
 	uiCtx: { ui: any; signal?: AbortSignal },
 ): Promise<AskResult | null> {
+	// Ring the terminal bell so tmux can flag the window as alerted (requires
+	// tmux `bell-action` to be on; default `any`).
+	process.stdout.write("\x07");
+
 	return uiCtx.ui.custom<AskResult | null>((tui: any, theme: any, _kb: any, done: (v: AskResult | null) => void) => {
 		const { question, mode, allowOther, minSelect, maxSelect, placeholder } = params;
 
@@ -555,17 +559,10 @@ export default function (pi: ExtensionAPI) {
 			const simpleOptions = (params.options ?? []).map((o) => o.label);
 
 			if (!result || result.cancelled) {
-				return {
-					content: [{ type: "text", text: "User cancelled the question." }],
-					details: {
-						question: params.question,
-						selection_mode: mode,
-						options: simpleOptions,
-						answers: [],
-						cancelled: true,
-						got_custom: false,
-					} as AskDetails,
-				};
+				// Throw so pi treats this as an operation cancellation (aborts the
+				// current model turn) instead of returning a "cancelled" tool result
+				// that the model would then process.
+				throw new Error("User cancelled the question.");
 			}
 
 			const summary =
