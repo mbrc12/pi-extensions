@@ -19,6 +19,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { promptWait } from "./notify-on-idle";
 import {
 	Editor,
 	type EditorTheme,
@@ -150,10 +151,6 @@ function askViaUI(
 	},
 	uiCtx: { ui: any; signal?: AbortSignal },
 ): Promise<AskResult | null> {
-	// Ring the terminal bell so tmux can flag the window as alerted (requires
-	// tmux `bell-action` to be on; default `any`).
-	process.stdout.write("\x07");
-
 	return uiCtx.ui.custom<AskResult | null>((tui: any, theme: any, _kb: any, done: (v: AskResult | null) => void) => {
 		const { question, mode, allowOther, minSelect, maxSelect, placeholder } = params;
 
@@ -542,6 +539,8 @@ export default function (pi: ExtensionAPI) {
 					} as AskDetails,
 				};
 			}
+
+			promptWait(pi, { title: "Pi", body: params.question });
 
 			const result = await askViaUI(
 				{

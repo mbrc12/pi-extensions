@@ -6,7 +6,7 @@ Custom extensions for [pi](https://pi.dev/).
 
 ### `ask-question`
 
-Adds an `ask_question` tool that renders an interactive TUI dialog. Supports single-choice (radio), multiple-choice (checkboxes), and free-text input. Rings a terminal bell on open and aborts the turn on cancel.
+Adds an `ask_question` tool that renders an interactive TUI dialog. Supports single-choice (radio), multiple-choice (checkboxes), and free-text input. Emits a `prompt_wait` notification when the UI opens and aborts the turn on cancel.
 
 ### `exit-alias`
 
@@ -18,11 +18,11 @@ Compact TUI rendering for all built-in tools — truncated commands for bash, ju
 
 ### `notify-on-idle`
 
-Sends a desktop notification (via terminal bell + OSC sequences / Windows toast) when the agent finishes a turn or the session shuts down. Works across tmux, Kitty, and Windows Terminal.
+Sends a desktop notification (via terminal bell + OSC sequences / Windows toast) when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. Works across tmux, Kitty, and Windows Terminal.
 
 ### `permissions`
 
-Intercepts tool calls and classifies them before execution. Three modes:
+Intercepts tool calls and classifies them before execution. Emits `prompt_wait` before approval dialogs. Three modes:
 
 | Mode | Behavior |
 |---|---|

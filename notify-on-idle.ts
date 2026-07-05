@@ -1,5 +1,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+export interface PromptWaitNotification {
+	title: string;
+	body: string;
+}
+
+export function promptWait(pi: ExtensionAPI, notification: PromptWaitNotification): void {
+	pi.events.emit("prompt_wait", notification);
+}
+
 function windowsToastScript(title: string, body: string): string {
 	const type = "Windows.UI.Notifications";
 	const mgr = `[${type}.ToastNotificationManager, ${type}, ContentType = WindowsRuntime]`;
@@ -48,13 +57,18 @@ function notify(title: string, body: string): void {
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.events.on("prompt_wait", (event) => {
+		const notification = event as Partial<PromptWaitNotification> | undefined;
+		notify(notification?.title ?? "Pi", notification?.body ?? "Waiting for input");
+	});
+
 	pi.on("agent_end", async (_event, ctx) => {
-		if (ctx.mode !== "tui") return;
+		if (!ctx.hasUI) return;
 		notify("Pi", "Ready for input");
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		if (ctx.mode !== "tui") return;
+		if (!ctx.hasUI) return;
 		notify("Pi", `Process ended (${event.reason})`);
 	});
 }

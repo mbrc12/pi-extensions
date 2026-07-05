@@ -15,6 +15,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { promptWait } from "../notify-on-idle";
 import { classifyToolCall } from "./classifier";
 import { classifyWithLLM } from "./llm-classifier";
 import type { Classification, PermissionMode } from "./types";
@@ -26,12 +27,6 @@ import { COMMAND_PREVIEW_LENGTH } from "./types";
 
 const STATE_KEY = "permissions-mode";
 let currentMode: PermissionMode = "classify"; // default
-
-/** Ring the terminal bell so tmux can flag the window as alerted. */
-function bell(): void {
-  // \x07 = BEL. Requires tmux `bell-action` to be on (default `any`).
-  process.stdout.write("\x07");
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,6 +68,29 @@ function classificationColor(
     case "unavailable":
       return "warning";
   }
+}
+
+function classificationEmoji(
+  classification: Classification | "unavailable",
+): string {
+  switch (classification) {
+    case "allow":
+      return "✅";
+    case "dangerous":
+      return "⛔";
+    case "defer":
+    case "escalate":
+      return "⚠️";
+    case "unavailable":
+      return "🚫";
+  }
+}
+
+function stageLabel(
+  stage: "r" | "l",
+  classification: Classification | "unavailable",
+): string {
+  return `${stage}:${classificationEmoji(classification)}`;
 }
 
 function showClassification(
@@ -170,6 +188,7 @@ function summarizeToolCall(
 // ---------------------------------------------------------------------------
 
 async function handleToolCall(
+  pi: ExtensionAPI,
   event: {
     toolName: string;
     toolCallId: string;
@@ -191,7 +210,7 @@ async function handleToolCall(
     const summary = summarizeToolCall(event.toolName, event.input);
 
     if (ctx.hasUI) {
-      bell();
+      promptWait(pi, { title: "Pi", body: summary.title });
       const choice = await ctx.ui.select(
         summary.isLarge
           ? `Allow? ${summary.title}`
@@ -227,7 +246,7 @@ async function handleToolCall(
       // Rule-based check gave a definitive answer (allow or dangerous)
       classification = ruleResult.classification;
       reason = ruleResult.reason;
-      showClassification(ctx, `rule:${classification}`, classification);
+      showClassification(ctx, `r:${classificationEmoji(classification)}`, classification);
     } else {
       // Rule-based says "defer" or couldn't decide — try LLM
       const llmResult = await classifyWithLLM(
@@ -244,19 +263,24 @@ async function handleToolCall(
         showClassification(
           ctx,
           ruleResult
-            ? `rule:${ruleResult.classification} → llm:${classification}`
-            : `llm:${classification}`,
+            ? `${stageLabel("r", ruleResult.classification)}->${stageLabel("l", classification)}`
+            : `l:${classificationEmoji(classification)}`,
           classification,
         );
       } else if (ruleResult) {
         // No LLM available — use rule result ("defer")
         classification = ruleResult.classification;
         reason = ruleResult.reason;
-        showClassification(ctx, `rule:${classification} → llm:unavailable`, "unavailable");
+        showClassification(
+          ctx,
+          `${stageLabel("r", classification)}->l:🚫`,
+          "unavailable",
+        );
       } else {
-        showClassification(ctx, "llm:unavailable", "unavailable");
+        showClassification(ctx, "l:🚫", "unavailable");
         // No LLM and no rule result — ask user directly
         return await askUserForClassification(
+          pi,
           event.toolName,
           event.input,
           ctx,
@@ -273,6 +297,7 @@ async function handleToolCall(
       case "dangerous": {
         // Prompt user with DANGER warning
         return await askUserForClassification(
+          pi,
           event.toolName,
           event.input,
           ctx,
@@ -284,6 +309,7 @@ async function handleToolCall(
       case "escalate": {
         // Ask user (LLM couldn't decide, or no LLM available)
         return await askUserForClassification(
+          pi,
           event.toolName,
           event.input,
           ctx,
@@ -301,6 +327,7 @@ async function handleToolCall(
 // ---------------------------------------------------------------------------
 
 async function askUserForClassification(
+  pi: ExtensionAPI,
   toolName: string,
   input: Record<string, unknown>,
   ctx: ExtensionContext,
@@ -325,7 +352,7 @@ async function askUserForClassification(
     ? `${summary.title}\n\n${summary.detail.slice(0, 300)}`
     : summary.detail;
 
-  bell();
+  promptWait(pi, { title: "Pi", body: header });
   const choice = await ctx.ui.select(
     `${header}\n\n${body}`,
     isDangerous
@@ -374,7 +401,7 @@ export default function (pi: ExtensionAPI) {
       return undefined;
     }
 
-    return handleToolCall(event, ctx);
+    return handleToolCall(pi, event, ctx);
   });
 
   // ---------- /permissions command ----------
