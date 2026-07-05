@@ -1,9 +1,9 @@
 /**
  * Custom Statusline Extension
  *
- * Replaces the default footer with a clean, single-line statusline showing:
- *   cwd (git branch) | ctx: percentage tokens/max | tok: up down | cost: $total
- *   | model think:level | other extension statuses
+ * Replaces the default footer with a clean, two-line statusline:
+ *   Line 1: cwd (git branch) | ctx: percentage tokens/max | tok: up down
+ *   Line 2: model think:level | cost: $total | other extension statuses
  *
  * Toggle with /statusline
  */
@@ -27,6 +27,61 @@ function formatCwd(cwd: string): string {
   const isInside =
     rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`));
   return isInside ? (rel === "" ? "~" : `~${sep}${rel}`) : cwd;
+}
+
+/** Truncate from the start, keeping the rightmost part visible */
+function truncateStartToWidth(text: string, maxWidth: number): string {
+  if (maxWidth <= 0) return "";
+  if (text.length <= maxWidth) return text;
+  const ellipsis = "…";
+  if (maxWidth <= ellipsis.length) return ellipsis.slice(0, maxWidth);
+  return ellipsis + text.slice(-(maxWidth - ellipsis.length));
+}
+
+/**
+ * Fit a path into maxWidth by shortening leading directory names to initials
+ * first, then left-truncating if it still does not fit.
+ */
+function compressPathToWidth(path: string, maxWidth: number): string {
+  if (maxWidth <= 0) return "";
+  if (path.length <= maxWidth) return path;
+
+  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  const parts = path.split(separator);
+  if (parts.length <= 1) return truncateStartToWidth(path, maxWidth);
+
+  const compressed = [...parts];
+  const start = compressed[0] === "" || compressed[0] === "~" ? 1 : 0;
+
+  for (let i = start; i < compressed.length - 1; i++) {
+    const part = compressed[i];
+    if (
+      !part ||
+      part === "." ||
+      part === ".." ||
+      part.startsWith(".")
+    ) {
+      continue;
+    }
+
+    compressed[i] = part[0];
+    const candidate = compressed.join(separator);
+    if (candidate.length <= maxWidth) return candidate;
+  }
+
+  return truncateStartToWidth(compressed.join(separator), maxWidth);
+}
+
+/** Fit cwd plus optional branch into a given width */
+function fitDirDisplay(dir: string, branch: string | null, maxWidth: number): string {
+  const suffix = branch ? ` (${branch})` : "";
+  const display = dir + suffix;
+  if (maxWidth <= 0) return "";
+  if (display.length <= maxWidth) return display;
+
+  const dirMax = maxWidth - suffix.length;
+  if (dirMax <= 0) return truncateStartToWidth(display, maxWidth);
+  return compressPathToWidth(dir, dirMax) + suffix;
 }
 
 /** Compact token/count formatting */
@@ -133,7 +188,7 @@ export default function (pi: ExtensionAPI) {
           // ----- directory + git branch -----
           const dir = formatCwd(ctx.cwd);
           const branch = footerData.getGitBranch();
-          const dirDisplay = branch ? `${dir} (${branch})` : dir;
+          const dirDisplay = fitDirDisplay(dir, branch, 20);
 
           // ----- model + thinking level -----
           const modelId = ctx.model?.id ?? "—";
@@ -144,55 +199,86 @@ export default function (pi: ExtensionAPI) {
               : `think:${currentThinkingLevel}`
             : null;
 
-          // ----- build segments -----
-          const pipe = theme.fg("borderMuted", " │ ");
-          const segments: string[] = [];
+          // ----- build column-aligned segments -----
 
-          // 1. Directory
-          segments.push(theme.fg("dim", dirDisplay));
-
-          // 2. Context window usage
-          segments.push(theme.fg("dim", "ctx") + " " + ctxColored);
-
-          // 3. Token I/O (and cache if present)
-          if (totalInput > 0 || totalOutput > 0) {
-            const io = `↑${fmt(totalInput)} ↓${fmt(totalOutput)}`;
-            segments.push(
-              theme.fg("dim", "tok") + " " + theme.fg("muted", io),
-            );
+          // Col 1: directory & model
+          const col1_l1 = theme.fg("dim", dirDisplay);
+          let modelSeg = theme.fg("accent", modelId);
+          if (thinkPart) {
+            modelSeg += " " + theme.fg("dim", thinkPart);
           }
+          const col1_l2 = modelSeg;
 
-          // 4. Cost
+          // Col 2: context & cost
+          const ctxSeg = theme.fg("dim", "ctx") + " " + ctxColored;
           const sub =
             ctx.model &&
             ctx.modelRegistry?.isUsingOAuth?.(ctx.model)
               ? " (sub)"
               : "";
-          segments.push(
+          const costSeg =
             theme.fg("dim", "$") +
-              " " +
-              theme.fg("muted", totalCost.toFixed(3) + sub),
-          );
+            " " +
+            theme.fg("muted", totalCost.toFixed(3) + sub);
 
-          // 5. Model + thinking
-          let modelSeg = theme.fg("accent", modelId);
-          if (thinkPart) {
-            modelSeg += " " + theme.fg("dim", thinkPart);
+          // Col 3: token I/O & extension statuses
+          let tokSeg = "";
+          if (totalInput > 0 || totalOutput > 0) {
+            const io = `↑${fmt(totalInput)} ↓${fmt(totalOutput)}`;
+            tokSeg =
+              theme.fg("dim", "tok") + " " + theme.fg("muted", io);
           }
-          segments.push(modelSeg);
-
-          // 6. Extension statuses (from ctx.ui.setStatus)
+          let statusSeg = "";
           const statuses = footerData.getExtensionStatuses();
           if (statuses.size > 0) {
             const sorted = Array.from(statuses.entries())
               .sort(([a], [b]) => a.localeCompare(b as string))
               .map(([, text]) => sanitize(text as string));
-            segments.push(sorted.join("  "));
+            statusSeg = sorted.join("  ");
           }
 
-          // ----- assemble & truncate -----
-          const line = segments.join(pipe);
-          return [truncateToWidth(line, width, theme.fg("dim", "…"))];
+          // Visible-width helpers (strip ANSI escapes)
+          const visLen = (s: string): number =>
+            s.replace(/\x1b\[[0-9;]*m/g, "").length;
+          const padVis = (s: string, w: number): string => {
+            const vl = visLen(s);
+            if (vl > w) return truncateToWidth(s, w, theme.fg("dim", "…"));
+            return s + " ".repeat(w - vl);
+          };
+
+          // Columns as [line1, line2] pairs; drop empty columns
+          const cols: [string, string][] = [
+            [col1_l1, col1_l2],
+            [ctxSeg, costSeg],
+            [tokSeg, statusSeg],
+          ].filter(([a, b]) => a || b);
+
+          // Max visible width per column
+          const maxW = cols.map(([a, b]) =>
+            Math.max(visLen(a), visLen(b)),
+          );
+
+          // Use natural column widths, shrinking from the right only if needed.
+          const pipeVis = 3; // visible width of " │ "
+          const totalPipe = (cols.length - 1) * pipeVis;
+          const colW = [...maxW];
+          let overflow =
+            colW.reduce((sum, w) => sum + w, 0) + totalPipe - width;
+          for (let i = colW.length - 1; i >= 0 && overflow > 0; i--) {
+            const shrink = Math.min(colW[i], overflow);
+            colW[i] -= shrink;
+            overflow -= shrink;
+          }
+
+          // Assemble lines with aligned pipes
+          const pipe = theme.fg("borderMuted", " │ ");
+          const line1 = cols.map(([a], i) => padVis(a, colW[i])).join(pipe);
+          const line2 = cols.map(([, b], i) => padVis(b, colW[i])).join(pipe);
+
+          return [
+            truncateToWidth(line1, width, theme.fg("dim", "…")),
+            truncateToWidth(line2, width, theme.fg("dim", "…")),
+          ];
         },
       };
     });
