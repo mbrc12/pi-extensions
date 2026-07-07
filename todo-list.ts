@@ -125,12 +125,11 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		// Bullets appended to the Guidelines section while the tool is active.
 		// Each bullet must name the tool explicitly.
 		promptGuidelines: [
-			"At the start of EVERY turn, call todo with action \"list\" to check which jobs remain before doing anything else. Do not skip this even if you think you remember the list.",
+			"The current todo list is injected into your context automatically at the start of each turn, so you do NOT need to call todo with action \"list\" just to check it. Only call todo list if you need to re-verify state after several mutations.",
 			"When you finish a job, immediately call todo with action \"complete\" and that job's id to mark it done.",
-			"Do not end your turn while incomplete todos remain. Pick the next remaining job and continue working on it. Only stop if the user asked you to stop or you are blocked and need user input.",
+			"Do not end your turn while incomplete todos remain. Pick the next remaining job and continue working on it. You may use the ask_question tool to clarify something if needed, but do not stop or hand back to the user while jobs remain unless the user explicitly asked you to stop.",
 			"If the list is empty and the user gives you a multi-step task, call todo with action \"add\" for each step first, then work through them.",
-			"Do NOT call todo with action \"clear\" while incomplete todos remain — it is blocked.",
-			"When every todo is marked complete and the user's request is fully addressed, you MUST call todo with action \"clear\" in that same turn to clear the list. Do not leave completed todos behind and do not end the turn until the list is cleared.",
+			"Do NOT call todo with action \"clear\" while incomplete todos remain — it is blocked. You may call clear once all todos are complete to tidy up; otherwise the list simply stays visible.",
 		],
 		parameters: TodoParams,
 
