@@ -234,7 +234,10 @@ export default function (pi: ExtensionAPI) {
             const sorted = Array.from(statuses.entries())
               .sort(([a], [b]) => a.localeCompare(b as string))
               .map(([, text]) => sanitize(text as string));
-            statusSeg = sorted.join("  ");
+            // Separate extension status segments with a themed bar so they
+            // don't run together on line 2.
+            const statusPipe = theme.fg("borderMuted", " │ ");
+            statusSeg = sorted.join(statusPipe);
           }
 
           // Visible-width helpers (strip ANSI escapes)
