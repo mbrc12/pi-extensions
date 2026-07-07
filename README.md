@@ -20,6 +20,10 @@ Compact TUI rendering for all built-in tools — truncated commands for bash, ju
 
 Sends a desktop notification (via terminal bell + OSC sequences / Windows toast) when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. Works across tmux, Kitty, and Windows Terminal.
 
+### `recap`
+
+Shows a small recap widget after 30 seconds without user input, then hides it as soon as the user types again. The recap gives a brief "Now" summary and "Next" suggestion. Toggle/show with `/recap`, `/recap on`, or `/recap off`.
+
 ### `permissions`
 
 Intercepts tool calls and classifies them before execution. Emits `prompt_wait` before approval dialogs. Three modes:
@@ -48,9 +52,18 @@ The model is kept on-task by layering three reinforcement mechanisms:
 
 - `promptGuidelines` instruct the model to call `todo list` at the start of every turn and mark jobs complete as it finishes them.
 - `before_agent_start` re-injects the remaining todos each turn so they're never out of context.
-- `agent_end` watchdog auto-continues (via a follow-up user message) when the model stops with incomplete todos, capped at 3 consecutive no-progress turns.
+- `agent_end` watchdog auto-continues (via a follow-up user message) when the model stops with incomplete todos, capped at 3 consecutive no-progress turns. It also nudges the model once if it stops with all todos marked complete but the list not yet cleared.
 
 `clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. State is stored in tool-result details and reconstructed from the session branch, so branching keeps the correct state.
+
+### `py-explore`
+
+Adds a `py_explore` tool for running read-only/exploratory Python scripts.
+
+- Use it for quick data inspection, polars/pandas/numpy exploration, and small read-only transformations.
+- Prefer it over Python heredocs or `python -c` via `bash` for read-only scripts.
+- Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
+- Includes `/py-explore-test` to tune the LLM prompt against a built-in test suite.
 
 ### `web-use`
 
