@@ -4,17 +4,23 @@
  * A persistent todo list the model is *forced* to consult.
  *
  * The crucial behavior — "the model auto-asks the todo list for jobs left and
- * does not ignore it" — is achieved by layering three reinforcement mechanisms:
+ * does not ignore it" — is achieved by layering four reinforcement mechanisms:
  *
  *  1. promptGuidelines on the `todo` tool: tells the model to call
- *     `todo({ action: "list" })` at the start of every turn and to mark jobs
- *     complete as it finishes them. This is the "auto-ask".
+ *     `todo({ action: "list" })` at the start of every turn, to mark jobs
+ *     complete as it finishes them, and to clear the list once every job is
+ *     done. This is the "auto-ask".
  *  2. before_agent_start injection: every turn, a hidden message re-states the
- *     remaining todos so they are never out of the model's context.
+ *     remaining todos (or reminds the model to clear the list when all are
+ *     complete) so they are never out of the model's context.
  *  3. agent_end watchdog: if todos remain incomplete and the last turn made no
  *     progress, automatically send a follow-up user message (triggerTurn: true)
  *     that tells the model to continue. Capped at MAX_NUDGES consecutive
  *     no-progress turns to avoid loops, after which the user is notified.
+ *  4. agent_end clear-nudge: if the model stops after all todos are marked
+ *     complete but the list itself is not empty, send a single follow-up telling
+ *     it to call `todo({ action: "clear" })` so stale completed todos are not
+ *     left behind.
  *
  * State lives in tool-result details (not external files), so branching keeps
  * the correct todo state for that point in history — same approach as the
@@ -123,7 +129,8 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			"When you finish a job, immediately call todo with action \"complete\" and that job's id to mark it done.",
 			"Do not end your turn while incomplete todos remain. Pick the next remaining job and continue working on it. Only stop if the user asked you to stop or you are blocked and need user input.",
 			"If the list is empty and the user gives you a multi-step task, call todo with action \"add\" for each step first, then work through them.",
-			"Do NOT call todo with action \"clear\" while incomplete todos remain — it is blocked. You may call clear once all todos are complete to tidy up; otherwise the user runs /todo-clear.",
+			"Do NOT call todo with action \"clear\" while incomplete todos remain — it is blocked.",
+			"When every todo is marked complete and the user's request is fully addressed, you MUST call todo with action \"clear\" in that same turn to clear the list. Do not leave completed todos behind and do not end the turn until the list is cleared.",
 		],
 		parameters: TodoParams,
 
@@ -240,16 +247,19 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	});
 
 	// --- Per-turn reminder injection -----------------------------------------
-	// Re-states remaining todos every turn so the model can never "forget".
+	// - List empty (cleared): inject nothing.
+	// - All complete but not cleared: show the completed list and suggest clearing.
+	// - Incomplete todos remain: show the remaining list and instruct to continue.
 	pi.on("before_agent_start", async () => {
 		if (todos.length === 0) return;
 		const rem = remaining();
 		if (rem.length === 0) {
+			const doneList = todos.map((t) => `- ✓ #${t.id}: ${t.text}`).join("\n");
 			return {
 				message: {
 					customType: "todo-list-reminder",
 					content:
-						"[TODO LIST] All jobs are complete. If the user's request is fully addressed, you may stop. Otherwise call todo with action \"add\" to plan the next steps.",
+						`[TODO LIST — all ${todos.length} job(s) complete]\n${doneList}\n\nAll todos are complete. The user's request appears fully addressed. You may call todo with action "clear" to tidy up the list; otherwise it will stay visible. Only call todo with action "add" if the user has given you a new multi-step task.`,
 					display: false,
 				},
 			};
@@ -273,6 +283,15 @@ Before doing anything else this turn, call todo with action "list" to confirm th
 		if (rem.length === 0) {
 			lastIncompleteCount = 0;
 			nudgeCount = 0;
+			// All jobs are done but the model left completed todos in the list.
+			// Nudge it once to clear them out rather than leaving stale state.
+			if (todos.length > 0) {
+				pi.sendUserMessage(
+					"All todos are complete, but the list has not been cleared yet. " +
+						'Call todo with action "clear" now to empty the list. Do not reply to the user until the todo list is empty.',
+					{ deliverAs: "followUp" },
+				);
+			}
 			return;
 		}
 
