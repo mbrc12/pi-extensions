@@ -11,6 +11,7 @@
 
 import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext, Model, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
 
 export interface WriteCheckResult {
   allowed: boolean;
@@ -24,17 +25,6 @@ export interface WriteCheckContext {
   cwd?: string;
   signal?: AbortSignal;
 }
-
-const CHEAP_MODEL_CANDIDATES: Array<[provider: string, id: string]> = [
-  ["opencode-go", "deepseek-v4-flash"],
-  ["opencode-go", "mimo-v2.5"],
-  ["opencode-go", "minimax-m2.7"],
-  ["opencode-go", "kimi-k2.6"],
-  ["openai", "gpt-4o-mini"],
-  ["openai", "gpt-4.1-mini"],
-  ["anthropic", "claude-haiku-3-5"],
-  ["google", "gemini-2.0-flash"],
-];
 
 // ---------------------------------------------------------------------------
 // Regex deny-list: unambiguous file-system write/delete/create operations.
@@ -124,14 +114,6 @@ Treat read-only or build/test subprocesses as safe: ls, cat, echo, git status/lo
 
 Code:`;
 
-function findCheapModel(registry: ModelRegistry): Model | undefined {
-  for (const [provider, id] of CHEAP_MODEL_CANDIDATES) {
-    const model = registry.find(provider, id);
-    if (model) return model;
-  }
-  return undefined;
-}
-
 function extractText(message: {
   content?: Array<{ type?: string; text?: string }>;
 }): string {
@@ -148,11 +130,13 @@ export async function llmSaysWrite(
   code: string,
   ctx: WriteCheckContext,
 ): Promise<{ writes: boolean; raw: string }> {
-  const model = findCheapModel(ctx.modelRegistry) ?? ctx.model;
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) {
+  const selected = await selectConfiguredModelWithAuth(ctx, "pythonWriteClassification", {
+    fallbackToCurrent: true,
+  });
+  if (!selected) {
     throw new Error("No API key available for LLM write check");
   }
+  const { model, auth } = selected;
 
   const userMessage: UserMessage = {
     role: "user",

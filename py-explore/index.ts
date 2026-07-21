@@ -35,8 +35,95 @@ const PyExploreParams = Type.Object({
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const CONTENT_OUTPUT_BYTES = 50 * 1024;
 
-function resolvePython(): string {
-  return process.platform === "win32" ? "python" : "python3";
+interface PythonCommand {
+  command: string;
+  args: string[];
+  source: "uv" | "system";
+}
+
+function resolveSystemPython(): PythonCommand {
+  return {
+    command: process.platform === "win32" ? "python" : "python3",
+    args: [],
+    source: "system",
+  };
+}
+
+function collectCommandOutput(
+  command: string,
+  args: string[],
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    const abortHandler = () => {
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        if (!child.killed) child.kill("SIGKILL");
+      }, 5000);
+    };
+
+    signal?.addEventListener("abort", abortHandler, { once: true });
+
+    child.on("error", (error) => {
+      signal?.removeEventListener("abort", abortHandler);
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      signal?.removeEventListener("abort", abortHandler);
+      resolve({ stdout, stderr, exitCode: code ?? 0 });
+    });
+  });
+}
+
+async function resolvePython(cwd: string, signal?: AbortSignal): Promise<PythonCommand> {
+  try {
+    const { stdout, exitCode } = await collectCommandOutput(
+      "uv",
+      ["python", "find", "--no-python-downloads"],
+      cwd,
+      signal,
+    );
+    const python = stdout.trim();
+    if (exitCode === 0 && python) {
+      const validation = await collectCommandOutput(
+        python,
+        ["-c", "import sys"],
+        cwd,
+        signal,
+      );
+      if (validation.exitCode === 0) {
+        return {
+          command: python,
+          args: [],
+          source: "uv",
+        };
+      }
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // Fall back to the system Python below.
+  }
+
+  return resolveSystemPython();
 }
 
 function truncateOutput(text: string, bytes: number): string {
@@ -49,13 +136,15 @@ function truncateOutput(text: string, bytes: number): string {
   return `${cut}\n\n[Output truncated: ${buf.length - Buffer.byteLength(cut, "utf8")} bytes omitted]`;
 }
 
-function runPython(
+async function runPython(
   code: string,
   cwd: string,
   signal?: AbortSignal,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+): Promise<{ stdout: string; stderr: string; exitCode: number; python: PythonCommand }> {
+  const python = await resolvePython(cwd, signal);
+
   return new Promise((resolve, reject) => {
-    const child = spawn(resolvePython(), ["-c", code], {
+    const child = spawn(python.command, [...python.args, "-c", code], {
       cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -94,7 +183,7 @@ function runPython(
 
     child.on("close", (code) => {
       signal?.removeEventListener("abort", abortHandler);
-      resolve({ stdout, stderr, exitCode: code ?? 0 });
+      resolve({ stdout, stderr, exitCode: code ?? 0, python });
     });
   });
 }
@@ -191,10 +280,10 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
       }
 
       onUpdate?.({
-        content: [{ type: "text", text: `Write gate passed (${check.source}). Running Python...` }],
+        content: [{ type: "text", text: `Write gate passed (${check.source}). Resolving Python...` }],
       });
 
-      const { stdout, stderr, exitCode } = await runPython(code, cwd, signal);
+      const { stdout, stderr, exitCode, python } = await runPython(code, cwd, signal);
 
       const output = stderr
         ? `[stdout]\n${stdout}\n\n[stderr]\n${stderr}`
@@ -204,14 +293,14 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
       if (exitCode !== 0) {
         return {
           content: [{ type: "text", text: truncated }],
-          details: { stdout, stderr, exitCode, gate: check, code },
+          details: { stdout, stderr, exitCode, gate: check, code, python },
           isError: true,
         };
       }
 
       return {
         content: [{ type: "text", text: truncated }],
-        details: { stdout, stderr, exitCode, gate: check, code },
+        details: { stdout, stderr, exitCode, gate: check, code, python },
       };
     },
 
@@ -235,6 +324,7 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         stderr?: string;
         exitCode?: number;
         gate?: { allowed: boolean; source: string; reason: string };
+        python?: PythonCommand;
       } | undefined;
 
       if (isPartial) {
@@ -262,6 +352,12 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
           ? `Gate: ${details.gate.source} allow`
           : `Gate: ${details.gate.source} block — ${details.gate.reason}`;
         container.addChild(new Text(theme.fg("dim", gateText), 0, 0));
+      }
+
+      if (details.python) {
+        container.addChild(
+          new Text(theme.fg("dim", `Python: ${details.python.source} (${details.python.command})`), 0, 0),
+        );
       }
 
       container.addChild(new Spacer(1));

@@ -32,7 +32,7 @@ The LLM can call `task_start`:
 - `command` — shell command to run (required)
 - `name` — tmux session name (optional, auto-generated if omitted)
 - `cwd` — working directory (optional, defaults to Pi's current cwd)
-- `tail_lines` — default output lines to show when status is pulled
+- `tail_lines` — default number of nonblank output lines to show when status is pulled (default 10; increase when the user asks for more output)
 
 The tool returns the session name and log file path.
 
@@ -45,6 +45,10 @@ The LLM should use `task_status` when the user asks to see task output:
 ```
 
 If `task_status` is called with no `name` and multiple tasks exist, it prompts the user to choose one, then returns that one transcript as a normal tool result.
+
+The task status tool result is rendered collapsed by default: it shows the task name and status, plus the configured expand-key hint (default `ctrl+o`). When expanded, it shows the requested output tail.
+
+After a task reaches a final state (`exited` or `error`), a hidden follow-up nudge is sent once to the model so it can call `task_clear` once the output is no longer needed.
 
 The user can type:
 
@@ -77,11 +81,19 @@ The user can type:
 
 `/task-clear` clears completed/errored/not-found task transcripts and deletes their `/tmp` log/exit/script files. It skips running tasks. `/task-clear all` also clears running tasks from tracking/output files, but does **not** kill their tmux sessions. Use `/task-stop <name>` to kill a running task.
 
+## Agent guidelines
+
+- Use `task_start` when the user asks for a long-running command that would block the agent.
+- After starting a background task, continue working on the main request. Do not wait or poll unless the user explicitly asks you to wait.
+- Use `task_status` only when the user asks for an update or when you need the output to proceed.
+- The default status output is 10 nonblank lines; request a larger `tail_lines` when the user wants more output.
+- If `task_status` shows a completed or failed task, call `task_clear` once the output is no longer needed.
+
 ## Implementation notes
 
 - tmux runs a wrapper script directly, avoiding fish/zsh/bash banners and prompt spam.
 - Output is written to `/tmp/<task-name>.log`.
 - Exit status is written to `/tmp/<task-name>.exit`.
 - No timer/interval polls tmux.
-- No `pi.sendMessage()` is used for task state.
+- Task tracking is rebuilt from the full session history on `session_start` and `session_tree`, so navigating the session tree cannot drop live tasks.
 - The model/user explicitly pulls state with `task_status` or `/task-status`.

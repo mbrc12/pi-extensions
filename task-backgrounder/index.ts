@@ -15,8 +15,39 @@
  */
 
 import { access, readFile, unlink, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Type, type Static } from "typebox";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+
+const DEFAULT_TAIL_LINES = 10;
+
+let expandKeyHint: string | undefined;
+
+function getExpandKeyHint(): string {
+	if (expandKeyHint !== undefined) return expandKeyHint;
+	try {
+		const home = process.env.HOME || process.env.USERPROFILE;
+		if (home) {
+			const raw = JSON.parse(readFileSync(resolve(home, ".pi/agent/keybindings.json"), "utf8"));
+			const binding = raw?.["app.tools.expand"];
+			if (typeof binding === "string") {
+				expandKeyHint = binding;
+				return expandKeyHint;
+			}
+			if (Array.isArray(binding) && binding.every((k) => typeof k === "string")) {
+				expandKeyHint = binding.join(" / ");
+				return expandKeyHint;
+			}
+		}
+	} catch {
+		// fall back to default
+	}
+	expandKeyHint = "ctrl+o";
+	return expandKeyHint;
+}
 
 type TaskStatus = "running" | "exited" | "error" | "not-found";
 
@@ -34,18 +65,19 @@ interface BackgroundTask {
 }
 
 const tasks = new Map<string, BackgroundTask>();
+const cleanupHintSent = new Set<string>();
 
 const TaskStartParams = Type.Object({
 	command: Type.String({ description: "Shell command to run in the background" }),
 	name: Type.Optional(Type.String({ description: "Unique tmux session name (auto-generated if omitted)" })),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the command (defaults to current project dir)" })),
-	tail_lines: Type.Optional(Type.Number({ description: "Default output lines to show when status is pulled", default: 100 })),
+	tail_lines: Type.Optional(Type.Number({ description: "Default output lines to show when status is pulled (nonblank); use more if requested", default: DEFAULT_TAIL_LINES })),
 });
 type TaskStartInput = Static<typeof TaskStartParams>;
 
 const TaskStatusParams = Type.Object({
 	name: Type.Optional(Type.String({ description: "Task session name to show. If omitted, prompts the user to choose when possible." })),
-	tail_lines: Type.Optional(Type.Number({ description: "Number of output lines to include", default: 100 })),
+	tail_lines: Type.Optional(Type.Number({ description: "Number of nonblank output lines to include; use more if the user asks for more output", default: DEFAULT_TAIL_LINES })),
 });
 type TaskStatusInput = Static<typeof TaskStatusParams>;
 
@@ -134,7 +166,8 @@ async function tailLog(logFile: string, lines: number): Promise<string> {
 	if (!(await fileExists(logFile))) return "";
 	const text = await readTextFile(logFile);
 	if (!text) return "";
-	return text.split("\n").slice(-lines).join("\n");
+	const nonBlank = text.split("\n").filter((line) => line.trim() !== "");
+	return nonBlank.slice(-lines).join("\n");
 }
 
 async function fetchTaskState(
@@ -237,7 +270,7 @@ async function startTask(
 
 	const name = sanitizeName(params.name?.trim() || generateName());
 	const cwd = params.cwd?.trim() || ctx.cwd;
-	const tailLines = Math.max(1, params.tail_lines ?? 100);
+	const tailLines = Math.max(1, params.tail_lines ?? DEFAULT_TAIL_LINES);
 	const logFile = `/tmp/${name}.log`;
 	const exitFile = `/tmp/${name}.exit`;
 	const scriptFile = `/tmp/${name}.sh`;
@@ -361,9 +394,69 @@ function formatClearResult(result: { cleared: string[]; skippedRunning: string[]
 	return lines.join("\n");
 }
 
+function statusColor(status: TaskStatus): ThemeColor {
+	switch (status) {
+		case "running":
+			return "accent";
+		case "exited":
+			return "success";
+		case "error":
+			return "error";
+		default:
+			return "muted";
+	}
+}
+
+class TaskStatusResultComponent extends Container {
+	constructor(
+		private name: string,
+		private status: TaskStatus,
+		private output: string,
+		private expandHint: string,
+		expanded: boolean,
+		private theme: Theme,
+	) {
+		super();
+		this.rebuild(expanded);
+	}
+
+	setExpanded(expanded: boolean): void {
+		this.rebuild(expanded);
+	}
+
+	private rebuild(expanded: boolean): void {
+		this.clear();
+		this.addChild(new Text(this.theme.fg("toolTitle", `Task: ${this.name}`), 0, 0));
+		this.addChild(new Text(this.theme.fg(statusColor(this.status), `Status: ${this.status}`), 0, 0));
+		if (expanded) {
+			if (this.output) {
+				this.addChild(new Spacer(1));
+				this.addChild(new Text(this.theme.fg("toolOutput", this.output), 0, 0));
+			}
+		} else {
+			const nonBlankLines = this.output.split("\n").filter((line) => line.trim() !== "").length;
+			if (nonBlankLines > 0) {
+				this.addChild(
+					new Text(
+						this.theme.fg(
+							"muted",
+							`${nonBlankLines} nonblank line(s) hidden — press ${this.expandHint} to expand`,
+						),
+						0,
+						0,
+					),
+				);
+			}
+		}
+	}
+}
+
 function reconstructState(ctx: ExtensionContext): void {
 	tasks.clear();
-	for (const entry of ctx.sessionManager.getBranch()) {
+	cleanupHintSent.clear();
+	// Walk the full session history, not just the active branch, so that
+	// navigating the session tree cannot drop live background tasks.
+	for (const entry of ctx.sessionManager.getEntries()) {
 		if (entry.type !== "message") continue;
 		const msg = entry.message as { role?: string; toolName?: string; details?: unknown };
 		if (msg.role !== "toolResult") continue;
@@ -419,7 +512,8 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Use task_start when the user asks you to run a long-running command that would block the agent.",
 			"task_start creates a named tmux session; choose a descriptive name or let it auto-generate one.",
-			"task_start never emits periodic updates. Use task_status to show one task's output on demand.",
+			"After task_start, continue working on the main request. Do not wait or poll unless the user explicitly asks you to wait.",
+			"task_start never emits periodic updates. Use task_status only when the user asks for an update or when you need the output to proceed.",
 		],
 		parameters: TaskStartParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -435,8 +529,10 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 			"Show the current status and output tail for one background task. If no name is supplied and multiple tasks exist, prompts the user to choose.",
 		promptSnippet: "Show one background task's status and output tail",
 		promptGuidelines: [
-			"Use task_status when the user asks to see the output/status of a background task.",
+			"Use task_status when the user asks to see the output/status of a background task, or when you need the output to continue.",
 			"task_status returns one task transcript as a normal tool result; it does not inject or rewrite conversation history.",
+			"The default output is 10 nonblank lines. If the user asks for more output, use a larger tail_lines value.",
+			"If task_status shows the task has exited or errored, consider whether you still need the output. If not, call task_clear to delete temporary files.",
 		],
 		parameters: TaskStatusParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -447,12 +543,33 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 					details: { tasks: Array.from(tasks.keys()) },
 				};
 			}
-			const tailLines = Math.max(1, params.tail_lines ?? 100);
+			const tailLines = Math.max(1, params.tail_lines ?? DEFAULT_TAIL_LINES);
 			const { status, output } = await fetchTaskState(pi, resolved.name, tailLines);
+
+			// After a task reaches a final state, nudge the model once to clean up
+			// temporary files once the output is no longer needed.
+			if ((status === "exited" || status === "error") && tasks.has(resolved.name) && !cleanupHintSent.has(resolved.name)) {
+				cleanupHintSent.add(resolved.name);
+				pi.sendMessage(
+					{
+						customType: "task-cleanup-hint",
+						content: `Task "${resolved.name}" finished with status "${status}". Its temporary log, exit-code, and wrapper files are still on disk. If you no longer need the output, call task_clear (or /task-clear) to remove them.`,
+						display: false,
+						details: { name: resolved.name, status },
+					},
+					{ deliverAs: "followUp", triggerTurn: true },
+				);
+			}
+
 			return {
 				content: [{ type: "text", text: formatTaskSnapshot(resolved.name, status, output, 4000) }],
 				details: { name: resolved.name, status, output },
 			};
+		},
+		renderResult(result, options, theme) {
+			const details = result.details as { name: string; status: TaskStatus; output: string } | undefined;
+			if (!details) return undefined;
+			return new TaskStatusResultComponent(details.name, details.status, details.output, getExpandKeyHint(), options.expanded, theme as Theme);
 		},
 	});
 
@@ -506,7 +623,7 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 			name = picked;
 		}
 		const sanitized = sanitizeName(name);
-		const { status, output } = await fetchTaskState(pi, sanitized, 100);
+		const { status, output } = await fetchTaskState(pi, sanitized, DEFAULT_TAIL_LINES);
 		ctx.ui.notify(formatTaskSnapshot(sanitized, status, output, 4000), "info");
 	};
 

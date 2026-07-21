@@ -1,0 +1,35 @@
+{
+  "recapGeneration": [
+    "opencode-go/deepseek-v4-pro",
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/mimo-v2.5",
+    "opencode-go/minimax-m2.7",
+    "opencode-go/kimi-k2.6"
+  ],
+  "webSummarization": [
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/mimo-v2.5",
+    "opencode-go/minimax-m2.7",
+    "opencode-go/kimi-k2.6"
+  ],
+  "permissionClassification": [
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/mimo-v2.5",
+    "opencode-go/minimax-m2.7",
+    "opencode-go/kimi-k2.6",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4.1-mini",
+    "anthropic/claude-haiku-3-5",
+    "google/gemini-2.0-flash"
+  ],
+  "pythonWriteClassification": [
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/mimo-v2.5",
+    "opencode-go/minimax-m2.7",
+    "opencode-go/kimi-k2.6",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4.1-mini",
+    "anthropic/claude-haiku-3-5",
+    "google/gemini-2.0-flash"
+  ]
+}

@@ -5,17 +5,17 @@
  * Calls a cheap classification model to decide: allow / dangerous / review.
  *
  * Model selection priority:
- *  1. Cheap opencode-go models (deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6)
- *  2. Standard API cheap models (openai gpt-4o-mini, anthropic haiku, etc.)
- *  3. Fall back to current session model
- *  4. Fall back to "review" (ask user)
+ *  1. Ordered fallbacks from extensions/model-config.json (permissionClassification)
+ *  2. Fall back to current session model
+ *  3. Fall back to "review" (ask user)
  */
 
 import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
-import type { ExtensionContext, Model } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Classification, LlmClass, ClassificationResult } from "./types";
 import { getEffectiveCwdForCommand } from "./cwd";
 import { COMMAND_PREVIEW_LENGTH } from "./types";
+import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
 
 // ---------------------------------------------------------------------------
 // System prompt for the classifier
@@ -47,38 +47,7 @@ Rules:
 
 Reply with exactly ONE word: allow, dangerous, or escalate.`;
 
-// ---------------------------------------------------------------------------
-// Cheap model candidates
-// ---------------------------------------------------------------------------
-
 const LLM_COMMAND_PREVIEW_LENGTH = 8000;
-
-const CHEAP_MODEL_CANDIDATES: Array<[provider: string, id: string]> = [
-  // OpenCode Go (cheap subscription-backed models)
-  ["opencode-go", "deepseek-v4-flash"],
-  ["opencode-go", "mimo-v2.5"],
-  ["opencode-go", "minimax-m2.7"],
-  ["opencode-go", "kimi-k2.6"],
-  // Standard API-based cheap models
-  ["openai", "gpt-4o-mini"],
-  ["openai", "gpt-4.1-mini"],
-  ["anthropic", "claude-haiku-3-5"],
-  ["google", "gemini-2.0-flash"],
-];
-
-// ---------------------------------------------------------------------------
-// Find an available cheap model
-// ---------------------------------------------------------------------------
-
-function findCheapModel(ctx: ExtensionContext): Model | undefined {
-  // Try well-known cheap models first (exact match)
-  for (const [provider, idPattern] of CHEAP_MODEL_CANDIDATES) {
-    const model = ctx.modelRegistry.find(provider, idPattern);
-    if (model) return model;
-  }
-
-  return undefined;
-}
 
 // ---------------------------------------------------------------------------
 // Build user message for classification
@@ -156,12 +125,12 @@ export async function classifyWithLLM(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<ClassificationResult | undefined> {
-  const model = findCheapModel(ctx) ?? ctx.model;
-  if (!model) return undefined;
-
   try {
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok || !auth.apiKey) return undefined;
+    const selected = await selectConfiguredModelWithAuth(ctx, "permissionClassification", {
+      fallbackToCurrent: true,
+    });
+    if (!selected) return undefined;
+    const { model, auth } = selected;
 
     const userMessage: UserMessage = {
       role: "user",

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
 
 const WebUseParams = Type.Object({
   mode: Type.Union([Type.Literal("search"), Type.Literal("fetch")]),
@@ -22,13 +23,6 @@ const FETCH_SYSTEM_PROMPT = [
   "important_text: concise plain text containing the key material from the page, not boilerplate.",
   "Do not wrap the JSON in markdown fences.",
 ].join(" ");
-
-const SUMMARY_MODEL_PREFERENCES: Array<readonly [string, string]> = [
-  ["opencode-go", "deepseek-v4-flash"],
-  ["opencode-go", "mimo-v2.5"],
-  ["opencode-go", "minimax-m2.7"],
-  ["opencode-go", "kimi-k2.6"],
-];
 
 function formatSearchResult(result: {
   title?: string;
@@ -144,38 +138,11 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
 }
 
 async function pickSummaryModel(ctx: any) {
-  const available = typeof ctx.modelRegistry.getAvailable === "function"
-    ? await ctx.modelRegistry.getAvailable()
-    : [];
-
-  for (const [provider, id] of SUMMARY_MODEL_PREFERENCES) {
-    const model = available.find((item: any) => item.provider === provider && item.id === id)
-      ?? ctx.modelRegistry.find(provider, id);
-    if (!model) {
-      continue;
-    }
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (auth.ok && auth.apiKey) {
-      return { model, auth };
-    }
-  }
-
-  if (ctx.model) {
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-    if (auth.ok && auth.apiKey) {
-      return { model: ctx.model, auth };
-    }
-  }
-
-  if (Array.isArray(available)) {
-    for (const model of available) {
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok && auth.apiKey) {
-        return { model, auth };
-      }
-    }
-  }
-
+  const selected = await selectConfiguredModelWithAuth(ctx, "webSummarization", {
+    fallbackToCurrent: true,
+    fallbackToAnyAvailable: true,
+  });
+  if (selected) return selected;
   throw new Error("No usable pi model found for web_use fetch summarization");
 }
 

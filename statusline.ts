@@ -98,6 +98,35 @@ function sanitize(text: string): string {
   return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
 }
 
+function finiteNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function subagentCostFromDetails(details: unknown): number {
+  if (!details || typeof details !== "object") return 0;
+  const results = (details as { results?: unknown }).results;
+  if (!Array.isArray(results)) return 0;
+
+  let cost = 0;
+  for (const result of results) {
+    if (!result || typeof result !== "object") continue;
+    const record = result as { exitCode?: unknown; usage?: { cost?: unknown } };
+    // The subagent extension uses exitCode -1 for in-flight partial updates.
+    // Stored tool-result entries should be final, but keep this guard so
+    // transient/partial details never inflate session cost.
+    if (record.exitCode === -1) continue;
+    cost += finiteNumber(record.usage?.cost);
+  }
+  return cost;
+}
+
+function subagentCostFromToolResult(message: unknown): number {
+  if (!message || typeof message !== "object") return 0;
+  const record = message as { role?: string; toolName?: string; details?: unknown };
+  if (record.role !== "toolResult" || record.toolName !== "subagent") return 0;
+  return subagentCostFromDetails(record.details);
+}
+
 // ---------------------------------------------------------------------------
 // Extension
 // ---------------------------------------------------------------------------
@@ -146,19 +175,21 @@ export default function (pi: ExtensionAPI) {
           // ----- cumulative token / cost stats -----
           let totalInput = 0;
           let totalOutput = 0;
-          let totalCost = 0;
+          let baseCost = 0;
+          let subagentCost = 0;
 
           for (const entry of ctx.sessionManager.getEntries()) {
-            if (
-              entry.type === "message" &&
-              entry.message.role === "assistant"
-            ) {
+            if (entry.type !== "message") continue;
+            if (entry.message.role === "assistant") {
               const m = entry.message as AssistantMessage;
               totalInput += m.usage.input;
               totalOutput += m.usage.output;
-              totalCost += m.usage.cost.total;
+              baseCost += m.usage.cost.total;
+            } else {
+              subagentCost += subagentCostFromToolResult(entry.message);
             }
           }
+          const totalCost = baseCost + subagentCost;
 
           // ----- current context usage -----
           const ctxUsage = ctx.getContextUsage();
@@ -203,7 +234,7 @@ export default function (pi: ExtensionAPI) {
 
           // Col 1: directory & model
           const col1_l1 = theme.fg("dim", dirDisplay);
-          let modelSeg = theme.fg("accent", modelId);
+          let modelSeg = theme.fg("success", modelId);
           if (thinkPart) {
             modelSeg += " " + theme.fg("dim", thinkPart);
           }
@@ -216,10 +247,13 @@ export default function (pi: ExtensionAPI) {
             ctx.modelRegistry?.isUsingOAuth?.(ctx.model)
               ? " (sub)"
               : "";
+          const costText = subagentCost > 0
+            ? `${baseCost.toFixed(3)} + ${subagentCost.toFixed(3)} = ${totalCost.toFixed(3)}`
+            : totalCost.toFixed(3);
           const costSeg =
             theme.fg("dim", "$") +
             " " +
-            theme.fg("muted", totalCost.toFixed(3) + sub);
+            theme.fg("muted", costText + sub);
 
           // Col 3: token I/O & extension statuses
           let tokSeg = "";

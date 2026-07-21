@@ -62,6 +62,7 @@ Adds a `py_explore` tool for running read-only/exploratory Python scripts.
 
 - Use it for quick data inspection, polars/pandas/numpy exploration, and small read-only transformations.
 - Prefer it over Python heredocs or `python -c` via `bash` for read-only scripts.
+- Prefers the interpreter from `uv python find --no-python-downloads` and falls back to the system Python if uv is unavailable or invalid.
 - Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
 - Includes `/py-explore-test` to tune the LLM prompt against a built-in test suite.
 

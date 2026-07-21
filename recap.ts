@@ -1,12 +1,11 @@
 import { complete } from "@earendil-works/pi-ai/compat";
 import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
+import { selectConfiguredModelWithAuth } from "./shared/model-config.ts";
 
 const WIDGET_ID = "recap";
 const IDLE_MS = 30_000;
-const MAX_TEXT = 120;
-const RECAP_PROVIDER = "opencode-go";
-const RECAP_MODEL_ID = "deepseek-v4-pro";
+const MAX_RECAP_LINE = 160;
 
 function textFromContent(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -20,24 +19,73 @@ function textFromContent(content: unknown): string {
 		.join(" ");
 }
 
-function clean(text: string): string {
+function flattenNewlines(text: string): string {
 	return text
-		.replace(/```[\s\S]*?```/g, " code block ")
-		.replace(/`([^`]+)`/g, "$1")
-		.replace(/[#*_>\-[\]]/g, "")
-		.replace(/\s+/g, " ")
+		.replace(/[\r\n\t]+/g, " ")
+		.replace(/ {2,}/g, " ")
 		.trim();
 }
 
-function brief(text: string, max = MAX_TEXT): string {
-	const cleaned = clean(text);
-	if (!cleaned) return "";
-	return cleaned.length > max ? `${cleaned.slice(0, max - 1).trimEnd()}…` : cleaned;
+function conciseLine(text: string, max = Number.POSITIVE_INFINITY): string {
+	const flattened = flattenNewlines(text);
+	if (!flattened) return "";
+	return Number.isFinite(max) && flattened.length > max
+		? `${flattened.slice(0, max - 1).trimEnd()}…`
+		: flattened;
 }
 
+function stripRecapPrefix(text: string): string {
+	return text.replace(/^(?:now|next)\s*:\s*/i, "").trim();
+}
+
+function twoLineRecap(now: string, next: string, maxLineLength?: number): string {
+	return `Now: ${conciseLine(stripRecapPrefix(now), maxLineLength) || "No active task yet."}\nNext: ${conciseLine(stripRecapPrefix(next), maxLineLength) || "Wait for the next user request."}`;
+}
+
+function renderRecapLines(recap: string, width: number, theme: any): string[] {
+	const label = theme.fg("accent", "Recap:");
+	const [nowLine, nextLine] = recap.split("\n").slice(0, 2);
+	const nowBody = nowLine ? nowLine.replace(/^Now:\s*/, "") : "";
+	const nextBody = nextLine ? nextLine.replace(/^Next:\s*/, "") : "";
+	const labelWidth = 7; // visible width of "Recap:" with trailing space
+
+	const labelPrefix = label + " ";
+	const now = labelPrefix + theme.fg("success", "Now:") + " " + nowBody;
+	const next = " ".repeat(labelWidth) + theme.fg("warning", "Next:") + " " + nextBody;
+	return [
+		truncateToWidth(now, width, theme.fg("dim", "…")),
+		truncateToWidth(next, width, theme.fg("dim", "…")),
+	];
+}
+
+function normalizeRecap(text: string, fallback: string): string {
+	const rawLines = text
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	if (rawLines.length === 0) return fallback;
+
+	const nowIndex = rawLines.findIndex((line) => /^now\s*:/i.test(line));
+	const nextIndex = rawLines.findIndex((line) => /^next\s*:/i.test(line));
+	if (nowIndex !== -1 && nextIndex !== -1) {
+		const now = rawLines[nowIndex];
+		const extraAfterNext = rawLines
+			.slice(nextIndex + 1)
+			.filter((line) => !/^now\s*:/i.test(line))
+			.join(" ");
+		const next = [rawLines[nextIndex], extraAfterNext].filter(Boolean).join(" ");
+		return twoLineRecap(now, next);
+	}
+
+	if (rawLines.length >= 2) {
+		return twoLineRecap(rawLines[0], rawLines.slice(1).join(" "));
+	}
+
+	return twoLineRecap(rawLines[0], "Continue from there.");
+}
 
 function isHousekeepingUser(text: string): boolean {
-	const t = clean(text).toLowerCase();
+	const t = flattenNewlines(text).toLowerCase();
 	return (
 		!t ||
 		t.startsWith("all todos are complete") ||
@@ -49,7 +97,7 @@ function isHousekeepingUser(text: string): boolean {
 }
 
 function isLowSignalAssistant(text: string): boolean {
-	const t = clean(text).toLowerCase();
+	const t = flattenNewlines(text).toLowerCase();
 	return !t || t === "done." || t === "done" || t === "ok" || t === "okay";
 }
 
@@ -64,7 +112,7 @@ function buildConversationText(ctx: any): string {
 		.map((entry: any) => entry?.type === "message" ? entry.message : entry?.message)
 		.filter(isMainThreadMessage)
 		.map((message: any) => {
-			const text = clean(textFromContent(message.content));
+			const text = flattenNewlines(textFromContent(message.content));
 			if (!text || (message.role === "user" && isHousekeepingUser(text)) || (message.role === "assistant" && isLowSignalAssistant(text))) {
 				return undefined;
 			}
@@ -78,26 +126,29 @@ function buildConversationText(ctx: any): string {
 function fallbackRecap(ctx: any): string {
 	const conversation = buildConversationText(ctx);
 	const lastUser = conversation.split("\n\n").reverse().find((line) => line.startsWith("User:"));
-	if (!lastUser) return "No active task yet.";
-	return brief(`We were working on ${lastUser.replace(/^User:\s*/, "")}. Next, continue from there.`, 260);
+	if (!lastUser) return twoLineRecap("No active task yet.", "Wait for the next user request.", MAX_RECAP_LINE);
+	return twoLineRecap(`Working on ${lastUser.replace(/^User:\s*/, "")}.`, "Continue from there.", MAX_RECAP_LINE);
 }
 
 async function generateRecap(ctx: any): Promise<string> {
 	const conversation = buildConversationText(ctx);
-	if (!conversation.trim()) return "No active task yet.";
+	if (!conversation.trim()) return fallbackRecap(ctx);
 
-	const model = ctx.modelRegistry.find(RECAP_PROVIDER, RECAP_MODEL_ID);
-	const auth = model ? await ctx.modelRegistry.getApiKeyAndHeaders(model) : undefined;
-	if (!model || !auth?.ok || !auth.apiKey) return fallbackRecap(ctx);
+	const selected = await selectConfiguredModelWithAuth(ctx, "recapGeneration");
+	if (!selected) return fallbackRecap(ctx);
+	const { model, auth } = selected;
 
 	const prompt = [
-		"Write a very brief idle recap for a coding-agent terminal UI.",
-		"Use exactly one natural sentence, no headings or labels.",
-		"Say what we were doing and what should happen next.",
+		"Write a concise idle recap for a coding-agent terminal UI.",
+		"Return exactly two lines and nothing else:",
+		"Now: <what is currently happening or was just done>",
+		"Next: <the next action to take>",
+		"Keep each line concise.",
+		"Preserve Markdown formatting for file paths, symbols, commands, and names.",
+		"Flatten any internal newlines in the Now/Next content into spaces.",
 		"Ignore tool outputs, todo bookkeeping, meta instructions, and final status chatter.",
 		"Focus on the main user/assistant work thread.",
 		"Do not mention that you are summarizing.",
-		"Keep it under 35 words.",
 		"",
 		"<conversation>",
 		conversation,
@@ -126,7 +177,7 @@ async function generateRecap(ctx: any): Promise<string> {
 		.map((c) => c.text)
 		.join(" ");
 
-	return brief(text || fallbackRecap(ctx), 260);
+	return normalizeRecap(text, fallbackRecap(ctx));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -175,12 +226,7 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setWidget(WIDGET_ID, (_tui: any, theme: any) => ({
 			invalidate() {},
 			render(width: number): string[] {
-				const title = theme.fg("accent", "Recap") + theme.fg("dim", " — idle 30s");
-				const recapLines = wrapTextWithAnsi(recap, width).slice(0, 4);
-				return [
-					truncateToWidth(title, width, theme.fg("dim", "…")),
-					...recapLines.map((line) => truncateToWidth(line, width, theme.fg("dim", "…"))),
-				];
+				return renderRecapLines(recap, width, theme);
 			},
 		}));
 		showing = true;
