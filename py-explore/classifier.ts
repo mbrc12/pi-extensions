@@ -11,7 +11,7 @@
 
 import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext, Model, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
+import { completeWithModelFallback } from "../shared/model-config.ts";
 
 export interface WriteCheckResult {
   allowed: boolean;
@@ -130,13 +130,6 @@ export async function llmSaysWrite(
   code: string,
   ctx: WriteCheckContext,
 ): Promise<{ writes: boolean; raw: string }> {
-  const selected = await selectConfiguredModelWithAuth(ctx, "pythonWriteClassification", {
-    fallbackToCurrent: true,
-  });
-  if (!selected) {
-    throw new Error("No API key available for LLM write check");
-  }
-  const { model, auth } = selected;
 
   const userMessage: UserMessage = {
     role: "user",
@@ -149,17 +142,12 @@ export async function llmSaysWrite(
     ],
   };
 
-  const { complete } = await import("@earendil-works/pi-ai/compat");
-
-  const response = await complete(
-    model,
+  const { response } = await completeWithModelFallback(
+    ctx,
+    "pythonWriteClassification",
     { systemPrompt: WRITE_CHECK_SYSTEM_PROMPT, messages: [userMessage] },
-    {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-      env: auth.env,
-      signal: ctx.signal,
-    },
+    { signal: ctx.signal },
+    { fallbackToCurrent: true },
   );
 
   const raw = extractText(response);

@@ -10,12 +10,12 @@
  *  3. Fall back to "review" (ask user)
  */
 
-import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
+import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Classification, LlmClass, ClassificationResult } from "./types";
 import { getEffectiveCwdForCommand } from "./cwd";
 import { COMMAND_PREVIEW_LENGTH } from "./types";
-import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
+import { completeWithModelFallback } from "../shared/model-config.ts";
 
 // ---------------------------------------------------------------------------
 // System prompt for the classifier
@@ -122,11 +122,6 @@ export async function classifyWithLLM(
   signal?: AbortSignal,
 ): Promise<ClassificationResult | undefined> {
   try {
-    const selected = await selectConfiguredModelWithAuth(ctx, "permissionClassification", {
-      fallbackToCurrent: true,
-    });
-    if (!selected) return undefined;
-    const { model, auth } = selected;
 
     const userMessage: UserMessage = {
       role: "user",
@@ -139,18 +134,15 @@ export async function classifyWithLLM(
       timestamp: Date.now(),
     };
 
-    const response = await complete(
-      model,
+    const { response } = await completeWithModelFallback(
+      ctx,
+      "permissionClassification",
       {
         systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
         messages: [userMessage],
       },
-      {
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-        env: auth.env,
-        signal,
-      },
+      { signal },
+      { fallbackToCurrent: true },
     );
 
     const text = response.content

@@ -122,10 +122,10 @@ Centralized model configuration used by multiple extensions. Defines `ModelConfi
 
 | Purpose | Used by | Default models |
 |---|---|---|
-| `recapGeneration` | `recap` | deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6 |
+| `recapGeneration` | `recap` | deepseek-v4-flash, gpt-5.4-mini, mimo-v2.5, minimax-m2.7, kimi-k2.6, deepseek-v4-pro |
 | `subagentProgressSummary` | `subagent` | gpt-5.4-mini |
-| `webSummarization` | `web-use` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6 |
-| `permissionClassification` | `permissions` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gemini-2.0-flash |
-| `pythonWriteClassification` | `py-explore` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6 |
+| `webSummarization` | `web-use` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gpt-5.4-mini |
+| `permissionClassification` | `permissions` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gpt-5.4-mini, gemini-2.0-flash |
+| `pythonWriteClassification` | `py-explore` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gpt-5.4-mini |
 
 Managed via `model-config.json` in the extensions root.

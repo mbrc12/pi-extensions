@@ -1,7 +1,6 @@
-import { complete } from "@earendil-works/pi-ai/compat";
 import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { selectConfiguredModelWithAuth } from "./shared/model-config.ts";
+import { completeWithModelFallback } from "./shared/model-config.ts";
 
 const WIDGET_ID = "recap";
 const IDLE_MS = 30_000;
@@ -134,10 +133,6 @@ async function generateRecap(ctx: any): Promise<string> {
 	const conversation = buildConversationText(ctx);
 	if (!conversation.trim()) return fallbackRecap(ctx);
 
-	const selected = await selectConfiguredModelWithAuth(ctx, "recapGeneration");
-	if (!selected) return fallbackRecap(ctx);
-	const { model, auth } = selected;
-
 	const prompt = [
 		"Write a concise idle recap for a coding-agent terminal UI.",
 		"Return exactly two lines and nothing else:",
@@ -155,8 +150,9 @@ async function generateRecap(ctx: any): Promise<string> {
 		"</conversation>",
 	].join("\n");
 
-	const response = await complete(
-		model,
+	const { response } = await completeWithModelFallback(
+		ctx,
+		"recapGeneration",
 		{
 			messages: [{
 				role: "user" as const,
@@ -165,9 +161,7 @@ async function generateRecap(ctx: any): Promise<string> {
 			}],
 		},
 		{
-			apiKey: auth.apiKey,
-			headers: auth.headers,
-			env: auth.env,
+			signal: ctx.signal,
 			reasoningEffort: "low",
 		},
 	);

@@ -1,10 +1,11 @@
 {
   "recapGeneration": [
-    "opencode-go/deepseek-v4-pro",
-    "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
+    "opencode-go/deepseek-v4-flash",
+    "openai-codex/gpt-5.4-mini",
     "opencode-go/minimax-m2.7",
-    "opencode-go/kimi-k2.6"
+    "opencode-go/kimi-k2.6",
+    "opencode-go/deepseek-v4-pro"
   ],
   "subagentProgressSummary": [
     "openai-codex/gpt-5.4-mini"
@@ -14,7 +15,8 @@
     "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
-    "opencode-go/kimi-k2.6"
+    "opencode-go/kimi-k2.6",
+    "openai-codex/gpt-5.4-mini"
   ],
   "permissionClassification": [
     "opencode-go/deepseek-v4-pro",
@@ -22,6 +24,7 @@
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
+    "openai-codex/gpt-5.4-mini",
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
@@ -33,6 +36,7 @@
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
+    "openai-codex/gpt-5.4-mini",
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",

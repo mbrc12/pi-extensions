@@ -2,11 +2,11 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
+import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
-import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
+import { completeWithModelFallback } from "../shared/model-config.ts";
 
 const WebUseParams = Type.Object({
   mode: Type.Union([Type.Literal("search"), Type.Literal("fetch"), Type.Literal("full")]),
@@ -138,18 +138,7 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
-async function pickSummaryModel(ctx: any) {
-  const selected = await selectConfiguredModelWithAuth(ctx, "webSummarization", {
-    fallbackToCurrent: true,
-    fallbackToAnyAvailable: true,
-  });
-  if (selected) return selected;
-  throw new Error("No usable pi model found for web_use fetch summarization");
-}
-
 async function summarizeFetchedPage(ctx: any, url: string, pageTitle: string, pageText: string) {
-  const { model, auth } = await pickSummaryModel(ctx);
-
   const userMessage: UserMessage = {
     role: "user",
     timestamp: Date.now(),
@@ -167,10 +156,12 @@ async function summarizeFetchedPage(ctx: any, url: string, pageTitle: string, pa
     ],
   };
 
-  const response = await complete(
-    model,
+  const { response, model } = await completeWithModelFallback(
+    ctx,
+    "webSummarization",
     { systemPrompt: FETCH_SYSTEM_PROMPT, messages: [userMessage] },
-    { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: ctx.signal },
+    { signal: ctx.signal },
+    { fallbackToCurrent: true, fallbackToAnyAvailable: true },
   );
 
   if (response.stopReason === "aborted") {
