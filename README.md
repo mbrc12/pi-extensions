@@ -20,6 +20,20 @@ Compact TUI rendering for all built-in tools — truncated commands for bash, ju
 
 Sends a desktop notification (via terminal bell + OSC sequences / Windows toast) when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. Works across tmux, Kitty, and Windows Terminal.
 
+### `py-explore`
+
+Adds a `py_explore` tool for running read-only/exploratory Python scripts.
+
+- Use it for quick data inspection, polars/pandas/numpy exploration, and small read-only transformations.
+- Prefer it over Python heredocs or `python -c` via `bash` for read-only scripts.
+- Prefers the interpreter from `uv python find --no-python-downloads` and falls back to the system Python if uv is unavailable or invalid.
+- Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
+- Also registers `/py-explore-test` to tune the LLM write-check prompt against a built-in test suite.
+
+### `prompt-prefix`
+
+Adds a `»` prefix before the editor prompt to visually distinguish it from assistant output.
+
 ### `recap`
 
 Shows a small recap widget after 30 seconds without user input, then hides it as soon as the user types again. The recap gives a brief "Now" summary and "Next" suggestion. Toggle/show with `/recap`, `/recap on`, or `/recap off`.
@@ -36,17 +50,41 @@ Intercepts tool calls and classifies them before execution. Emits `prompt_wait` 
 
 Toggle with `/permissions allow|classify|ask` or `F8`.
 
-### `prompt-prefix`
-
-Adds a `»` prefix before the editor prompt to visually distinguish it from assistant output.
-
 ### `statusline`
 
 Replaces the default footer with a compact two-line statusline:
 - Line 1: cwd (with git branch) · context · token I/O
-- Line 2: model/thinking · cost · extension statuses (permissions first; extras separated by ⋯)
+- Line 2: model/thinking · cost · extension statuses (permissions first; extras separated by ·)
 
 Toggle with `/statusline`.
+
+### `subagent`
+
+Adds a `subagent` tool that delegates tasks to specialized agents with isolated context windows. Spawns a separate `pi` process per invocation.
+
+Supports three modes:
+
+| Mode | Params | Description |
+|---|---|---|
+| `single` | `agent` + `task` | Run one agent |
+| `parallel` | `tasks` array | Run multiple agents concurrently (up to 4 concurrency, 8 max tasks) |
+| `chain` | `chain` array | Run agents sequentially, each sees the previous agent's output via `{previous}` placeholder |
+
+The `agentScope` param controls where agents are loaded from:
+
+| Scope | Source |
+|---|---|
+| `user` (default) | `~/.pi/agent/agents/` |
+| `project` | `.pi/agents/` in the nearest project parent |
+| `both` | Both, project agents shadowing user agents of the same name |
+
+Project-local agents require user confirmation by default (`confirmProjectAgents`). Subagent tool-result details include per-task usage stats (tokens, cost, turns), and the statusline aggregates subagent cost into the total.
+
+Progress summaries: a secondary model (GPT-5.4-mini by default) is called every 60s to produce a one-line "Progress: ..." status line shown under the running agent.
+
+### `thinking-tail`
+
+Collapses long thinking blocks to the last 5 non-empty lines with a gray italic hint (`(thinking collapsed, ctrl+o to expand)`). Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
 
 ### `todo-list`
 
@@ -60,15 +98,7 @@ The model is kept on-task by layering three reinforcement mechanisms:
 
 `clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. State is stored in tool-result details and reconstructed from the session branch, so branching keeps the correct state.
 
-### `py-explore`
-
-Adds a `py_explore` tool for running read-only/exploratory Python scripts.
-
-- Use it for quick data inspection, polars/pandas/numpy exploration, and small read-only transformations.
-- Prefer it over Python heredocs or `python -c` via `bash` for read-only scripts.
-- Prefers the interpreter from `uv python find --no-python-downloads` and falls back to the system Python if uv is unavailable or invalid.
-- Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
-- Includes `/py-explore-test` to tune the LLM prompt against a built-in test suite.
+Todo mutations are hidden from the transcript (`renderShell/renderCall/renderResult: Container`) so the todo widget and `/todos` command remain the user-facing interface.
 
 ### `web-use`
 
@@ -78,5 +108,24 @@ Adds a `web_use` tool for search and fetch:
 |---|---|
 | `search` | Search DuckDuckGo, return titles/URLs/descriptions |
 | `fetch` | Fetch a URL and extract the important text |
+| `full` | Fetch the raw HTML of a page via curl (8 KB preview in output) |
 
-Uses DuckDuckGo for search and a local Python script with `readability-lxml` for extraction.
+Uses DuckDuckGo for search and a local Python script with `readability-lxml` for extraction. Model selection for summarization is configurable via `model-config.json`.
+
+---
+
+## Shared Modules
+
+### `shared/model-config.ts`
+
+Centralized model configuration used by multiple extensions. Defines `ModelConfigPurpose` types:
+
+| Purpose | Used by | Default models |
+|---|---|---|
+| `recapGeneration` | `recap` | deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6 |
+| `subagentProgressSummary` | `subagent` | gpt-5.4-mini |
+| `webSummarization` | `web-use` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6 |
+| `permissionClassification` | `permissions` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gemini-2.0-flash |
+| `pythonWriteClassification` | `py-explore` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6 |
+
+Managed via `model-config.json` in the extensions root.
