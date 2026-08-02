@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { complete, type UserMessage } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
 import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
 
 const WebUseParams = Type.Object({
@@ -242,7 +243,7 @@ export default function webUseExtension(pi: ExtensionAPI) {
 
         return {
           content: [{ type: "text", text }],
-          details: parsed,
+          details: { ...parsed, resultCount: results.length },
         };
       }
 
@@ -282,6 +283,59 @@ export default function webUseExtension(pi: ExtensionAPI) {
         content: [{ type: "text", text: formatFetchResult(result) }],
         details: result,
       };
+    },
+
+    renderCall(args, theme, _context) {
+      if (args.mode === "search") {
+        return new Text(
+          `${theme.fg("toolTitle", theme.bold("web_use"))} ${theme.fg("accent", "search")}: ${theme.fg("toolOutput", args.query ?? "...")}`,
+          0,
+          0,
+        );
+      }
+      if (args.mode === "full") {
+        return new Text(
+          `${theme.fg("toolTitle", theme.bold("web_use"))} ${theme.fg("accent", "full")}: ${theme.fg("toolOutput", args.url ?? "...")}`,
+          0,
+          0,
+        );
+      }
+      return new Text(
+        `${theme.fg("toolTitle", theme.bold("web_use"))} ${theme.fg("accent", "fetch")}: ${theme.fg("toolOutput", args.url ?? "...")}`,
+        0,
+        0,
+      );
+    },
+
+    renderResult(result, { expanded }, theme, _context) {
+      // Collapsed: show minimal summary
+      if (!expanded) {
+        const details = result.details as Record<string, unknown> | undefined;
+        if (details?.mode === "fetch") {
+          const title = String(details.page_title ?? "");
+          const truncated = details.truncated ? " (truncated)" : "";
+          return new Text(theme.fg("muted", ` → fetched${title ? `: ${title}` : ""}${truncated}`), 0, 0);
+        }
+        if (details?.resultCount !== undefined) {
+          const count = Number(details.resultCount) || 0;
+          return new Text(theme.fg("muted", ` → ${count} result${count !== 1 ? "s" : ""}`), 0, 0);
+        }
+        if (details?.html_length !== undefined) {
+          const len = Number(details.html_length) || 0;
+          return new Text(theme.fg("muted", ` → ${len} bytes`), 0, 0);
+        }
+        return new Text("", 0, 0);
+      }
+
+      // Expanded: show full output
+      const textContent = result.content.find((c) => c.type === "text");
+      if (!textContent || textContent.type !== "text") {
+        return new Text("", 0, 0);
+      }
+
+      const lines = textContent.text.split("\n");
+      const output = lines.map((line) => theme.fg("toolOutput", line)).join("\n");
+      return new Text(`\n${output}`, 0, 0);
     },
   });
 }
