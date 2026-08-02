@@ -4,6 +4,7 @@ import { getAgentDir, type Model } from "@earendil-works/pi-coding-agent";
 
 export type ModelConfigPurpose =
   | "recapGeneration"
+  | "subagentProgressSummary"
   | "webSummarization"
   | "permissionClassification"
   | "pythonWriteClassification";
@@ -19,6 +20,9 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
+  ],
+  subagentProgressSummary: [
+    "openai-codex/gpt-5.4-mini",
   ],
   webSummarization: [
     "opencode-go/deepseek-v4-flash",

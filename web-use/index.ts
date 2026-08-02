@@ -8,9 +8,9 @@ import { Type } from "typebox";
 import { selectConfiguredModelWithAuth } from "../shared/model-config.ts";
 
 const WebUseParams = Type.Object({
-  mode: Type.Union([Type.Literal("search"), Type.Literal("fetch")]),
+  mode: Type.Union([Type.Literal("search"), Type.Literal("fetch"), Type.Literal("full")]),
   query: Type.Optional(Type.String({ description: "DuckDuckGo query to run in search mode" })),
-  url: Type.Optional(Type.String({ description: "URL to fetch in fetch mode" })),
+  url: Type.Optional(Type.String({ description: "URL to fetch in fetch or full mode" })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: "Maximum number of search results" })),
 });
 
@@ -193,19 +193,20 @@ export default function webUseExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_use",
     label: "Web Use",
-    description: "Search DuckDuckGo or fetch a URL and extract the important text.",
-    promptSnippet: "Search the web with DuckDuckGo or fetch a URL and summarize the important content.",
+    description: "Search DuckDuckGo, fetch a URL and extract important text, or fetch the full HTML of a page.",
+    promptSnippet: "Search the web with DuckDuckGo, fetch a URL and summarize the important content, or fetch the full HTML of a page.",
     promptGuidelines: [
       "Use web_use with mode=search when the user wants web search results with titles, URLs, and short descriptions.",
       "Use web_use with mode=fetch when the user provides a URL and wants the important text extracted from that page.",
+      "Use web_use with mode=full when the user needs the raw full HTML of a page (fetched via curl).",
     ],
     parameters: WebUseParams,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       if (params.mode === "search" && !params.query) {
         throw new Error("web_use search mode requires query");
       }
-      if (params.mode === "fetch" && !params.url) {
-        throw new Error("web_use fetch mode requires url");
+      if ((params.mode === "fetch" || params.mode === "full") && !params.url) {
+        throw new Error(`web_use ${params.mode} mode requires url`);
       }
 
       const { scriptPath } = getHelperPaths();
@@ -220,6 +221,9 @@ export default function webUseExtension(pi: ExtensionAPI) {
         args.push("--search", params.query!);
         args.push("--limit", String(params.limit ?? 5));
         onUpdate?.({ content: [{ type: "text", text: `Searching DuckDuckGo for: ${params.query}` }] });
+      } else if (params.mode === "full") {
+        args.push("--full", params.url!);
+        onUpdate?.({ content: [{ type: "text", text: `Fetching full HTML with curl: ${params.url}` }] });
       } else {
         args.push("--fetch", params.url!);
         onUpdate?.({ content: [{ type: "text", text: `Fetching URL with curl: ${params.url}` }] });
@@ -238,6 +242,20 @@ export default function webUseExtension(pi: ExtensionAPI) {
 
         return {
           content: [{ type: "text", text }],
+          details: parsed,
+        };
+      }
+
+      if (params.mode === "full") {
+        const html = String(parsed.html ?? "");
+        const htmlLength = Number(parsed.html_length ?? html.length);
+        const MAX_HTML_DISPLAY = 8000;
+        const displayHtml = html.length > MAX_HTML_DISPLAY
+          ? html.slice(0, MAX_HTML_DISPLAY) + `\n\n... (truncated in display, full HTML is ${htmlLength} bytes)`
+          : html;
+
+        return {
+          content: [{ type: "text", text: `Full HTML from ${params.url} (${htmlLength} bytes):\n\n${displayHtml}` }],
           details: parsed,
         };
       }

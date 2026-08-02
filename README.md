@@ -42,7 +42,11 @@ Adds a `»` prefix before the editor prompt to visually distinguish it from assi
 
 ### `statusline`
 
-Replaces the default footer with a compact statusline showing cwd (with git branch), context window usage, cumulative token I/O, cost, model, thinking level, and extension statuses. Extension status segments on line 2 are separated by a themed `│` bar. Toggle with `/statusline`.
+Replaces the default footer with a compact two-line statusline:
+- Line 1: cwd (with git branch) · context · token I/O
+- Line 2: model/thinking · cost · extension statuses (permissions first; extras separated by ⋯)
+
+Toggle with `/statusline`.
 
 ### `todo-list`
 

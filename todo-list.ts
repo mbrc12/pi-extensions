@@ -29,6 +29,7 @@
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Container } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 
 interface Todo {
@@ -198,6 +199,11 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			"Do NOT call todo with action \"clear\" while incomplete todos remain — it is blocked. You may call clear once all todos are complete to tidy up; otherwise the list simply stays visible.",
 		],
 		parameters: TodoParams,
+		// Todo mutations are bookkeeping. Keep their tool rows out of the transcript;
+		// the todo widget and `/todos` command are the user-facing list.
+		renderShell: "self",
+		renderCall: () => new Container(),
+		renderResult: () => new Container(),
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			switch (params.action) {

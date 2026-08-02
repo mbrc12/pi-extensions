@@ -195,11 +195,22 @@ def fetch_url(url: str) -> dict[str, object]:
     }
 
 
+def fetch_full(url: str) -> dict[str, object]:
+    body = run_curl(url)
+    return {
+        "mode": "full",
+        "url": url,
+        "html": body,
+        "html_length": len(body),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="DuckDuckGo search + curl fetch helper")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--search", metavar="QUERY", help="Run a DuckDuckGo search")
     group.add_argument("--fetch", metavar="URL", help="Fetch a URL with curl and return readable text")
+    group.add_argument("--full", metavar="URL", help="Fetch the full HTML of a URL with curl")
     parser.add_argument("--limit", type=int, default=5, help="Max search results to return")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     args = parser.parse_args()
@@ -207,6 +218,8 @@ def main() -> int:
     try:
         if args.search:
             payload = duckduckgo_search(args.search, max(1, min(args.limit, 10)))
+        elif args.full:
+            payload = fetch_full(args.full)
         else:
             payload = fetch_url(args.fetch)
     except Exception as exc:  # noqa: BLE001

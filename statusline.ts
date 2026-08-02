@@ -2,8 +2,8 @@
  * Custom Statusline Extension
  *
  * Replaces the default footer with a clean, two-line statusline:
- *   Line 1: cwd (git branch) | ctx: percentage tokens/max | tok: up down
- *   Line 2: model think:level | cost: $total | other extension statuses
+ *   Line 1: cwd (git branch) · ctx · tok
+ *   Line 2: model think:level · cost · extension statuses
  *
  * Toggle with /statusline
  */
@@ -230,18 +230,18 @@ export default function (pi: ExtensionAPI) {
               : `think:${currentThinkingLevel}`
             : null;
 
-          // ----- build column-aligned segments -----
+          // ----- build free-flowing segments (no column alignment) -----
+          const sep = theme.fg("borderMuted", " \u00b7 ");
 
-          // Col 1: directory & model
-          const col1_l1 = theme.fg("dim", dirDisplay);
+          const dirSeg = theme.fg("dim", dirDisplay);
+
           let modelSeg = theme.fg("success", modelId);
           if (thinkPart) {
             modelSeg += " " + theme.fg("dim", thinkPart);
           }
-          const col1_l2 = modelSeg;
 
-          // Col 2: context & cost
           const ctxSeg = theme.fg("dim", "ctx") + " " + ctxColored;
+
           const sub =
             ctx.model &&
             ctx.modelRegistry?.isUsingOAuth?.(ctx.model)
@@ -255,62 +255,37 @@ export default function (pi: ExtensionAPI) {
             " " +
             theme.fg("muted", costText + sub);
 
-          // Col 3: token I/O & extension statuses
           let tokSeg = "";
           if (totalInput > 0 || totalOutput > 0) {
             const io = `↑${fmt(totalInput)} ↓${fmt(totalOutput)}`;
             tokSeg =
               theme.fg("dim", "tok") + " " + theme.fg("muted", io);
           }
-          let statusSeg = "";
+
+          // Extension statuses on line 2 after core items.
+          // Keep permissions first when present.
           const statuses = footerData.getExtensionStatuses();
-          if (statuses.size > 0) {
-            const sorted = Array.from(statuses.entries())
-              .sort(([a], [b]) => a.localeCompare(b as string))
-              .map(([, text]) => sanitize(text as string));
-            // Separate extension status segments with a themed bar so they
-            // don't run together on line 2.
-            const statusPipe = theme.fg("borderMuted", " │ ");
-            statusSeg = sorted.join(statusPipe);
+          const sortedStatuses = Array.from(statuses.entries())
+            .sort(([a], [b]) => {
+              if (a === "permissions") return -1;
+              if (b === "permissions") return 1;
+              return a.localeCompare(b as string);
+            })
+            .map(([, text]) => sanitize(text as string))
+            .filter(Boolean);
+
+          // Line 1: dir · ctx · tok
+          const line1 = [dirSeg, ctxSeg, tokSeg].filter(Boolean).join(sep);
+
+          // Line 2: model · cost · permissions · extra1 · extra2
+          const line2Core = [modelSeg, costSeg].filter(Boolean);
+          let line2 = line2Core.join(sep);
+          if (sortedStatuses.length > 0) {
+            const statusBlock = sortedStatuses.join(sep);
+            line2 = line2
+              ? line2 + sep + statusBlock
+              : statusBlock;
           }
-
-          // Visible-width helpers (strip ANSI escapes)
-          const visLen = (s: string): number =>
-            s.replace(/\x1b\[[0-9;]*m/g, "").length;
-          const padVis = (s: string, w: number): string => {
-            const vl = visLen(s);
-            if (vl > w) return truncateToWidth(s, w, theme.fg("dim", "…"));
-            return s + " ".repeat(w - vl);
-          };
-
-          // Columns as [line1, line2] pairs; drop empty columns
-          const cols: [string, string][] = [
-            [col1_l1, col1_l2],
-            [ctxSeg, costSeg],
-            [tokSeg, statusSeg],
-          ].filter(([a, b]) => a || b);
-
-          // Max visible width per column
-          const maxW = cols.map(([a, b]) =>
-            Math.max(visLen(a), visLen(b)),
-          );
-
-          // Use natural column widths, shrinking from the right only if needed.
-          const pipeVis = 3; // visible width of " │ "
-          const totalPipe = (cols.length - 1) * pipeVis;
-          const colW = [...maxW];
-          let overflow =
-            colW.reduce((sum, w) => sum + w, 0) + totalPipe - width;
-          for (let i = colW.length - 1; i >= 0 && overflow > 0; i--) {
-            const shrink = Math.min(colW[i], overflow);
-            colW[i] -= shrink;
-            overflow -= shrink;
-          }
-
-          // Assemble lines with aligned pipes
-          const pipe = theme.fg("borderMuted", " │ ");
-          const line1 = cols.map(([a], i) => padVis(a, colW[i])).join(pipe);
-          const line2 = cols.map(([, b], i) => padVis(b, colW[i])).join(pipe);
 
           return [
             truncateToWidth(line1, width, theme.fg("dim", "…")),
