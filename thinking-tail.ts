@@ -11,7 +11,13 @@ import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const TAIL_LINES = 5;
-const COLLAPSED_HINT = "(thinking collapsed, ctrl+o to expand)";
+
+// Footer status item shown while any thinking is present. 🤐 = collapsed,
+// 😮 = expanded. The hint header that used to live inside the collapsed
+// thinking block is gone; this status line now carries that signal.
+const THINK_STATUS_KEY = "thinking";
+const EMOJI_COLLAPSED = "\u{1F910}"; // 🤐 zipped mouth
+const EMOJI_EXPANDED = "\u{1F62E}"; // 😮 face with open mouth
 
 type ContentBlock = {
   type: string;
@@ -28,9 +34,60 @@ type ComponentLike = {
   lastMessage?: AssistantMessageLike;
 };
 
+// Minimal slice of ExtensionUIContext needed to push the footer status.
+type StatusUI = {
+  setStatus(key: string, text: string | undefined): void;
+  getToolsExpanded(): boolean;
+};
+
+/** Return true if an assistant message content array has thinking text. */
+function contentHasThinking(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: string }).type === "thinking" &&
+      typeof (block as { thinking?: string }).thinking === "string" &&
+      (block as { thinking?: string }).thinking!.trim()
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function messageHasThinking(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  return contentHasThinking((message as { content?: unknown }).content);
+}
+
 // State is per rendered assistant-message component.
 const expandedInstances = new WeakSet<object>();
 const rawMessages = new WeakMap<object, AssistantMessageLike>();
+
+// Latest interactive UI context, captured on session_start so the
+// prototype-level setExpanded() override (which has no ctx) can still push
+// status updates. One extension instance serves all sessions in a process.
+let uiRef: StatusUI | undefined;
+// Whether the current session branch has any thinking content at all. The
+// think status is only shown when there is something to collapse/expand.
+let thinkingPresent = false;
+// Most recently applied expand state, for use during streaming updates that
+// do not pass through setExpanded().
+let currentExpanded = false;
+
+function statusText(expanded: boolean): string {
+  return `think: ${expanded ? EMOJI_EXPANDED : EMOJI_COLLAPSED}`;
+}
+
+function syncThinkStatus(): void {
+  if (!uiRef) return;
+  uiRef.setStatus(
+    THINK_STATUS_KEY,
+    thinkingPresent ? statusText(currentExpanded) : undefined,
+  );
+}
 
 function tailOf(text: string): string {
   return text
@@ -41,7 +98,7 @@ function tailOf(text: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  const proto = AssistantMessageComponent.prototype as Record<string, unknown>;
+  const proto = AssistantMessageComponent.prototype as unknown as Record<string, unknown>;
   const originalUpdateContent = proto.updateContent as (
     this: ComponentLike,
     message: AssistantMessageLike,
@@ -94,10 +151,11 @@ export default function (pi: ExtensionAPI) {
         continue;
       }
 
-      // One native thinking block: gray/italic hint followed by the tail.
+      // One native thinking block showing just the tail fold. The collapse
+      // signal now lives in the footer status item instead of an inline hint.
       content.push({
         ...run[0]!,
-        thinking: `${COLLAPSED_HINT}\n\n${tailOf(fullText)}`,
+        thinking: tailOf(fullText),
       });
     }
 
@@ -121,13 +179,52 @@ export default function (pi: ExtensionAPI) {
 
     const raw = rawMessages.get(this) ?? this.lastMessage;
     if (raw) updateContent.call(this, raw);
+
+    // Ctrl+O toggles the global expansion state. Reflect it in the footer
+    // think status. This override has no ctx, so use the captured uiRef.
+    currentExpanded = expanded;
+    syncThinkStatus();
   };
 
   pi.on("session_start", (_event, ctx) => {
-    // On reload, chat history is rebuilt just before session_start. Reapply
-    // the current Ctrl+O state to every historical assistant component.
-    const expanded = ctx.ui.getToolsExpanded();
-    ctx.ui.setToolsExpanded(expanded);
+    // Capture the interactive UI for the prototype-level toggle override and
+    // for streaming-message handlers below.
+    uiRef = ctx.ui;
+    currentExpanded = ctx.ui.getToolsExpanded();
+
+    // Reapply the current Ctrl+O state to every historical assistant
+    // component; chat history was just rebuilt before session_start.
+    ctx.ui.setToolsExpanded(currentExpanded);
+
+    // Determine whether this session branch has any thinking content, then
+    // show (or hide) the footer think status accordingly.
+    thinkingPresent = false;
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type !== "message") continue;
+      if (messageHasThinking(entry.message)) {
+        thinkingPresent = true;
+        break;
+      }
+    }
+    syncThinkStatus();
+  });
+
+  // As thinking streams in, flip thinkingPresent on so the collapsed status
+  // appears from the first thinking run onward (before any Ctrl+O toggle).
+  pi.on("message_update", (event) => {
+    if (!messageHasThinking(event.message)) return;
+    if (!thinkingPresent) {
+      thinkingPresent = true;
+      syncThinkStatus();
+    }
+  });
+
+  pi.on("message_end", (event) => {
+    if (!messageHasThinking(event.message)) return;
+    if (!thinkingPresent) {
+      thinkingPresent = true;
+      syncThinkStatus();
+    }
   });
 
   pi.on("session_shutdown", () => {
@@ -137,5 +234,8 @@ export default function (pi: ExtensionAPI) {
     } else {
       delete proto.setExpanded;
     }
+    if (uiRef) uiRef.setStatus(THINK_STATUS_KEY, undefined);
+    uiRef = undefined;
+    thinkingPresent = false;
   });
 }

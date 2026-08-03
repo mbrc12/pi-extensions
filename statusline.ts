@@ -2,8 +2,11 @@
  * Custom Statusline Extension
  *
  * Replaces the default footer with a clean, two-line statusline:
- *   Line 1: cwd (git branch) · ctx · tok
+ *   Line 1: cwd (git branch) · ctx · tok · think:emoji
  *   Line 2: model think:level · cost · extension statuses
+ *
+ * The thinking-tail extension pushes a think:
+ *   🤐 collapsed, 😮 expanded. It is surfaced on row 1 here.
  *
  * Toggle with /statusline
  */
@@ -12,6 +15,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { relative, resolve, sep } from "node:path";
+
+// Status key shared with the thinking-tail extension. Its value is rendered
+// on row 1 of this statusline (excluded from the row-2 status block).
+const THINK_STATUS_KEY = "thinking";
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -264,18 +271,38 @@ export default function (pi: ExtensionAPI) {
 
           // Extension statuses on line 2 after core items.
           // Keep permissions first when present.
-          const statuses = footerData.getExtensionStatuses();
+          const statuses: ReadonlyMap<string, string> =
+            footerData.getExtensionStatuses();
+
+          // The thinking-tail "think: <emoji>" status goes on row 1, so pull
+          // it out and exclude it from the row-2 status block.
+          const thinkStatusText = statuses.get(THINK_STATUS_KEY);
+          let thinkSeg = "";
+          if (thinkStatusText) {
+            const clean = sanitize(thinkStatusText);
+            const m = clean.match(/^(think:)\s+(.+)$/);
+            if (m) {
+              thinkSeg =
+                theme.fg("dim", m[1]!) + " " + theme.fg("accent", m[2]!);
+            } else {
+              thinkSeg = theme.fg("accent", clean);
+            }
+          }
+
           const sortedStatuses = Array.from(statuses.entries())
+            .filter(([key]) => key !== THINK_STATUS_KEY)
             .sort(([a], [b]) => {
               if (a === "permissions") return -1;
               if (b === "permissions") return 1;
-              return a.localeCompare(b as string);
+              return a.localeCompare(b);
             })
-            .map(([, text]) => sanitize(text as string))
+            .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: dir · ctx · tok
-          const line1 = [dirSeg, ctxSeg, tokSeg].filter(Boolean).join(sep);
+          // Line 1: dir · ctx · tok · think
+          const line1 = [dirSeg, ctxSeg, tokSeg, thinkSeg]
+            .filter(Boolean)
+            .join(sep);
 
           // Line 2: model · cost · permissions · extra1 · extra2
           const line2Core = [modelSeg, costSeg].filter(Boolean);
