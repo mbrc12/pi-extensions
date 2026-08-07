@@ -15,39 +15,12 @@
  */
 
 import { access, readFile, unlink, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { Type, type Static } from "typebox";
-import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Key, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 
 const DEFAULT_TAIL_LINES = 10;
-
-let expandKeyHint: string | undefined;
-
-function getExpandKeyHint(): string {
-	if (expandKeyHint !== undefined) return expandKeyHint;
-	try {
-		const home = process.env.HOME || process.env.USERPROFILE;
-		if (home) {
-			const raw = JSON.parse(readFileSync(resolve(home, ".pi/agent/keybindings.json"), "utf8"));
-			const binding = raw?.["app.tools.expand"];
-			if (typeof binding === "string") {
-				expandKeyHint = binding;
-				return expandKeyHint;
-			}
-			if (Array.isArray(binding) && binding.every((k) => typeof k === "string")) {
-				expandKeyHint = binding.join(" / ");
-				return expandKeyHint;
-			}
-		}
-	} catch {
-		// fall back to default
-	}
-	expandKeyHint = "ctrl+o";
-	return expandKeyHint;
-}
 
 type TaskStatus = "running" | "exited" | "error" | "not-found";
 
@@ -412,7 +385,6 @@ class TaskStatusResultComponent extends Container {
 		private name: string,
 		private status: TaskStatus,
 		private output: string,
-		private expandHint: string,
 		expanded: boolean,
 		private theme: Theme,
 	) {
@@ -428,26 +400,45 @@ class TaskStatusResultComponent extends Container {
 		this.clear();
 		this.addChild(new Text(this.theme.fg("toolTitle", `Task: ${this.name}`), 0, 0));
 		this.addChild(new Text(this.theme.fg(statusColor(this.status), `Status: ${this.status}`), 0, 0));
-		if (expanded) {
-			if (this.output) {
-				this.addChild(new Spacer(1));
-				this.addChild(new Text(this.theme.fg("toolOutput", this.output), 0, 0));
-			}
-		} else {
-			const nonBlankLines = this.output.split("\n").filter((line) => line.trim() !== "").length;
-			if (nonBlankLines > 0) {
-				this.addChild(
-					new Text(
-						this.theme.fg(
-							"muted",
-							`${nonBlankLines} nonblank line(s) hidden — press ${this.expandHint} to expand`,
-						),
-						0,
-						0,
-					),
-				);
-			}
+		if (expanded && this.output) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(this.theme.fg("toolOutput", this.output), 0, 0));
 		}
+	}
+}
+
+/** A temporary /task-status view that the user dismisses with Escape. */
+class TaskStatusDialogComponent extends Container {
+	constructor(
+		private name: string,
+		private status: TaskStatus,
+		private output: string,
+		private theme: Theme,
+		private onClose: () => void,
+	) {
+		super();
+		this.rebuild();
+	}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, Key.escape)) this.onClose();
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		this.rebuild();
+	}
+
+	private rebuild(): void {
+		this.clear();
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(this.theme.fg("accent", this.theme.bold(` Task status: ${this.name} `)), 1, 0));
+		this.addChild(new Text(this.theme.fg(statusColor(this.status), `Status: ${this.status}`), 1, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(this.theme.fg("toolOutput", this.output || "(no output yet)"), 1, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(this.theme.fg("dim", "Press Escape to close"), 1, 0));
+		this.addChild(new Spacer(1));
 	}
 }
 
@@ -569,7 +560,7 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 		renderResult(result, options, theme) {
 			const details = result.details as { name: string; status: TaskStatus; output: string } | undefined;
 			if (!details) return undefined;
-			return new TaskStatusResultComponent(details.name, details.status, details.output, getExpandKeyHint(), options.expanded, theme as Theme);
+			return new TaskStatusResultComponent(details.name, details.status, details.output, options.expanded, theme as Theme);
 		},
 	});
 
@@ -624,11 +615,19 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 		}
 		const sanitized = sanitizeName(name);
 		const { status, output } = await fetchTaskState(pi, sanitized, DEFAULT_TAIL_LINES);
-		ctx.ui.notify(formatTaskSnapshot(sanitized, status, output, 4000), "info");
+
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify(formatTaskSnapshot(sanitized, status, output, 4000), "info");
+			return;
+		}
+
+		await ctx.ui.custom<void>((_tui, theme, _keybindings, done) =>
+			new TaskStatusDialogComponent(sanitized, status, output, theme as Theme, done),
+		);
 	};
 
 	pi.registerCommand("task-status", {
-		description: "Choose a background task and show its status/output tail",
+		description: "Choose a background task and show a dismissible status/output tail",
 		handler: showTaskStatus,
 	});
 

@@ -27,6 +27,7 @@ Adds a `py_explore` tool for running read-only/exploratory Python scripts.
 - Use it for quick data inspection, polars/pandas/numpy exploration, and small read-only transformations.
 - Prefer it over Python heredocs or `python -c` via `bash` for read-only scripts.
 - Prefers the interpreter from `uv python find --no-python-downloads` and falls back to the system Python if uv is unavailable or invalid.
+- Collapses submitted code and output by default; use `Ctrl+O` to expand both.
 - Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
 - Also registers `/py-explore-test` to tune the LLM write-check prompt against a built-in test suite.
 
@@ -84,7 +85,7 @@ Progress summaries: a secondary model (GPT-5.4-mini by default) is called every 
 
 ### `thinking-tail`
 
-Collapses long thinking blocks to the last 5 non-empty lines with a gray italic hint (`(thinking collapsed, ctrl+o to expand)`). Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
+Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
 
 ### `todo-list`
 

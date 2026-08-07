@@ -10,7 +10,7 @@ Run shell commands in the background via **tmux**. Task state is **on-demand onl
 | `task_status` | LLM tool | Show one task's status/output tail as a normal tool result; prompts for a task if needed |
 | `task_stop` | LLM tool | Stop a background task and remove it from tracking |
 | `task_clear` | LLM tool | Clear tracked task transcripts/output files |
-| `/task-status [name]` | Command | With no args, choose one task from a list; with a name, show that task |
+| `/task-status [name]` | Command | With no args, choose one task from a list; with a name, show that task in a temporary Escape-dismissible view |
 | `/task-stop <name>` | Command | Stop one tracked task |
 | `/task-clear [all]` | Command | Clear tracked task transcripts; `all` includes running tasks |
 | `/task-list` | Command | List tracked tasks only |
@@ -46,7 +46,7 @@ The LLM should use `task_status` when the user asks to see task output:
 
 If `task_status` is called with no `name` and multiple tasks exist, it prompts the user to choose one, then returns that one transcript as a normal tool result.
 
-The task status tool result is rendered collapsed by default: it shows the task name and status, plus the configured expand-key hint (default `ctrl+o`). When expanded, it shows the requested output tail.
+The task status tool result shows the task name and status by default. Press `Ctrl+O` to show the requested output tail.
 
 After a task reaches a final state (`exited` or `error`), a hidden follow-up nudge is sent once to the model so it can call `task_clear` once the output is no longer needed.
 
@@ -57,6 +57,8 @@ The user can type:
 /task-status training-run
 /task-list
 ```
+
+In the interactive TUI, `/task-status` opens a temporary status/output view. Press `Esc` to dismiss it and return to the editor.
 
 ## Stopping a task
 

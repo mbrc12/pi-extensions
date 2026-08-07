@@ -12,7 +12,7 @@
 
 import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
@@ -304,20 +304,12 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
       };
     },
 
-    renderCall(args, theme, _context) {
-      const code = args.code ?? "";
-      const firstLine = code.split("\n")[0] ?? "";
-      const preview = firstLine.length > 70 ? `${firstLine.slice(0, 70)}...` : firstLine;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("py_explore ")) + theme.fg("dim", preview || "(no code)"),
-        0,
-        0,
-      );
+    renderCall(_args, theme, _context) {
+      // Keep the submitted script private until the user expands the tool row.
+      return new Text(theme.fg("toolTitle", theme.bold("py_explore")), 0, 0);
     },
 
     renderResult(result, { expanded, isPartial }, theme, _context) {
-      const text = result.content[0];
-      const summary = text?.type === "text" ? text.text : "";
       const details = result.details as {
         code?: string;
         stdout?: string;
@@ -331,13 +323,23 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         return new Text(theme.fg("warning", "py_explore running..."), 0, 0);
       }
 
-      if (!expanded || !details) {
+      if (!expanded) {
+        const status = result.isError
+          ? details?.exitCode !== undefined
+            ? `py_explore failed (exit code ${details.exitCode})`
+            : "py_explore failed"
+          : "py_explore finished";
         const icon = result.isError
           ? theme.fg("error", "✗ ")
           : theme.fg("success", "✓ ");
-        const preview = summary.split("\n")[0] ?? "";
-        return new Text(icon + theme.fg("dim", preview), 0, 0);
+        return new Text(
+          icon + theme.fg("dim", `${status} (${keyHint("app.tools.expand", "show code and output")})`),
+          0,
+          0,
+        );
       }
+
+      if (!details) return undefined;
 
       const mdTheme = getMarkdownTheme();
       const container = new Container();
