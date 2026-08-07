@@ -8,6 +8,10 @@ Custom extensions for [pi](https://pi.dev/).
 
 Adds an `ask_question` tool that renders an interactive TUI dialog. Supports single-choice (radio), multiple-choice (checkboxes), and free-text input. Emits a `prompt_wait` notification when the UI opens and aborts the turn on cancel.
 
+### `code-block-box`
+
+Renders fenced code in assistant messages as one single-line Unicode box-drawing frame with a borderless language label set into its top border. Code lines are numbered and separated by a vertical gutter; long unbroken lines wrap within the frame without overflowing the terminal. Use `/code-block-box off` to restore Pi's native rendering for the session, or `/code-block-box on` to re-enable it.
+
 ### `exit-alias`
 
 Registers `/exit` as a shorthand alias for `/quit`.
