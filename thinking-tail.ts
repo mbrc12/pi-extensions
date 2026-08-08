@@ -136,27 +136,31 @@ export default function (pi: ExtensionAPI) {
 
       if (expanded) {
         content.push(...run);
-        continue;
+      } else {
+        const fullText = run
+          .map((part) => part.thinking?.trim())
+          .filter((part): part is string => Boolean(part))
+          .join("\n\n");
+
+        if (!fullText) {
+          // Keep empty/signature-only blocks intact; Pi's normal renderer knows
+          // how to handle them.
+          content.push(...run);
+        } else {
+          // One native thinking block showing just the tail fold. The collapse
+          // signal now lives in the footer status item instead of an inline hint.
+          content.push({
+            ...run[0]!,
+            thinking: tailOf(fullText),
+          });
+        }
       }
 
-      const fullText = run
-        .map((part) => part.thinking?.trim())
-        .filter((part): part is string => Boolean(part))
-        .join("\n\n");
-
-      if (!fullText) {
-        // Keep empty/signature-only blocks intact; Pi's normal renderer knows
-        // how to handle them.
-        content.push(...run);
-        continue;
+      // Add a native Markdown horizontal rule before the next text or tool
+      // output. Do not add one while thinking is still streaming by itself.
+      if (i + 1 < message.content.length) {
+        content.push({ type: "text", text: "---" });
       }
-
-      // One native thinking block showing just the tail fold. The collapse
-      // signal now lives in the footer status item instead of an inline hint.
-      content.push({
-        ...run[0]!,
-        thinking: tailOf(fullText),
-      });
     }
 
     originalUpdateContent.call(this, { ...message, content });

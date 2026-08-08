@@ -1,5 +1,5 @@
-import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { CustomEditor, getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { completeWithModelFallback } from "./shared/model-config.ts";
 
 const WIDGET_ID = "recap";
@@ -41,20 +41,22 @@ function twoLineRecap(now: string, next: string, maxLineLength?: number): string
 	return `Now: ${conciseLine(stripRecapPrefix(now), maxLineLength) || "No active task yet."}\nNext: ${conciseLine(stripRecapPrefix(next), maxLineLength) || "Wait for the next user request."}`;
 }
 
-function renderRecapLines(recap: string, width: number, theme: any): string[] {
-	const label = theme.fg("accent", "Recap:");
+function renderRecap(recap: string, theme: any): Container {
 	const [nowLine, nextLine] = recap.split("\n").slice(0, 2);
 	const nowBody = nowLine ? nowLine.replace(/^Now:\s*/, "") : "";
 	const nextBody = nextLine ? nextLine.replace(/^Next:\s*/, "") : "";
-	const labelWidth = 7; // visible width of "Recap:" with trailing space
+	const container = new Container();
 
-	const labelPrefix = label + " ";
-	const now = labelPrefix + theme.fg("success", "Now:") + " " + nowBody;
-	const next = " ".repeat(labelWidth) + theme.fg("warning", "Next:") + " " + nextBody;
-	return [
-		truncateToWidth(now, width, theme.fg("dim", "…")),
-		truncateToWidth(next, width, theme.fg("dim", "…")),
-	];
+	container.addChild(new Text(theme.fg("accent", "Recap:"), 0, 0));
+	// Use Pi's Markdown component so paths, commands, symbols, and other inline
+	// Markdown in the generated recap render the same way as assistant output.
+	container.addChild(new Markdown(
+		`**Now:** ${nowBody}\n**Next:** ${nextBody}`,
+		0,
+		0,
+		getMarkdownTheme(),
+	));
+	return container;
 }
 
 function normalizeRecap(text: string, fallback: string): string {
@@ -217,12 +219,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		ctx.ui.setWidget(WIDGET_ID, (_tui: any, theme: any) => ({
-			invalidate() {},
-			render(width: number): string[] {
-				return renderRecapLines(recap, width, theme);
-			},
-		}));
+		ctx.ui.setWidget(WIDGET_ID, (_tui: any, theme: any) => renderRecap(recap, theme));
 		showing = true;
 	}
 
