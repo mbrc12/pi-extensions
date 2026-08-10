@@ -54,6 +54,16 @@ type PatchState = {
 
 const PATCH = Symbol.for("pi.code-block-box.patch");
 
+// Live access to Pi's theme singleton (shared via globalThis across module
+// loaders), so thinking text always uses the theme's thinkingText color.
+const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
+function thinkingTextStyle(text: string): string {
+  const current = (globalThis as Record<PropertyKey, unknown>)[THEME_KEY] as
+    | { fg(color: string, text: string): string }
+    | undefined;
+  return current ? current.fg("thinkingText", text) : text;
+}
+
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -245,10 +255,14 @@ export default function (pi: ExtensionAPI) {
         if (this.hideThinkingBlock) {
           this.contentContainer.addChild(new Text(this.hiddenThinkingLabel, this.outputPad, 0));
         } else {
-          // Thinking is deliberately left as native Markdown; normal assistant
-          // text is where Pi presents fenced code blocks to the user.
+          // Thinking is not user-facing text: keep Pi's native look, with the
+          // theme's thinkingText color (gray) applied to normal thinking text.
+          // Only assistant text gets the fenced-code box treatment.
           this.contentContainer.addChild(
-            new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, { italic: true }),
+            new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
+              color: thinkingTextStyle,
+              italic: true,
+            }),
           );
         }
       }

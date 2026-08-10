@@ -156,10 +156,10 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // Add a native Markdown horizontal rule before the next text or tool
-      // output. Do not add one while thinking is still streaming by itself.
+      // Leave one blank line before the next text or tool output. Do not add
+      // it while thinking is still streaming by itself.
       if (i + 1 < message.content.length) {
-        content.push({ type: "text", text: "---" });
+        content.push({ type: "text", text: "\n" });
       }
     }
 
