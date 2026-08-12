@@ -1,1 +1,3 @@
 __pycache__/
+memory-store/test-db.ts
+memory-store/test-load.ts
