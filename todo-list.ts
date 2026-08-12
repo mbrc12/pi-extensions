@@ -70,7 +70,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	function renderList(): string {
 		if (todos.length === 0) return "(empty)";
 		return todos
-			.map((t) => `[${t.done ? "x" : " "}] #${t.id}: ${t.text}`)
+			.map((t) => `${t.done ? "🟢" : "⭕"} #${t.id}: ${t.text}`)
 			.join("\n");
 	}
 
@@ -78,10 +78,10 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		const rem = remaining();
 		const done = completed();
 		const remainingList = rem.length
-			? rem.map((t) => `- #${t.id}: ${t.text}`).join("\n")
+			? rem.map((t) => `- ⭕ #${t.id}: ${t.text}`).join("\n")
 			: "- (none)";
 		const completedList = done.length
-			? done.map((t) => `- ✓ #${t.id}: ${t.text}`).join("\n")
+			? done.map((t) => `- 🟢 #${t.id}: ${t.text}`).join("\n")
 			: "- (none)";
 		const instructions = rem.length === 0
 			? 'All todos are complete. The user request appears fully addressed. You may call todo with action "clear" to tidy up the list; otherwise it will stay visible. Only add todos if the user has given you a new multi-step task.'
@@ -151,9 +151,9 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		);
 		const lines = todos.map((t) =>
 			t.done
-				? ctx.ui.theme.fg("success", "☑ ") +
+				? ctx.ui.theme.fg("success", "🟢 ") +
 						ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(t.text))
-				: ctx.ui.theme.fg("muted", "☐ ") + ctx.ui.theme.fg("text", t.text),
+				: ctx.ui.theme.fg("muted", "⭕ ") + ctx.ui.theme.fg("text", t.text),
 		);
 		ctx.ui.setWidget("todo-list", lines);
 	}
@@ -430,7 +430,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			const list = todos
-				.map((t) => `${t.done ? "✓" : "○"} #${t.id}: ${t.text}`)
+				.map((t) => `${t.done ? "🟢" : "⭕"} #${t.id}: ${t.text}`)
 				.join("\n");
 			ctx.ui.notify(`Todo list:\n${list}`, "info");
 		},
