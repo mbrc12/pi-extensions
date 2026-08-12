@@ -10,7 +10,7 @@ import { completeWithModelFallback } from "../shared/model-config.ts";
 
 const WebUseParams = Type.Object({
   mode: Type.Union([Type.Literal("search"), Type.Literal("fetch"), Type.Literal("full")]),
-  query: Type.Optional(Type.String({ description: "DuckDuckGo query to run in search mode" })),
+  query: Type.Optional(Type.String({ description: "Search query to run in search mode" })),
   url: Type.Optional(Type.String({ description: "URL to fetch in fetch or full mode" })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: "Maximum number of search results" })),
 });
@@ -185,8 +185,8 @@ export default function webUseExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_use",
     label: "Web Use",
-    description: "Search DuckDuckGo, fetch a URL and extract important text, or fetch the full HTML of a page.",
-    promptSnippet: "Search the web with DuckDuckGo, fetch a URL and summarize the important content, or fetch the full HTML of a page.",
+    description: "Search the web (Exa primary, DuckDuckGo fallback), fetch a URL and extract important text, or fetch the full HTML of a page.",
+    promptSnippet: "Search the web, fetch a URL and summarize the important content, or fetch the full HTML of a page.",
     promptGuidelines: [
       "Use web_use with mode=search when the user wants web search results with titles, URLs, and short descriptions.",
       "Use web_use with mode=fetch when the user provides a URL and wants the important text extracted from that page.",
@@ -212,7 +212,7 @@ export default function webUseExtension(pi: ExtensionAPI) {
       if (params.mode === "search") {
         args.push("--search", params.query!);
         args.push("--limit", String(params.limit ?? 5));
-        onUpdate?.({ content: [{ type: "text", text: `Searching DuckDuckGo for: ${params.query}` }] });
+        onUpdate?.({ content: [{ type: "text", text: `Searching the web for: ${params.query}` }] });
       } else if (params.mode === "full") {
         args.push("--full", params.url!);
         onUpdate?.({ content: [{ type: "text", text: `Fetching full HTML with curl: ${params.url}` }] });
@@ -227,7 +227,7 @@ export default function webUseExtension(pi: ExtensionAPI) {
       if (params.mode === "search") {
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, string>> : [];
         const text = [
-          `DuckDuckGo results for: ${String(parsed.query ?? params.query ?? "")}`,
+          `Search results for: ${String(parsed.query ?? params.query ?? "")}`,
           "",
           ...results.map((result, index) => `${index + 1}. ${formatSearchResult(result)}`),
         ].join("\n\n");
