@@ -19,6 +19,7 @@ import { promptWait } from "../notify-on-idle";
 import { classifyToolCall } from "./classifier";
 import { classifyWithLLM } from "./llm-classifier";
 import type { Classification, PermissionMode } from "./types";
+import { showAskDialog } from "./ask-dialog";
 import { COMMAND_PREVIEW_LENGTH } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -106,11 +107,15 @@ function showClassification(
   }
 }
 
-/** Build a human-readable summary of a tool call for the ask dialog. */
+/**
+ * Build a human-readable summary of a tool call for the ask dialog.
+ * `detail` is the preview (truncated for large content); `full` is the
+ * untruncated content shown when the user expands with ctrl+o.
+ */
 function summarizeToolCall(
   toolName: string,
   input: Record<string, unknown>,
-): { title: string; detail: string; isLarge: boolean } {
+): { title: string; detail: string; isLarge: boolean; full: string } {
   switch (toolName) {
     case "bash": {
       const cmd = (input.command as string) ?? "";
@@ -122,7 +127,7 @@ function summarizeToolCall(
       const summary = isLarge
         ? `Run bash command (${cmd.length} chars)`
         : "Run bash command";
-      return { title: summary, detail, isLarge };
+      return { title: summary, detail, isLarge, full: cmd };
     }
     case "write": {
       const p = (input.path as string) ?? "?";
@@ -134,12 +139,18 @@ function summarizeToolCall(
           ? content.slice(0, COMMAND_PREVIEW_LENGTH) + `... [truncated]`
           : content.slice(0, COMMAND_PREVIEW_LENGTH),
         isLarge,
+        full: content,
       };
     }
     case "edit": {
       const p = (input.path as string) ?? "?";
       const edits = Array.isArray(input.edits) ? input.edits : [];
       const count = edits.length || 1;
+      const anyLarge = edits.some(
+        (e: { oldText?: string; newText?: string }) =>
+          (e.oldText ?? "").length > 60 || (e.newText ?? "").length > 60,
+      );
+      const isLarge = count > 3 || anyLarge;
       return {
         title: `Edit file: ${p} (${count} edit${count !== 1 ? "s" : ""})`,
         detail: edits
@@ -149,12 +160,18 @@ function summarizeToolCall(
               `Edit ${i + 1}: "${(e.oldText ?? "").slice(0, 60)}${(e.oldText ?? "").length > 60 ? "..." : ""}" → "${(e.newText ?? "").slice(0, 60)}${(e.newText ?? "").length > 60 ? "..." : ""}"`,
           )
           .join("\n"),
-        isLarge: count > 3,
+        isLarge,
+        full: edits
+          .map(
+            (e: { oldText?: string; newText?: string }, i: number) =>
+              `Edit ${i + 1}: "${e.oldText ?? ""}" → "${e.newText ?? ""}"`,
+          )
+          .join("\n"),
       };
     }
     case "read": {
       const p = (input.path as string) ?? "?";
-      return { title: `Read file: ${p}`, detail: p, isLarge: false };
+      return { title: `Read file: ${p}`, detail: p, isLarge: false, full: p };
     }
     case "grep":
     case "find":
@@ -166,11 +183,8 @@ function summarizeToolCall(
           : toolName === "find"
             ? ` matching "${input.pattern ?? ""}"`
             : "";
-      return {
-        title: `${toolName}: ${p}${extra}`,
-        detail: `${toolName}: ${p}${extra}`,
-        isLarge: false,
-      };
+      const detail = `${toolName}: ${p}${extra}`;
+      return { title: detail, detail, isLarge: false, full: detail };
     }
     default: {
       const json = JSON.stringify(input);
@@ -178,6 +192,7 @@ function summarizeToolCall(
         title: `${toolName}`,
         detail: json.slice(0, COMMAND_PREVIEW_LENGTH),
         isLarge: json.length > COMMAND_PREVIEW_LENGTH,
+        full: json,
       };
     }
   }
@@ -211,13 +226,17 @@ async function handleToolCall(
 
     if (ctx.hasUI) {
       promptWait(pi, { title: "Pi", body: summary.title });
-      const choice = await ctx.ui.select(
-        summary.isLarge
-          ? `Allow? ${summary.title}`
-          : `Allow?\n\n  ${summary.detail}`,
-        ["Allow Once", "Deny"],
-      );
-      if (choice !== "Allow Once") {
+      const allowed = await showAskDialog(ctx, {
+        header: "Allow?",
+        subtitle: summary.isLarge ? summary.title : undefined,
+        preview: summary.detail,
+        full: summary.full,
+        truncated: summary.isLarge,
+        allowLabel: "Allow Once",
+        denyLabel: "Deny",
+        background: "selectedBg",
+      });
+      if (!allowed) {
         return { block: true, reason: "Blocked by user" };
       }
     } else {
@@ -348,19 +367,19 @@ async function askUserForClassification(
     ? `⛔ DANGEROUS — This may be destructive!`
     : `⚠️ Review needed`;
 
-  const body = summary.isLarge
-    ? `${summary.title}\n\n${summary.detail.slice(0, 300)}`
-    : summary.detail;
-
   promptWait(pi, { title: "Pi", body: header });
-  const choice = await ctx.ui.select(
-    `${header}\n\n${body}`,
-    isDangerous
-      ? ["Allow Anyway", "Deny"]
-      : ["Allow", "Deny"],
-  );
+  const allowed = await showAskDialog(ctx, {
+    header,
+    subtitle: summary.isLarge ? summary.title : undefined,
+    preview: summary.detail,
+    full: summary.full,
+    truncated: summary.isLarge,
+    allowLabel: isDangerous ? "Allow Anyway" : "Allow",
+    denyLabel: "Deny",
+    background: isDangerous ? "toolErrorBg" : "customMessageBg",
+  });
 
-  if (!choice || (isDangerous ? choice !== "Allow Anyway" : choice !== "Allow")) {
+  if (!allowed) {
     return { block: true, reason: "Blocked by user" };
   }
 

@@ -376,7 +376,9 @@ export default function (pi: ExtensionAPI) {
     },
     renderResult(result, options, theme, _context) {
       const expanded = options?.expanded ?? false;
-      const details = result?.details as { ok?: boolean; duplicate?: boolean; id?: number } | undefined;
+      const details = result?.details as
+        | { ok?: boolean; duplicate?: boolean; id?: number; content?: string }
+        | undefined;
       if (!details) {
         const text = result?.content?.[0];
         return new Text(text?.type === "text" ? text.text : "", 0, 0);
@@ -387,11 +389,14 @@ export default function (pi: ExtensionAPI) {
       if (details.duplicate) {
         return new Text(theme.fg("muted", "Already in memory (no duplicate)"), 0, 0);
       }
-      const text = theme.fg("success", `✓ Saved [${details.id}]`);
-      if (expanded) {
-        return new Text(text + theme.fg("dim", " — press the tool's blurb above to see it in memory"), 0, 0);
+      if (expanded && details.content) {
+        return new Text(
+          theme.fg("success", `✓ Saved [${details.id}]`) + "\n" + theme.fg("text", details.content),
+          0,
+          0,
+        );
       }
-      return new Text(text, 0, 0);
+      return new Text(theme.fg("success", `✓ Saved [${details.id}]`), 0, 0);
     },
     async execute(_toolCallId: string, params: any, _signal: AbortSignal, _onUpdate: any, _ctx: any) {
       const result = db.add(params.content ?? "", params.category ?? "memory", "tool");
@@ -402,7 +407,7 @@ export default function (pi: ExtensionAPI) {
           : "Error: content cannot be empty.";
       return {
         content: [{ type: "text", text }],
-        details: { ok: result.ok, duplicate: result.duplicate, id: result.id },
+        details: { ok: result.ok, duplicate: result.duplicate, id: result.id, content: (params.content ?? "").trim() },
       };
     },
   });
