@@ -16,7 +16,13 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { keyText } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  Key,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 
 /** Background colors accepted by theme.bg() in the TUI. */
 export type DialogBackground =
@@ -206,12 +212,16 @@ export async function showAskDialog(
         // Bottom border.
         lines.push(theme.fg("accent", "─".repeat(w)));
 
-        // Fill the whole box with the dialog background (padded to full
-        // width) so it stands out from the transcript.
+        // Truncate every line to the terminal width, then fill the whole box
+        // with the dialog background (padded to full width) so it stands out
+        // from the transcript. Truncation matters for un-wrappable lines such
+        // as the subtitle (a long file path); without it the renderer throws
+        // because a line exceeds the terminal width.
         const bgFn = (s: string) => theme.bg(options.background, s);
         cachedLines = lines.map((line) => {
-          const pad = Math.max(0, w - visibleWidth(line));
-          return bgFn(line + " ".repeat(pad));
+          const fitted = truncateToWidth(line, w);
+          const pad = Math.max(0, w - visibleWidth(fitted));
+          return bgFn(fitted + " ".repeat(pad));
         });
         return cachedLines;
       }
