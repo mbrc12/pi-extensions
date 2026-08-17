@@ -339,7 +339,12 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         );
       }
 
-      if (!details) return undefined;
+      if (!details) {
+        // Never return undefined: pi's tool component adds the renderer's
+        // return value directly, so undefined would crash the TUI render.
+        const text = result.content[0];
+        return new Text(text?.type === "text" ? text.text : theme.fg("dim", "(no details)"), 0, 0);
+      }
 
       const mdTheme = getMarkdownTheme();
       const container = new Container();

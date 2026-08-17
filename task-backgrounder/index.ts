@@ -558,9 +558,23 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 			};
 		},
 		renderResult(result, options, theme) {
-			const details = result.details as { name: string; status: TaskStatus; output: string } | undefined;
-			if (!details) return undefined;
-			return new TaskStatusResultComponent(details.name, details.status, details.output, options.expanded, theme as Theme);
+			const details = result.details as { name?: string; status?: TaskStatus; output?: string } | undefined;
+			// Never return undefined: pi's tool component stores the renderer's
+			// return value directly, so undefined would crash the TUI render
+			// (Box.render -> child.render on an undefined child). Fall back to
+			// the raw text output for results without usable details (execution
+			// errors, blocked calls, or the no-task-selected path).
+			if (!details || typeof details.name !== "string") {
+				const text = result.content[0];
+				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+			}
+			return new TaskStatusResultComponent(
+				details.name,
+				details.status ?? "running",
+				details.output ?? "",
+				options.expanded,
+				theme as Theme,
+			);
 		},
 	});
 
