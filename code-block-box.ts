@@ -1,6 +1,11 @@
 /**
- * Render assistant fenced code blocks in a single-line Unicode box-drawing
- * frame with a borderless language label set into the top border. This intentionally patches Pi's exported
+ * Assistant fenced code blocks, split out of Pi's Markdown flow so we control
+ * their rendering. Default style: top/bottom rules spanning the full panel
+ * width (language label set into the top rule) with the code indented between
+ * them — no side bars, no line numbers. `/code-block-box fancy` restores the
+ * old single-line Unicode box-drawing frame with line-number gutters.
+ *
+ * This intentionally patches Pi's exported
  * AssistantMessageComponent: the public extension API currently only exposes
  * renderers for custom messages, not normal assistant messages.
  */
@@ -49,7 +54,8 @@ type Segment = TextSegment | CodeSegment;
 type PatchState = {
   original: (this: AssistantComponent, message: AssistantMessage) => void;
   wrapper: (this: AssistantComponent, message: AssistantMessage) => void;
-  enabled: boolean;
+  /** true = old framed box with side bars and line numbers; false (default) = plain full-width rules. */
+  fancy: boolean;
 };
 
 const PATCH = Symbol.for("pi.code-block-box.patch");
@@ -136,6 +142,55 @@ function splitFencedCode(text: string): Segment[] {
   return segments;
 }
 
+/** Syntax-highlight the code once; falls back to the theme's plain color. */
+function highlightedLines(code: string, language: string, markdownTheme: MarkdownTheme): string[] {
+  const tabsExpanded = code.replace(/\t/g, "   ");
+  return markdownTheme.highlightCode
+    ? markdownTheme.highlightCode(tabsExpanded, language)
+    : tabsExpanded.split("\n").map((line) => markdownTheme.codeBlock(line));
+}
+
+/**
+ * Default rendering: top and bottom rules that span the full panel width, with
+ * the language label set into the top rule, and code indented beneath them.
+ * No side bars and no line numbers.
+ */
+class PlainCodeBlock implements Component {
+  constructor(
+    private readonly code: string,
+    private readonly language: string,
+    private readonly markdownTheme: MarkdownTheme,
+  ) {}
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    if (width < 6) {
+      // A usable rule is impossible in an exceptionally narrow terminal.
+      // Still use Pi's ANSI-safe wrapping and never exceed the requested width.
+      return wrapTextWithAnsi(this.code, Math.max(1, width));
+    }
+
+    const border = this.markdownTheme.codeBlockBorder;
+    const label = this.language.slice(0, Math.max(0, width - 6));
+    const top = label
+      ? `── ${label} ${"─".repeat(Math.max(0, width - label.length - 4))}`
+      : "─".repeat(width);
+    const bottom = "─".repeat(width);
+
+    const indent = this.markdownTheme.codeBlockIndent ?? "  ";
+    const codeWidth = Math.max(1, width - visibleWidth(indent));
+    const highlighted = highlightedLines(this.code, this.language, this.markdownTheme);
+
+    const output = [border(top)];
+    for (const line of highlighted) {
+      output.push(...wrapTextWithAnsi(line, codeWidth).map((wrapped) => indent + wrapped));
+    }
+    output.push(border(bottom));
+    return output;
+  }
+}
+
 class FencedCodeBox implements Component {
   constructor(
     private readonly code: string,
@@ -162,9 +217,7 @@ class FencedCodeBox implements Component {
     const top = label
       ? `┌─ ${label} ${"─".repeat(innerWidth - label.length - 3)}┐`
       : `┌${"─".repeat(innerWidth)}┐`;
-    const highlighted = this.markdownTheme.highlightCode
-      ? this.markdownTheme.highlightCode(this.code.replace(/\t/g, "   "), this.language)
-      : this.code.replace(/\t/g, "   ").split("\n").map((line) => this.markdownTheme.codeBlock(line));
+    const highlighted = highlightedLines(this.code, this.language, this.markdownTheme);
     const lineNumberWidth = String(Math.max(1, highlighted.length)).length;
     // `│1│ code │` takes the line-number width plus five fixed columns.
     // On very narrow terminals, retain a correctly sized box without a gutter.
@@ -213,14 +266,9 @@ export default function (pi: ExtensionAPI) {
   let state = proto[PATCH] as PatchState | undefined;
   if (!state) {
     const original = proto.updateContent as PatchState["original"];
-    state = { original, wrapper: undefined as never, enabled: true };
+    state = { original, wrapper: undefined as never, fancy: false };
 
     const wrapper = function (this: AssistantComponent, message: AssistantMessage): void {
-      if (!state!.enabled) {
-        state!.original.call(this, message);
-        return;
-      }
-
     this.lastMessage = message;
     this.contentContainer.clear();
 
@@ -237,9 +285,13 @@ export default function (pi: ExtensionAPI) {
         for (const segment of splitFencedCode(content.text.trim())) {
           if (segment.kind === "markdown") {
             this.contentContainer.addChild(new Markdown(segment.text, this.outputPad, 0, this.markdownTheme));
-          } else {
+          } else if (state!.fancy) {
             this.contentContainer.addChild(
               new FencedCodeBox(segment.code, segment.language, this.outputPad, this.markdownTheme),
+            );
+          } else {
+            this.contentContainer.addChild(
+              new PlainCodeBlock(segment.code, segment.language, this.markdownTheme),
             );
           }
         }
@@ -289,20 +341,26 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.registerCommand("code-block-box", {
-    description: "Toggle framed assistant code blocks (on/off)",
+    description: "Code block style: plain full-width rules (default) or fancy framed box",
     handler: async (args, ctx) => {
       const choice = args.trim().toLowerCase();
-      if (choice === "on") state!.enabled = true;
-      else if (choice === "off") state!.enabled = false;
+      if (choice === "fancy" || choice === "on") state!.fancy = true;
+      else if (choice === "plain" || choice === "off") state!.fancy = false;
       else {
-        ctx.ui.notify(`Code-block boxes are ${state!.enabled ? "on" : "off"}. Use /code-block-box on|off.`, "info");
+        ctx.ui.notify(
+          `Code blocks use the ${state!.fancy ? "fancy framed box" : "plain"} style. Use /code-block-box plain|fancy.`,
+          "info",
+        );
         return;
       }
 
       // Theme invalidation rebuilds every AssistantMessageComponent from its
       // source message, so the change applies to existing transcript rows too.
       ctx.ui.setTheme(ctx.ui.theme);
-      ctx.ui.notify(`Code-block boxes ${state!.enabled ? "enabled" : "disabled"}.`, "info");
+      ctx.ui.notify(
+        `Code blocks now use the ${state!.fancy ? "fancy framed box" : "plain"} style.`,
+        "info",
+      );
     },
   });
 }

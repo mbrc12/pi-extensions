@@ -35,9 +35,9 @@ import { Type } from "typebox";
 // Types
 // ---------------------------------------------------------------------------
 
-type SelectionMode = "single" | "multiple" | "text";
+export type SelectionMode = "single" | "multiple" | "text";
 
-interface ToolOption {
+export interface ToolOption {
 	label: string;
 	description?: string;
 }
@@ -56,7 +56,7 @@ interface AskDetails {
 	got_custom: boolean;
 }
 
-interface AskResult {
+export interface AskResult {
 	answers: string[];
 	cancelled: boolean;
 	got_custom: boolean;
@@ -139,7 +139,7 @@ function errorResult(message: string, question: string, mode: SelectionMode): {
  * inline editor for "Type something...". Returns the chosen answers or null
  * if the user cancelled.
  */
-function askViaUI(
+export function askViaUI(
 	params: {
 		question: string;
 		mode: SelectionMode;
@@ -149,7 +149,10 @@ function askViaUI(
 		maxSelect: number;
 		placeholder?: string;
 	},
-	uiCtx: { ui: any; signal?: AbortSignal },
+	uiCtx: {
+		ui: { custom: <T,>(factory: any, options?: any) => Promise<T> };
+		signal?: AbortSignal;
+	},
 ): Promise<AskResult | null> {
 	return uiCtx.ui.custom<AskResult | null>((tui: any, theme: any, _kb: any, done: (v: AskResult | null) => void) => {
 		const { question, mode, allowOther, minSelect, maxSelect, placeholder } = params;
