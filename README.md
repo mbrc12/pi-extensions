@@ -72,8 +72,10 @@ Supports three modes:
 | Mode | Params | Description |
 |---|---|---|
 | `single` | `agent` + `task` | Run one agent |
-| `parallel` | `tasks` array | Run multiple agents concurrently (up to 4 concurrency, 8 max tasks) |
+| `parallel` | `tasks` array | Run multiple agents concurrently (up to 16 concurrency, 16 max tasks) |
 | `chain` | `chain` array | Run agents sequentially, each sees the previous agent's output via `{previous}` placeholder |
+
+Each single request, parallel task, or chain step may include `models`, an ordered list of scoped names such as `openai-codex/gpt-5.6-luna` or `opencode-go/deepseek-v4-flash`. The tool tries each model in order and uses the first one that responds. Agent frontmatter supports the same list through `models` (with legacy single-value `model` still accepted).
 
 The `agentScope` param controls where agents are loaded from:
 
@@ -127,10 +129,10 @@ Centralized model configuration used by multiple extensions. Defines `ModelConfi
 
 | Purpose | Used by | Default models |
 |---|---|---|
-| `recapGeneration` | `recap` | deepseek-v4-flash, gpt-5.4-mini, mimo-v2.5, minimax-m2.7, kimi-k2.6, deepseek-v4-pro |
-| `subagentProgressSummary` | `subagent` | gpt-5.4-mini |
-| `webSummarization` | `web-use` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gpt-5.4-mini |
-| `permissionClassification` | `permissions` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gpt-5.4-mini, gemini-2.0-flash |
-| `pythonWriteClassification` | `py-explore` | deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, minimax-m2.7, kimi-k2.6, gpt-5.4-mini |
+| `recapGeneration` | `recap` | Scoped model fallback list in `model-config.json` |
+| `subagentProgressSummary` | `subagent` | Scoped model fallback list in `model-config.json` |
+| `webSummarization` | `web-use` | Scoped model fallback list in `model-config.json` |
+| `permissionClassification` | `permissions` | Scoped model fallback list in `model-config.json` |
+| `pythonWriteClassification` | `py-explore` | Scoped model fallback list in `model-config.json` |
 
 Managed via `model-config.json` in the extensions root.

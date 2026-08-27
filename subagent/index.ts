@@ -261,7 +261,10 @@ async function generateProgressSummary(
 }
 
 function isFailedResult(result: SingleResult): boolean {
-	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+	return result.exitCode !== 0
+		|| result.stopReason === "error"
+		|| result.stopReason === "aborted"
+		|| !getFinalOutput(result.messages).trim();
 }
 
 function getResultOutput(result: SingleResult): string {
@@ -345,7 +348,7 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
-async function runSingleAgent(
+async function runSingleAgentAttempt(
 	defaultCwd: string,
 	summaryCtx: any,
 	agents: AgentConfig[],
@@ -353,6 +356,7 @@ async function runSingleAgent(
 	task: string,
 	cwd: string | undefined,
 	step: number | undefined,
+	model: string | undefined,
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
@@ -374,7 +378,7 @@ async function runSingleAgent(
 	}
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	if (agent.model) args.push("--model", agent.model);
+	if (model) args.push("--model", model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
 	let tmpPromptDir: string | null = null;
@@ -392,7 +396,7 @@ async function runSingleAgent(
 		messages: [],
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-		model: agent.model,
+		model,
 		step,
 	};
 
@@ -545,15 +549,53 @@ async function runSingleAgent(
 	}
 }
 
+/** Try the requested models in order and keep the first model that returns a response. */
+async function runSingleAgent(
+	defaultCwd: string,
+	summaryCtx: any,
+	agents: AgentConfig[],
+	agentName: string,
+	task: string,
+	cwd: string | undefined,
+	step: number | undefined,
+	models: string[] | undefined,
+	signal: AbortSignal | undefined,
+	onUpdate: OnUpdateCallback | undefined,
+	makeDetails: (results: SingleResult[]) => SubagentDetails,
+): Promise<SingleResult> {
+	const agent = agents.find((a) => a.name === agentName);
+	const modelCandidates = models?.length ? models : agent?.models?.length ? agent.models : [undefined];
+	let lastResult: SingleResult | undefined;
+
+	for (const model of modelCandidates) {
+		const result = await runSingleAgentAttempt(
+			defaultCwd, summaryCtx, agents, agentName, task, cwd, step, model, signal, onUpdate, makeDetails,
+		);
+		lastResult = result;
+		if (!isFailedResult(result)) return result;
+	}
+
+	// An unknown agent is reported by the attempt itself. If every requested
+	// model failed, return the final attempt so its error is visible to the caller.
+	return lastResult!;
+}
+
+const ModelList = Type.Array(Type.String({
+	pattern: "^[^/\\s]+/[^/\\s]+$",
+	description: "Scoped model name in provider/model-id form, tried in this order",
+}), { description: "Ordered model fallback list; the first model that responds is used" });
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
+	models: Type.Optional(ModelList),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
+	models: Type.Optional(ModelList),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
@@ -565,6 +607,7 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
+	models: Type.Optional(ModelList),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
 	agentScope: Type.Optional(AgentScopeSchema),
@@ -581,6 +624,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Each spec may provide an ordered models list of scoped provider/model-id names; the first responding model is used.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),
@@ -675,6 +719,7 @@ export default function (pi: ExtensionAPI) {
 						taskWithContext,
 						step.cwd,
 						i + 1,
+						step.models,
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
@@ -748,6 +793,7 @@ export default function (pi: ExtensionAPI) {
 						t.task,
 						t.cwd,
 						undefined,
+						t.models,
 						signal,
 						// Per-task update callback
 						(partial) => {
@@ -791,6 +837,7 @@ export default function (pi: ExtensionAPI) {
 					params.task,
 					params.cwd,
 					undefined,
+					params.models,
 					signal,
 					onUpdate,
 					makeDetails("single"),

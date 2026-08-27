@@ -19,6 +19,7 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     // DeepSeek V4 Flash has the largest Go-plan allowance and is the lowest-cost
     // model listed by OpenCode for lightweight background requests.
     "opencode-go/deepseek-v4-flash",
+    "openai-codex/gpt-5.6-luna",
     "openai-codex/gpt-5.4-mini",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
@@ -27,9 +28,11 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   ],
   subagentProgressSummary: [
     "openai-codex/gpt-5.4-mini",
+    "openai-codex/gpt-5.6-luna",
   ],
   webSummarization: [
     "opencode-go/deepseek-v4-flash",
+    "openai-codex/gpt-5.6-luna",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
@@ -37,6 +40,7 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   ],
   permissionClassification: [
     "opencode-go/deepseek-v4-flash",
+    "openai-codex/gpt-5.6-luna",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
@@ -48,6 +52,7 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   ],
   pythonWriteClassification: [
     "opencode-go/deepseek-v4-flash",
+    "openai-codex/gpt-5.6-luna",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",

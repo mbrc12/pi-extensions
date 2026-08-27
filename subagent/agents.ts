@@ -12,7 +12,7 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
-	model?: string;
+	models?: string[];
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -64,11 +64,18 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 				? toolsValue.split(",").map((tool) => tool.trim()).filter(Boolean)
 				: undefined;
 
+		const modelsValue = frontmatter.models ?? frontmatter.model;
+		const models = Array.isArray(modelsValue)
+			? modelsValue.filter((model): model is string => typeof model === "string").map((model) => model.trim()).filter(Boolean)
+			: typeof modelsValue === "string"
+				? [modelsValue.trim()]
+				: undefined;
+
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? [...new Set(tools)] : undefined,
-			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			models: models && models.length > 0 ? [...new Set(models)] : undefined,
 			systemPrompt: body,
 			source,
 			filePath,

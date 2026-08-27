@@ -1,18 +1,23 @@
 {
   "recapGeneration": [
     "opencode-go/mimo-v2.5",
+    "openai-codex/gpt-5.6-luna",
     "opencode-go/deepseek-v4-flash",
+    "azure-foundry/Deepseek-V4-Flash-0731",
     "openai-codex/gpt-5.4-mini",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
     "opencode-go/deepseek-v4-pro"
   ],
   "subagentProgressSummary": [
-    "openai-codex/gpt-5.4-mini"
+    "openai-codex/gpt-5.4-mini",
+    "openai-codex/gpt-5.6-luna"
   ],
   "webSummarization": [
     "opencode-go/deepseek-v4-pro",
+    "openai-codex/gpt-5.6-luna",
     "opencode-go/deepseek-v4-flash",
+    "azure-foundry/Deepseek-V4-Flash-0731",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
@@ -20,11 +25,13 @@
   ],
   "permissionClassification": [
     "opencode-go/deepseek-v4-pro",
+    "openai-codex/gpt-5.6-luna",
     "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
     "openai-codex/gpt-5.4-mini",
+    "azure-foundry/Deepseek-V4-Flash-0731",
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
@@ -32,11 +39,13 @@
   ],
   "pythonWriteClassification": [
     "opencode-go/deepseek-v4-pro",
+    "openai-codex/gpt-5.6-luna",
     "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
     "openai-codex/gpt-5.4-mini",
+    "azure-foundry/Deepseek-V4-Flash-0731",
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
