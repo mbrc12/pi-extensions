@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import type { SubagentCapability } from "../shared/model-config.ts";
 
 export type AgentScope = "user" | "project" | "both";
 
@@ -12,7 +13,7 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
-	models?: string[];
+	capability: SubagentCapability;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -64,18 +65,17 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 				? toolsValue.split(",").map((tool) => tool.trim()).filter(Boolean)
 				: undefined;
 
-		const modelsValue = frontmatter.models ?? frontmatter.model;
-		const models = Array.isArray(modelsValue)
-			? modelsValue.filter((model): model is string => typeof model === "string").map((model) => model.trim()).filter(Boolean)
-			: typeof modelsValue === "string"
-				? [modelsValue.trim()]
-				: undefined;
+		const capabilityValue = frontmatter.capability;
+		const capability: SubagentCapability =
+			capabilityValue === "low" || capabilityValue === "medium" || capabilityValue === "high" || capabilityValue === "image"
+				? capabilityValue
+				: "medium";
 
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? [...new Set(tools)] : undefined,
-			models: models && models.length > 0 ? [...new Set(models)] : undefined,
+			capability,
 			systemPrompt: body,
 			source,
 			filePath,

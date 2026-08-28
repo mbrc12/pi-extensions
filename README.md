@@ -75,7 +75,19 @@ Supports three modes:
 | `parallel` | `tasks` array | Run multiple agents concurrently (up to 16 concurrency, 16 max tasks) |
 | `chain` | `chain` array | Run agents sequentially, each sees the previous agent's output via `{previous}` placeholder |
 
-Each single request, parallel task, or chain step may include `models`, an ordered list of scoped names such as `openai-codex/gpt-5.6-luna` or `opencode-go/deepseek-v4-flash`. The tool tries each model in order and uses the first one that responds. Agent frontmatter supports the same list through `models` (with legacy single-value `model` still accepted).
+Each agent frontmatter sets `capability: low`, `medium`, `high`, or `image`. Model lists live only in `model-config.json` under `subagentModels`. The tool cycles general-purpose tiers as `low → medium → high`, `medium → high → low`, or `high → low → medium`. The `image` tier tries only its listed image-capable models. Within a tier, it uses the first model that responds.
+
+Each child gets a temporary copy of the global Pi configuration with only `pi-multi-account` removed. It keeps all other local extensions, packages, authentication, and model settings. This keeps the subagent model order authoritative: `pi-multi-account` cannot replace a selected model after a quota error.
+
+For example:
+
+```yaml
+---
+name: data-explorer
+description: Read-only data exploration specialist
+capability: low
+---
+```
 
 The `agentScope` param controls where agents are loaded from:
 
@@ -125,11 +137,12 @@ Uses DuckDuckGo for search and a local Python script with `readability-lxml` for
 
 ### `shared/model-config.ts`
 
-Centralized model configuration used by multiple extensions. Defines `ModelConfigPurpose` types:
+Centralized model configuration used by multiple extensions. It defines fallback purposes and subagent capability tiers:
 
-| Purpose | Used by | Default models |
+| Config key | Used by | Model selection |
 |---|---|---|
 | `recapGeneration` | `recap` | Scoped model fallback list in `model-config.json` |
+| `subagentModels` | `subagent` | `low`, `medium`, and `high` cyclic model lists, plus an image-only `image` list |
 | `subagentProgressSummary` | `subagent` | Scoped model fallback list in `model-config.json` |
 | `webSummarization` | `web-use` | Scoped model fallback list in `model-config.json` |
 | `permissionClassification` | `permissions` | Scoped model fallback list in `model-config.json` |

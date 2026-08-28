@@ -10,9 +10,16 @@ export type ModelConfigPurpose =
   | "permissionClassification"
   | "pythonWriteClassification";
 
+export type SubagentCapability = "low" | "medium" | "high" | "image";
 export type ModelRef = readonly [provider: string, id: string];
 
 const CONFIG_PATH = path.join(getAgentDir(), "extensions", "model-config.json");
+const SUBAGENT_CAPABILITY_FALLBACKS: Record<SubagentCapability, readonly SubagentCapability[]> = {
+  low: ["low", "medium", "high"],
+  medium: ["medium", "high", "low"],
+  high: ["high", "low", "medium"],
+  image: ["image"],
+};
 
 const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   recapGeneration: [
@@ -64,6 +71,32 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   ],
 };
 
+const DEFAULT_SUBAGENT_MODELS: Record<SubagentCapability, string[]> = {
+  low: [
+    "opencode-go/deepseek-v4-flash",
+    "openai-codex/gpt-5.4-mini",
+    "openai-codex-account-2/gpt-5.4-mini",
+    "opencode-go/mimo-v2.5",
+    "opencode-go/minimax-m2.7",
+  ],
+  medium: [
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex-account-2/gpt-5.6-luna",
+    "opencode-go/deepseek-v4-pro",
+    "opencode-go/kimi-k2.6",
+  ],
+  high: [
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex-account-2/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex-account-2/gpt-5.6-terra",
+  ],
+  image: [
+    "openai-codex-account-2/gpt-5.6-luna",
+    "openai-codex/gpt-5.6-luna",
+  ],
+};
+
 function parseModelRef(value: unknown): ModelRef | undefined {
   if (typeof value === "string") {
     const slash = value.indexOf("/");
@@ -81,22 +114,50 @@ function parseModelRef(value: unknown): ModelRef | undefined {
   return undefined;
 }
 
-function loadRawConfig(): Partial<Record<ModelConfigPurpose, unknown[]>> {
+function loadRawConfig(): Record<string, unknown> {
   try {
     const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   } catch {
     return {};
   }
 }
 
-export function getModelFallbacks(purpose: ModelConfigPurpose): ModelRef[] {
-  const raw = loadRawConfig()[purpose];
+function parseModelRefs(raw: unknown, defaults: readonly string[]): ModelRef[] {
   const configured = Array.isArray(raw)
     ? raw.map(parseModelRef).filter((item): item is ModelRef => Boolean(item))
     : [];
-  const source = configured.length > 0 ? configured : DEFAULT_MODEL_CONFIG[purpose].map(parseModelRef);
+  const source = configured.length > 0 ? configured : defaults.map(parseModelRef);
   return source.filter((item): item is ModelRef => Boolean(item));
+}
+
+export function getModelFallbacks(purpose: ModelConfigPurpose): ModelRef[] {
+  const raw = loadRawConfig()[purpose];
+  return parseModelRefs(raw, DEFAULT_MODEL_CONFIG[purpose]);
+}
+
+/**
+ * Return subagent model candidates in configured fallback order.
+ * The image tier uses only its image-capable models. Duplicate models are skipped.
+ */
+export function getSubagentModelFallbacks(capability: SubagentCapability): ModelRef[] {
+  const rawConfig = loadRawConfig();
+  const candidates: ModelRef[] = [];
+  const seen = new Set<string>();
+
+  for (const tier of SUBAGENT_CAPABILITY_FALLBACKS[capability]) {
+    for (const model of parseModelRefs(
+      (rawConfig.subagentModels as Record<string, unknown> | undefined)?.[tier],
+      DEFAULT_SUBAGENT_MODELS[tier],
+    )) {
+      const key = `${model[0]}/${model[1]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(model);
+    }
+  }
+
+  return candidates;
 }
 
 export interface SelectConfiguredModelOptions {

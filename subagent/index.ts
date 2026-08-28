@@ -9,6 +9,8 @@
  *   - Parallel: { tasks: [{ agent: "name", task: "..." }, ...] }
  *   - Chain: { chain: [{ agent: "name", task: "... {previous} ..." }, ...] }
  *
+ * Agent frontmatter declares a low, medium, high, or image capability. The
+ * matching model tier and fallbacks come from model-config.json.
  * Uses JSON mode to capture structured output from subagents.
  */
 
@@ -28,7 +30,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { completeWithModelFallback } from "../shared/model-config.ts";
+import { completeWithModelFallback, getSubagentModelFallbacks } from "../shared/model-config.ts";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 
 const MAX_PARALLEL_TASKS = 16;
@@ -41,6 +43,10 @@ function formatTokens(count: number): string {
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	return `${(count / 1000000).toFixed(1)}M`;
+}
+
+function displayModel(result: Pick<SingleResult, "model" | "requestedModel">): string | undefined {
+	return result.model ?? (result.requestedModel ? `${result.requestedModel} (requested)` : undefined);
 }
 
 function formatUsageStats(
@@ -155,7 +161,10 @@ interface SingleResult {
 	messages: Message[];
 	stderr: string;
 	usage: UsageStats;
+	/** Model reported by the child process in its response events. */
 	model?: string;
+	/** Model passed to the child process before provider-level failover. */
+	requestedModel?: string;
 	stopReason?: string;
 	errorMessage?: string;
 	/** Periodically refreshed single-line progress report shown below the agent name. */
@@ -330,6 +339,50 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 	return { dir: tmpDir, filePath };
 }
 
+function isMultiAccountPackage(value: unknown): boolean {
+	const source = typeof value === "string"
+		? value
+		: value && typeof value === "object" && typeof (value as { source?: unknown }).source === "string"
+			? (value as { source: string }).source
+			: "";
+	return source === "pi-multi-account" || source === "npm:pi-multi-account" || source.startsWith("npm:pi-multi-account@");
+}
+
+/**
+ * Create a child-specific Pi config that keeps every global resource except
+ * pi-multi-account. Symlinks preserve auth, local extensions, and other
+ * packages without changing the parent's configuration or parallel children.
+ */
+async function createChildAgentDir(): Promise<string> {
+	const agentDir = getAgentDir();
+	const childDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-agent-dir-"));
+
+	try {
+		const settingsPath = path.join(agentDir, "settings.json");
+		let settings: Record<string, unknown> = {};
+		try {
+			settings = JSON.parse(await fs.promises.readFile(settingsPath, "utf8")) as Record<string, unknown>;
+		} catch (error: any) {
+			if (error?.code !== "ENOENT") throw error;
+		}
+		const packages = Array.isArray(settings.packages) ? settings.packages : [];
+		settings.packages = packages.filter((pkg) => !isMultiAccountPackage(pkg));
+		await fs.promises.writeFile(path.join(childDir, "settings.json"), `${JSON.stringify(settings, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 0o600,
+		});
+
+		for (const entry of await fs.promises.readdir(agentDir, { withFileTypes: true })) {
+			if (entry.name === "settings.json" || entry.name === "sessions") continue;
+			await fs.promises.symlink(path.join(agentDir, entry.name), path.join(childDir, entry.name));
+		}
+		return childDir;
+	} catch (error) {
+		await fs.promises.rm(childDir, { recursive: true, force: true });
+		throw error;
+	}
+}
+
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
 	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
@@ -383,6 +436,7 @@ async function runSingleAgentAttempt(
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
+	let tmpChildAgentDir: string | null = null;
 	let progressSummaryTimer: ReturnType<typeof setInterval> | undefined;
 	let progressSummaryInFlight = false;
 	let initialSummaryRequested = false;
@@ -396,7 +450,7 @@ async function runSingleAgentAttempt(
 		messages: [],
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-		model,
+		requestedModel: model,
 		step,
 	};
 
@@ -432,6 +486,8 @@ async function runSingleAgentAttempt(
 	};
 
 	try {
+		tmpChildAgentDir = await createChildAgentDir();
+
 		if (agent.systemPrompt.trim()) {
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
@@ -448,6 +504,7 @@ async function runSingleAgentAttempt(
 				cwd: cwd ?? defaultCwd,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, PI_CODING_AGENT_DIR: tmpChildAgentDir ?? undefined },
 			});
 			let buffer = "";
 			progressSummaryTimer = setInterval(() => void refreshProgressSummary(), PROGRESS_SUMMARY_INTERVAL_MS);
@@ -476,7 +533,10 @@ async function runSingleAgentAttempt(
 							currentResult.usage.cost += usage.cost?.total || 0;
 							currentResult.usage.contextTokens = usage.totalTokens || 0;
 						}
-						if (!currentResult.model && msg.model) currentResult.model = msg.model;
+						if (msg.model) {
+							const provider = (msg as any).provider;
+							currentResult.model = typeof provider === "string" ? `${provider}/${msg.model}` : msg.model;
+						}
 						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
 						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
 					}
@@ -546,10 +606,16 @@ async function runSingleAgentAttempt(
 			} catch {
 				/* ignore */
 			}
+		if (tmpChildAgentDir)
+			try {
+				await fs.promises.rm(tmpChildAgentDir, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
 	}
 }
 
-/** Try the requested models in order and keep the first model that returns a response. */
+/** Try the configured capability tiers in cyclic order and keep the first model that responds. */
 async function runSingleAgent(
 	defaultCwd: string,
 	summaryCtx: any,
@@ -558,13 +624,19 @@ async function runSingleAgent(
 	task: string,
 	cwd: string | undefined,
 	step: number | undefined,
-	models: string[] | undefined,
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
-	const modelCandidates = models?.length ? models : agent?.models?.length ? agent.models : [undefined];
+	if (!agent) {
+		return runSingleAgentAttempt(
+			defaultCwd, summaryCtx, agents, agentName, task, cwd, step, undefined, signal, onUpdate, makeDetails,
+		);
+	}
+
+	const modelCandidates = getSubagentModelFallbacks(agent.capability)
+		.map(([provider, id]) => `${provider}/${id}`);
 	let lastResult: SingleResult | undefined;
 
 	for (const model of modelCandidates) {
@@ -575,27 +647,19 @@ async function runSingleAgent(
 		if (!isFailedResult(result)) return result;
 	}
 
-	// An unknown agent is reported by the attempt itself. If every requested
-	// model failed, return the final attempt so its error is visible to the caller.
+	// If every configured model failed, return the final attempt so its error is visible.
 	return lastResult!;
 }
-
-const ModelList = Type.Array(Type.String({
-	pattern: "^[^/\\s]+/[^/\\s]+$",
-	description: "Scoped model name in provider/model-id form, tried in this order",
-}), { description: "Ordered model fallback list; the first model that responds is used" });
 
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
-	models: Type.Optional(ModelList),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
-	models: Type.Optional(ModelList),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
@@ -607,7 +671,6 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
-	models: Type.Optional(ModelList),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
 	agentScope: Type.Optional(AgentScopeSchema),
@@ -624,7 +687,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-			"Each spec may provide an ordered models list of scoped provider/model-id names; the first responding model is used.",
+			"Each agent declares a low, medium, high, or image capability; model-config.json supplies its model tier and fallbacks.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),
@@ -719,7 +782,6 @@ export default function (pi: ExtensionAPI) {
 						taskWithContext,
 						step.cwd,
 						i + 1,
-						step.models,
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
@@ -793,7 +855,6 @@ export default function (pi: ExtensionAPI) {
 						t.task,
 						t.cwd,
 						undefined,
-						t.models,
 						signal,
 						// Per-task update callback
 						(partial) => {
@@ -837,7 +898,6 @@ export default function (pi: ExtensionAPI) {
 					params.task,
 					params.cwd,
 					undefined,
-					params.models,
 					signal,
 					onUpdate,
 					makeDetails("single"),
@@ -985,7 +1045,7 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 					}
-					const usageStr = formatUsageStats(r.usage, r.model);
+					const usageStr = formatUsageStats(r.usage, displayModel(r));
 					if (usageStr) {
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
@@ -1001,7 +1061,7 @@ export default function (pi: ExtensionAPI) {
 				else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 				}
-				const usageStr = formatUsageStats(r.usage, r.model);
+				const usageStr = formatUsageStats(r.usage, displayModel(r));
 				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
 				return new Text(text, 0, 0);
 			}
@@ -1071,7 +1131,7 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
-						const stepUsage = formatUsageStats(r.usage, r.model);
+						const stepUsage = formatUsageStats(r.usage, displayModel(r));
 						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
 					}
 
@@ -1157,7 +1217,7 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
-						const taskUsage = formatUsageStats(r.usage, r.model);
+						const taskUsage = formatUsageStats(r.usage, displayModel(r));
 						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
 					}
 
