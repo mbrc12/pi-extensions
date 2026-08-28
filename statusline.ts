@@ -14,11 +14,46 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { relative, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, relative, resolve, sep } from "node:path";
 
 // Status key shared with the thinking-tail extension. Its value is rendered
 // on row 1 of this statusline (excluded from the row-2 status block).
 const THINK_STATUS_KEY = "thinking";
+
+const INR_RATE_URL = "https://open.er-api.com/v6/latest/USD";
+const INR_RATE_REFRESH_MS = 6 * 60 * 60 * 1_000;
+// Last fetched from ExchangeRate-API on 2026-08-28. The live refresh below replaces it.
+let inrPerUsd = 95.592676;
+let inrRateUpdatedAt = 0;
+let inrRateRequest: Promise<void> | undefined;
+
+function refreshInrRate(onUpdated: () => void): void {
+  if (
+    inrRateRequest ||
+    Date.now() - inrRateUpdatedAt < INR_RATE_REFRESH_MS
+  ) {
+    return;
+  }
+  inrRateUpdatedAt = Date.now();
+  inrRateRequest = fetch(INR_RATE_URL)
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`exchange-rate request failed: ${response.status}`);
+      const data = (await response.json()) as { rates?: { INR?: unknown } };
+      const rate = data.rates?.INR;
+      if (typeof rate === "number" && Number.isFinite(rate) && rate > 0) {
+        inrPerUsd = rate;
+      }
+    })
+    .catch(() => {
+      // Retain the last known rate when offline; the footer remains usable.
+    })
+    .finally(() => {
+      inrRateRequest = undefined;
+      onUpdated();
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -100,6 +135,13 @@ function fmt(n: number): string {
   return `${Math.round(n / 1_000_000)}M`;
 }
 
+function formatInr(value: number): string {
+  return value.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 /** Collapse whitespace / control chars for single-line display */
 function sanitize(text: string): string {
   return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
@@ -107,6 +149,163 @@ function sanitize(text: string): string {
 
 function finiteNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+type TokenRates = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tiers?: Array<TokenRates & { inputTokensAbove: number }>;
+};
+
+type MessageUsage = {
+  input?: unknown;
+  output?: unknown;
+  cacheRead?: unknown;
+  cacheWrite?: unknown;
+  cacheWrite1h?: unknown;
+};
+
+type PricingModel = {
+  provider?: unknown;
+  id?: unknown;
+  cost?: unknown;
+};
+
+let storedPricingModels: PricingModel[] | undefined;
+let storedPricingLoadedAt = 0;
+const STORED_PRICING_REFRESH_MS = 5 * 60 * 1_000;
+
+/** Read Pi's persisted catalog when a provider alias hides the priced runtime model. */
+function loadStoredPricingModels(): PricingModel[] {
+  if (
+    storedPricingModels &&
+    Date.now() - storedPricingLoadedAt < STORED_PRICING_REFRESH_MS
+  ) {
+    return storedPricingModels;
+  }
+
+  storedPricingLoadedAt = Date.now();
+  try {
+    const path = join(homedir(), ".pi", "agent", "models-store.json");
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      [provider: string]: { models?: unknown };
+    };
+    storedPricingModels = Object.entries(parsed).flatMap(([provider, value]) =>
+      Array.isArray(value?.models)
+        ? value.models.map((model) => ({
+            ...(model && typeof model === "object" ? model : {}),
+            provider,
+          }))
+        : [],
+    );
+  } catch {
+    storedPricingModels = [];
+  }
+  return storedPricingModels;
+}
+
+function storedModelCost(provider: string, modelId: string): unknown {
+  return loadStoredPricingModels().find(
+    (model) => model.provider === provider && model.id === modelId,
+  )?.cost;
+}
+
+/** Account aliases inherit their API-equivalent price from the base provider. */
+function baseProviderForAccount(provider: unknown): string | undefined {
+  if (typeof provider !== "string") return undefined;
+  const match = provider.match(/^(.*)-account-\d+$/);
+  return match?.[1];
+}
+
+function tokenRates(value: unknown): TokenRates | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const rates = {
+    input: finiteNumber(record.input),
+    output: finiteNumber(record.output),
+    cacheRead: finiteNumber(record.cacheRead),
+    cacheWrite: finiteNumber(record.cacheWrite),
+  };
+  if (Object.values(rates).every((rate) => rate === 0)) return undefined;
+
+  const tiers = Array.isArray(record.tiers)
+    ? record.tiers
+        .map((tier) => {
+          if (!tier || typeof tier !== "object") return undefined;
+          const tierRecord = tier as Record<string, unknown>;
+          return {
+            input: finiteNumber(tierRecord.input),
+            output: finiteNumber(tierRecord.output),
+            cacheRead: finiteNumber(tierRecord.cacheRead),
+            cacheWrite: finiteNumber(tierRecord.cacheWrite),
+            inputTokensAbove: finiteNumber(tierRecord.inputTokensAbove),
+          };
+        })
+        .filter((tier): tier is TokenRates & { inputTokensAbove: number } =>
+          tier !== undefined,
+        )
+    : undefined;
+  return { ...rates, ...(tiers?.length ? { tiers } : {}) };
+}
+
+/**
+ * Multi-account's live catalogs omit price data and replace each alias model's
+ * cost with zero. Reapply the base-provider rate so subscription sessions can
+ * show their standard API-price equivalent.
+ */
+function accountApiPriceEstimate(message: AssistantMessage, ctx: any): number {
+  const provider = baseProviderForAccount((message as any).provider);
+  const modelId = (message as any).model;
+  if (!provider || typeof modelId !== "string") return 0;
+
+  let model: any;
+  try {
+    model = ctx.modelRegistry?.find?.(provider, modelId);
+    if (!model) {
+      model = (ctx.modelRegistry?.getAll?.() ?? []).find(
+        (entry: any) => entry?.provider === provider && entry?.id === modelId,
+      );
+    }
+  } catch {
+    return 0;
+  }
+
+  // The alias registration can overwrite the base runtime model with a
+  // zero-cost live catalog entry. Prefer a priced runtime model, then use the
+  // persistent catalog that Pi itself wrote from its model registry.
+  const baseRates =
+    tokenRates(model?.cost) ??
+    tokenRates(storedModelCost(provider, modelId));
+  if (!baseRates) return 0;
+
+  const usage = (message as any).usage as MessageUsage | undefined;
+  if (!usage) return 0;
+  const input = finiteNumber(usage.input);
+  const output = finiteNumber(usage.output);
+  const cacheRead = finiteNumber(usage.cacheRead);
+  const cacheWrite = finiteNumber(usage.cacheWrite);
+  const cacheWrite1h = Math.min(finiteNumber(usage.cacheWrite1h), cacheWrite);
+  const pricedInput = input + cacheRead + cacheWrite;
+
+  let rates = baseRates;
+  let threshold = -1;
+  for (const tier of baseRates.tiers ?? []) {
+    if (pricedInput > tier.inputTokensAbove && tier.inputTokensAbove > threshold) {
+      rates = tier;
+      threshold = tier.inputTokensAbove;
+    }
+  }
+
+  return (
+    (rates.input * input +
+      rates.output * output +
+      rates.cacheRead * cacheRead +
+      rates.cacheWrite * (cacheWrite - cacheWrite1h) +
+      rates.input * 2 * cacheWrite1h) /
+    1_000_000
+  );
 }
 
 function subagentCostFromDetails(details: unknown): number {
@@ -179,10 +378,13 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
 
         render(width: number): string[] {
+          refreshInrRate(() => tui.requestRender());
+
           // ----- cumulative token / cost stats -----
           let totalInput = 0;
           let totalOutput = 0;
           let baseCost = 0;
+          let estimatedAccountCost = 0;
           let subagentCost = 0;
 
           for (const entry of ctx.sessionManager.getEntries()) {
@@ -191,12 +393,18 @@ export default function (pi: ExtensionAPI) {
               const m = entry.message as AssistantMessage;
               totalInput += m.usage.input;
               totalOutput += m.usage.output;
-              baseCost += m.usage.cost.total;
+              const recordedCost = finiteNumber(m.usage.cost?.total);
+              baseCost += recordedCost;
+              // Live multi-account catalogs have zeroed costs. Only replace an
+              // absent recorded price; a real API response remains authoritative.
+              if (recordedCost === 0) {
+                estimatedAccountCost += accountApiPriceEstimate(m, ctx);
+              }
             } else {
               subagentCost += subagentCostFromToolResult(entry.message);
             }
           }
-          const totalCost = baseCost + subagentCost;
+          const totalCost = baseCost + estimatedAccountCost + subagentCost;
 
           // ----- current context usage -----
           const ctxUsage = ctx.getContextUsage();
@@ -254,13 +462,15 @@ export default function (pi: ExtensionAPI) {
             ctx.modelRegistry?.isUsingOAuth?.(ctx.model)
               ? " (sub)"
               : "";
-          const costText = subagentCost > 0
-            ? `${baseCost.toFixed(3)} + ${subagentCost.toFixed(3)} = ${totalCost.toFixed(3)}`
-            : totalCost.toFixed(3);
+          const costLabel = estimatedAccountCost > 0 ? "est $" : "$";
           const costSeg =
-            theme.fg("dim", "$") +
+            theme.fg("dim", costLabel) +
             " " +
-            theme.fg("muted", costText + sub);
+            theme.fg("muted", totalCost.toFixed(3) + sub) +
+            theme.fg("borderMuted", " · ") +
+            theme.fg("dim", "₹") +
+            " " +
+            theme.fg("muted", formatInr(totalCost * inrPerUsd));
 
           let tokSeg = "";
           if (totalInput > 0 || totalOutput > 0) {
