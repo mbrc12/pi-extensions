@@ -213,8 +213,7 @@ function storedModelCost(provider: string, modelId: string): unknown {
 }
 
 /** Account aliases inherit their API-equivalent price from the base provider. */
-function baseProviderForAccount(provider: unknown): string | undefined {
-  if (typeof provider !== "string") return undefined;
+function baseProviderForAccount(provider: string): string | undefined {
   const match = provider.match(/^(.*)-account-\d+$/);
   return match?.[1];
 }
@@ -251,33 +250,17 @@ function tokenRates(value: unknown): TokenRates | undefined {
 }
 
 /**
- * Multi-account's live catalogs omit price data and replace each alias model's
- * cost with zero. Reapply the base-provider rate so subscription sessions can
- * show their standard API-price equivalent.
+ * Multi-account replaces both Codex Plus and numbered-account prices with
+ * zero. Price each turn from the canonical base-provider model instead—for
+ * example, `openai-codex/gpt-5.6-terra`—not from the live alias catalog.
  */
-function accountApiPriceEstimate(message: AssistantMessage, ctx: any): number {
-  const provider = baseProviderForAccount((message as any).provider);
+function baseModelApiPriceEstimate(message: AssistantMessage): number {
+  const messageProvider = (message as any).provider;
   const modelId = (message as any).model;
-  if (!provider || typeof modelId !== "string") return 0;
+  if (typeof messageProvider !== "string" || typeof modelId !== "string") return 0;
 
-  let model: any;
-  try {
-    model = ctx.modelRegistry?.find?.(provider, modelId);
-    if (!model) {
-      model = (ctx.modelRegistry?.getAll?.() ?? []).find(
-        (entry: any) => entry?.provider === provider && entry?.id === modelId,
-      );
-    }
-  } catch {
-    return 0;
-  }
-
-  // The alias registration can overwrite the base runtime model with a
-  // zero-cost live catalog entry. Prefer a priced runtime model, then use the
-  // persistent catalog that Pi itself wrote from its model registry.
-  const baseRates =
-    tokenRates(model?.cost) ??
-    tokenRates(storedModelCost(provider, modelId));
+  const baseProvider = baseProviderForAccount(messageProvider) ?? messageProvider;
+  const baseRates = tokenRates(storedModelCost(baseProvider, modelId));
   if (!baseRates) return 0;
 
   const usage = (message as any).usage as MessageUsage | undefined;
@@ -384,7 +367,7 @@ export default function (pi: ExtensionAPI) {
           let totalInput = 0;
           let totalOutput = 0;
           let baseCost = 0;
-          let estimatedAccountCost = 0;
+          let estimatedModelCost = 0;
           let subagentCost = 0;
 
           for (const entry of ctx.sessionManager.getEntries()) {
@@ -395,16 +378,16 @@ export default function (pi: ExtensionAPI) {
               totalOutput += m.usage.output;
               const recordedCost = finiteNumber(m.usage.cost?.total);
               baseCost += recordedCost;
-              // Live multi-account catalogs have zeroed costs. Only replace an
-              // absent recorded price; a real API response remains authoritative.
+              // Multi-account can zero model prices. Only replace an absent
+              // recorded price; a real API response remains authoritative.
               if (recordedCost === 0) {
-                estimatedAccountCost += accountApiPriceEstimate(m, ctx);
+                estimatedModelCost += baseModelApiPriceEstimate(m);
               }
             } else {
               subagentCost += subagentCostFromToolResult(entry.message);
             }
           }
-          const totalCost = baseCost + estimatedAccountCost + subagentCost;
+          const totalCost = baseCost + estimatedModelCost + subagentCost;
 
           // ----- current context usage -----
           const ctxUsage = ctx.getContextUsage();
@@ -462,7 +445,7 @@ export default function (pi: ExtensionAPI) {
             ctx.modelRegistry?.isUsingOAuth?.(ctx.model)
               ? " (sub)"
               : "";
-          const costLabel = estimatedAccountCost > 0 ? "est $" : "$";
+          const costLabel = estimatedModelCost > 0 ? "est $" : "$";
           const costSeg =
             theme.fg("dim", costLabel) +
             " " +
