@@ -4,7 +4,9 @@ import { completeWithModelFallback } from "./shared/model-config.ts";
 
 const WIDGET_ID = "recap";
 const IDLE_MS = 30_000;
-const MAX_RECAP_LINE = 160;
+// Leave room for the objective and completed work, not only the latest action.
+const MAX_RECAP_LINE = 240;
+const RECAP_CONTEXT_MESSAGES = 24;
 
 function textFromContent(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -37,7 +39,7 @@ function stripRecapPrefix(text: string): string {
 	return text.replace(/^(?:now|next)\s*:\s*/i, "").trim();
 }
 
-function twoLineRecap(now: string, next: string, maxLineLength?: number): string {
+function twoLineRecap(now: string, next: string, maxLineLength = MAX_RECAP_LINE): string {
 	return `Now: ${conciseLine(stripRecapPrefix(now), maxLineLength) || "No active task yet."}\nNext: ${conciseLine(stripRecapPrefix(next), maxLineLength) || "Wait for the next user request."}`;
 }
 
@@ -121,7 +123,7 @@ function buildConversationText(ctx: any): string {
 		})
 		.filter(Boolean) as string[];
 
-	return lines.slice(-12).join("\n\n");
+	return lines.slice(-RECAP_CONTEXT_MESSAGES).join("\n\n");
 }
 
 function fallbackRecap(ctx: any): string {
@@ -136,11 +138,13 @@ async function generateRecap(ctx: any): Promise<string> {
 	if (!conversation.trim()) return fallbackRecap(ctx);
 
 	const prompt = [
-		"Write a concise idle recap for a coding-agent terminal UI.",
+		"Write a concise but self-contained idle recap for a coding-agent terminal UI.",
 		"Return exactly two lines and nothing else:",
-		"Now: <what is currently happening or was just done>",
-		"Next: <the next action to take>",
-		"Keep each line concise.",
+		"Now: <the task goal, meaningful work completed, and current state>",
+		"Next: <the immediate next action>",
+		"Make Now useful to a person returning after a break: state the broader objective first, then the key completed result or current blocker. Do not describe only the most recent action.",
+		"Include important files, decisions, or results when they provide needed context; omit routine commands and implementation detail.",
+		"Keep each line to one readable sentence, at most 240 characters.",
 		"Preserve Markdown formatting for file paths, symbols, commands, and names.",
 		"Flatten any internal newlines in the Now/Next content into spaces.",
 		"Ignore tool outputs, todo bookkeeping, meta instructions, and final status chatter.",

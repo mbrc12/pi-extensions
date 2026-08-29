@@ -3,7 +3,7 @@
  *
  * Replaces the default footer with a clean, two-line statusline:
  *   Line 1: cwd (git branch) · ctx · tok · think:emoji
- *   Line 2: model think:level · cost · extension statuses
+ *   Line 2: provider/model think:level · cost · extension statuses
  *
  * The thinking-tail extension pushes a think:
  *   🤐 collapsed, 😮 expanded. It is surfaced on row 1 here.
@@ -212,8 +212,9 @@ function storedModelCost(provider: string, modelId: string): unknown {
   )?.cost;
 }
 
-/** Account aliases inherit their API-equivalent price from the base provider. */
+/** Codex aliases inherit their API-equivalent price from the base provider. */
 function baseProviderForAccount(provider: string): string | undefined {
+  if (/^openai-codex-\d+$/.test(provider)) return "openai-codex";
   const match = provider.match(/^(.*)-account-\d+$/);
   return match?.[1];
 }
@@ -250,9 +251,8 @@ function tokenRates(value: unknown): TokenRates | undefined {
 }
 
 /**
- * Multi-account replaces both Codex Plus and numbered-account prices with
- * zero. Price each turn from the canonical base-provider model instead—for
- * example, `openai-codex/gpt-5.6-terra`—not from the live alias catalog.
+ * Price Codex account aliases from the canonical base-provider model when
+ * their runtime catalog does not include pricing metadata.
  */
 function baseModelApiPriceEstimate(message: AssistantMessage): number {
   const messageProvider = (message as any).provider;
@@ -378,8 +378,8 @@ export default function (pi: ExtensionAPI) {
               totalOutput += m.usage.output;
               const recordedCost = finiteNumber(m.usage.cost?.total);
               baseCost += recordedCost;
-              // Multi-account can zero model prices. Only replace an absent
-              // recorded price; a real API response remains authoritative.
+              // Only estimate a price when the response did not record one;
+              // a real response cost remains authoritative.
               if (recordedCost === 0) {
                 estimatedModelCost += baseModelApiPriceEstimate(m);
               }
@@ -421,6 +421,8 @@ export default function (pi: ExtensionAPI) {
 
           // ----- model + thinking level -----
           const modelId = ctx.model?.id ?? "—";
+          const modelSource = ctx.model?.provider;
+          const modelDisplay = modelSource ? `${modelSource}/${modelId}` : modelId;
           const reasoning = ctx.model?.reasoning;
           const thinkPart = reasoning
             ? currentThinkingLevel === "off"
@@ -433,7 +435,7 @@ export default function (pi: ExtensionAPI) {
 
           const dirSeg = theme.fg("dim", dirDisplay);
 
-          let modelSeg = theme.fg("success", modelId);
+          let modelSeg = theme.fg("success", modelDisplay);
           if (thinkPart) {
             modelSeg += " " + theme.fg("dim", thinkPart);
           }
@@ -462,7 +464,7 @@ export default function (pi: ExtensionAPI) {
           }
 
           // Extension statuses on line 2 after core items.
-          // Keep permissions first when present.
+          // Keep provider limits visible before other status items.
           const statuses: ReadonlyMap<string, string> =
             footerData.getExtensionStatuses();
 
@@ -484,6 +486,8 @@ export default function (pi: ExtensionAPI) {
           const sortedStatuses = Array.from(statuses.entries())
             .filter(([key]) => key !== THINK_STATUS_KEY)
             .sort(([a], [b]) => {
+              if (a === "provider-status") return -1;
+              if (b === "provider-status") return 1;
               if (a === "permissions") return -1;
               if (b === "permissions") return 1;
               return a.localeCompare(b);
@@ -496,7 +500,7 @@ export default function (pi: ExtensionAPI) {
             .filter(Boolean)
             .join(sep);
 
-          // Line 2: model · permissions · extra1 · extra2
+          // Line 2: provider/model · permissions · extra1 · extra2
           const line2Core = [modelSeg].filter(Boolean);
           let line2 = line2Core.join(sep);
           if (sortedStatuses.length > 0) {

@@ -12,6 +12,10 @@ Adds an `ask_question` tool that renders an interactive TUI dialog. Supports sin
 
 Renders fenced code in assistant messages as one single-line Unicode box-drawing frame with a borderless language label set into its top border. Code lines are numbered and separated by a vertical gutter; long unbroken lines wrap within the frame without overflowing the terminal. Use `/code-block-box off` to restore Pi's native rendering for the session, or `/code-block-box on` to re-enable it.
 
+### `codex-account-alias`
+
+Registers `openai-codex-2` as a second independent Codex OAuth provider. It reuses Pi's built-in Codex models and request implementation while keeping a separate credential under the alias provider ID. It does not perform account rotation or automatic failover.
+
 ### `exit-alias`
 
 Registers `/exit` as a shorthand alias for `/quit`.
@@ -23,6 +27,10 @@ Compact TUI rendering for all built-in tools — truncated commands for bash, ju
 ### `notify-on-idle`
 
 Sends a desktop notification (via terminal bell + OSC sequences / Windows toast) when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. Works across tmux, Kitty, and Windows Terminal.
+
+### `provider-status`
+
+Adds provider-specific limits to the statusline. The first adapter supports `openai-codex` and numbered aliases such as `openai-codex-2`: it fetches the account's available 5-hour and 7-day windows, shows the remaining percentage and reset countdown, refreshes usage every five minutes, and updates countdowns every minute. Run `/provider-status` to force a refresh and see both used and remaining percentages.
 
 ### `py-explore`
 
@@ -58,8 +66,9 @@ Toggle with `/permissions allow|classify|ask` or `F8`.
 ### `statusline`
 
 Replaces the default footer with a compact two-line statusline:
-- Line 1: cwd (with git branch) · context · token I/O
-- Line 2: model/thinking · cost · extension statuses (permissions first; extras separated by ·)
+
+- Line 1: cwd (with git branch) · context · cost · token I/O
+- Line 2: provider/model · thinking · extension statuses (provider limits first, then permissions and other items)
 
 Toggle with `/statusline`.
 
@@ -76,8 +85,6 @@ Supports three modes:
 | `chain` | `chain` array | Run agents sequentially, each sees the previous agent's output via `{previous}` placeholder |
 
 Each agent frontmatter sets `capability: low`, `medium`, `high`, or `image`. Model lists live only in `model-config.json` under `subagentModels`. The tool cycles general-purpose tiers as `low → medium → high`, `medium → high → low`, or `high → low → medium`. The `image` tier tries only its listed image-capable models. Within a tier, it uses the first model that responds.
-
-Each child gets a temporary copy of the global Pi configuration with only `pi-multi-account` removed. It keeps all other local extensions, packages, authentication, and model settings. This keeps the subagent model order authoritative: `pi-multi-account` cannot replace a selected model after a quota error.
 
 For example:
 

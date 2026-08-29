@@ -75,24 +75,24 @@ const DEFAULT_SUBAGENT_MODELS: Record<SubagentCapability, string[]> = {
   low: [
     "opencode-go/deepseek-v4-flash",
     "openai-codex/gpt-5.4-mini",
-    "openai-codex-account-2/gpt-5.4-mini",
+    "openai-codex-2/gpt-5.4-mini",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
   ],
   medium: [
     "openai-codex/gpt-5.6-luna",
-    "openai-codex-account-2/gpt-5.6-luna",
+    "openai-codex-2/gpt-5.6-luna",
     "opencode-go/deepseek-v4-pro",
     "opencode-go/kimi-k2.6",
   ],
   high: [
     "openai-codex/gpt-5.6-sol",
-    "openai-codex-account-2/gpt-5.6-sol",
+    "openai-codex-2/gpt-5.6-sol",
     "openai-codex/gpt-5.6-terra",
-    "openai-codex-account-2/gpt-5.6-terra",
+    "openai-codex-2/gpt-5.6-terra",
   ],
   image: [
-    "openai-codex-account-2/gpt-5.6-luna",
+    "openai-codex-2/gpt-5.6-luna",
     "openai-codex/gpt-5.6-luna",
   ],
 };

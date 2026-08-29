@@ -339,50 +339,6 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 	return { dir: tmpDir, filePath };
 }
 
-function isMultiAccountPackage(value: unknown): boolean {
-	const source = typeof value === "string"
-		? value
-		: value && typeof value === "object" && typeof (value as { source?: unknown }).source === "string"
-			? (value as { source: string }).source
-			: "";
-	return source === "pi-multi-account" || source === "npm:pi-multi-account" || source.startsWith("npm:pi-multi-account@");
-}
-
-/**
- * Create a child-specific Pi config that keeps every global resource except
- * pi-multi-account. Symlinks preserve auth, local extensions, and other
- * packages without changing the parent's configuration or parallel children.
- */
-async function createChildAgentDir(): Promise<string> {
-	const agentDir = getAgentDir();
-	const childDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-agent-dir-"));
-
-	try {
-		const settingsPath = path.join(agentDir, "settings.json");
-		let settings: Record<string, unknown> = {};
-		try {
-			settings = JSON.parse(await fs.promises.readFile(settingsPath, "utf8")) as Record<string, unknown>;
-		} catch (error: any) {
-			if (error?.code !== "ENOENT") throw error;
-		}
-		const packages = Array.isArray(settings.packages) ? settings.packages : [];
-		settings.packages = packages.filter((pkg) => !isMultiAccountPackage(pkg));
-		await fs.promises.writeFile(path.join(childDir, "settings.json"), `${JSON.stringify(settings, null, 2)}\n`, {
-			encoding: "utf8",
-			mode: 0o600,
-		});
-
-		for (const entry of await fs.promises.readdir(agentDir, { withFileTypes: true })) {
-			if (entry.name === "settings.json" || entry.name === "sessions") continue;
-			await fs.promises.symlink(path.join(agentDir, entry.name), path.join(childDir, entry.name));
-		}
-		return childDir;
-	} catch (error) {
-		await fs.promises.rm(childDir, { recursive: true, force: true });
-		throw error;
-	}
-}
-
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
 	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
@@ -436,7 +392,6 @@ async function runSingleAgentAttempt(
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
-	let tmpChildAgentDir: string | null = null;
 	let progressSummaryTimer: ReturnType<typeof setInterval> | undefined;
 	let progressSummaryInFlight = false;
 	let initialSummaryRequested = false;
@@ -486,8 +441,6 @@ async function runSingleAgentAttempt(
 	};
 
 	try {
-		tmpChildAgentDir = await createChildAgentDir();
-
 		if (agent.systemPrompt.trim()) {
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
@@ -504,7 +457,6 @@ async function runSingleAgentAttempt(
 				cwd: cwd ?? defaultCwd,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
-				env: { ...process.env, PI_CODING_AGENT_DIR: tmpChildAgentDir ?? undefined },
 			});
 			let buffer = "";
 			progressSummaryTimer = setInterval(() => void refreshProgressSummary(), PROGRESS_SUMMARY_INTERVAL_MS);
@@ -603,12 +555,6 @@ async function runSingleAgentAttempt(
 		if (tmpPromptDir)
 			try {
 				fs.rmdirSync(tmpPromptDir);
-			} catch {
-				/* ignore */
-			}
-		if (tmpChildAgentDir)
-			try {
-				await fs.promises.rm(tmpChildAgentDir, { recursive: true, force: true });
 			} catch {
 				/* ignore */
 			}
