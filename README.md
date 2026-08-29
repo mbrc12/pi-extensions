@@ -112,6 +112,12 @@ Progress summaries: a secondary model (GPT-5.4-mini by default) is called every 
 
 Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
 
+### `tool-summary`
+
+Shows one compact, muted line after each completed tool result: `Tool: <summary>`. The italic summary combines the broader objective, current progress, and important tool result.
+
+The extension immediately reserves the correct transcript position with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Toggle them for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
+
 ### `todo-list`
 
 A simplified plan-mode todo list the model can't ignore. Registers a `todo` tool (list/add/complete/clear) plus a `/todo-clear` command.
@@ -149,6 +155,7 @@ Centralized model configuration used by multiple extensions. It defines fallback
 | Config key | Used by | Model selection |
 |---|---|---|
 | `recapGeneration` | `recap` | Scoped model fallback list in `model-config.json` |
+| `toolSummaryGeneration` | `tool-summary` | Scoped model fallback list in `model-config.json` |
 | `subagentModels` | `subagent` | `low`, `medium`, and `high` cyclic model lists, plus an image-only `image` list |
 | `subagentProgressSummary` | `subagent` | Scoped model fallback list in `model-config.json` |
 | `webSummarization` | `web-use` | Scoped model fallback list in `model-config.json` |

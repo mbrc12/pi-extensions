@@ -1,10 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { complete } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, type Model } from "@earendil-works/pi-coding-agent";
+import type { Model as PiModel } from "@earendil-works/pi-ai/compat";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+
+type Model = PiModel<any>;
 
 export type ModelConfigPurpose =
   | "recapGeneration"
+  | "toolSummaryGeneration"
   | "subagentProgressSummary"
   | "webSummarization"
   | "permissionClassification"
@@ -25,6 +28,15 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   recapGeneration: [
     // DeepSeek V4 Flash has the largest Go-plan allowance and is the lowest-cost
     // model listed by OpenCode for lightweight background requests.
+    "opencode-go/deepseek-v4-flash",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.4-mini",
+    "opencode-go/mimo-v2.5",
+    "opencode-go/minimax-m2.7",
+    "opencode-go/kimi-k2.6",
+    "opencode-go/deepseek-v4-pro",
+  ],
+  toolSummaryGeneration: [
     "opencode-go/deepseek-v4-flash",
     "openai-codex/gpt-5.6-luna",
     "openai-codex/gpt-5.4-mini",
@@ -222,7 +234,7 @@ async function getConfiguredModelsWithAuth(
   for (const model of candidates) {
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok && auth.apiKey) usable.push({ model, auth });
+      if (auth.ok) usable.push({ model, auth });
     } catch {
       // An auth provider can fail independently of the model request. Try the next model.
     }
@@ -275,12 +287,7 @@ export async function completeWithModelFallback(
       throw new Error("Model request was aborted");
     }
     try {
-      const response = await complete(model, request, {
-        ...completionOptions,
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-        env: auth.env,
-      });
+      const response = await ctx.modelRegistry.complete(model, request, completionOptions);
       const failure = responseFailure(response);
       if (failure) throw failure;
       return { response, model, auth };
