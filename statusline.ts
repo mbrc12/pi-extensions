@@ -445,9 +445,8 @@ export default function (pi: ExtensionAPI) {
             ctx.modelRegistry?.isUsingOAuth?.(ctx.model)
               ? " (sub)"
               : "";
-          const costLabel = estimatedModelCost > 0 ? "est $" : "$";
           const costSeg =
-            theme.fg("dim", costLabel) +
+            theme.fg("dim", "$") +
             " " +
             theme.fg("muted", totalCost.toFixed(3) + sub) +
             theme.fg("borderMuted", " · ") +
@@ -492,13 +491,13 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: dir · ctx · tok · think
-          const line1 = [dirSeg, ctxSeg, tokSeg, thinkSeg]
+          // Line 1: dir · ctx · cost · tok · think
+          const line1 = [dirSeg, ctxSeg, costSeg, tokSeg, thinkSeg]
             .filter(Boolean)
             .join(sep);
 
-          // Line 2: model · cost · permissions · extra1 · extra2
-          const line2Core = [modelSeg, costSeg].filter(Boolean);
+          // Line 2: model · permissions · extra1 · extra2
+          const line2Core = [modelSeg].filter(Boolean);
           let line2 = line2Core.join(sep);
           if (sortedStatuses.length > 0) {
             const statusBlock = sortedStatuses.join(sep);
