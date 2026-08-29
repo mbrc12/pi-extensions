@@ -30,7 +30,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { completeWithModelFallback, getSubagentModelFallbacks } from "../shared/model-config.ts";
+import { getSubagentModelFallbacks } from "../shared/model-config.ts";
+// import { completeWithModelFallback } from "../shared/model-config.ts"; // Progress summaries are disabled.
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 
 const MAX_PARALLEL_TASKS = 16;
@@ -167,8 +168,8 @@ interface SingleResult {
 	requestedModel?: string;
 	stopReason?: string;
 	errorMessage?: string;
-	/** Periodically refreshed single-line progress report shown below the agent name. */
-	statusSummary?: string;
+	// Progress-summary storage is disabled; uncomment with the feature implementation.
+	// statusSummary?: string;
 	step?: number;
 }
 
@@ -191,6 +192,10 @@ function getFinalOutput(messages: Message[]): string {
 	return "";
 }
 
+/*
+ * Progress-summary generation is disabled. This implementation stays
+ * commented so it can be restored later with the activation and render calls.
+ *
 const PROGRESS_SUMMARY_INTERVAL_MS = 60_000;
 const SUMMARY_SOURCE_MAX_CHARS = 1_200;
 
@@ -217,7 +222,7 @@ function messageSummaryText(message: Message): string {
 }
 
 function normalizeProgressSummary(text: string): string | undefined {
-	const summary = flattenSummaryText(text.replace(/^progress\s*:\s*/i, ""));
+	const summary = flattenSummaryText(text.replace(/^progress\s*:\s{0,}/i, ""));
 	return summary ? `Progress: ${summary}` : undefined;
 }
 
@@ -268,6 +273,7 @@ async function generateProgressSummary(
 		.join(" ");
 	return normalizeProgressSummary(text);
 }
+ */
 
 function isFailedResult(result: SingleResult): boolean {
 	return result.exitCode !== 0
@@ -392,10 +398,15 @@ async function runSingleAgentAttempt(
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
+	/*
+	 * Progress summaries are disabled. Keep this implementation available so it
+	 * can be restored together with the commented activation and render calls.
+	 *
 	let progressSummaryTimer: ReturnType<typeof setInterval> | undefined;
 	let progressSummaryInFlight = false;
 	let initialSummaryRequested = false;
 	let childFinished = false;
+	 */
 
 	const currentResult: SingleResult = {
 		agent: agentName,
@@ -418,6 +429,7 @@ async function runSingleAgentAttempt(
 		}
 	};
 
+	/*
 	const refreshProgressSummary = async () => {
 		if (progressSummaryInFlight || childFinished || signal?.aborted) return;
 		progressSummaryInFlight = true;
@@ -439,6 +451,7 @@ async function runSingleAgentAttempt(
 		initialSummaryRequested = true;
 		void refreshProgressSummary();
 	};
+	 */
 
 	try {
 		if (agent.systemPrompt.trim()) {
@@ -459,7 +472,8 @@ async function runSingleAgentAttempt(
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			let buffer = "";
-			progressSummaryTimer = setInterval(() => void refreshProgressSummary(), PROGRESS_SUMMARY_INTERVAL_MS);
+			// Progress summaries are disabled:
+			// progressSummaryTimer = setInterval(() => void refreshProgressSummary(), PROGRESS_SUMMARY_INTERVAL_MS);
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
@@ -493,13 +507,13 @@ async function runSingleAgentAttempt(
 						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
 					}
 					emitUpdate();
-					requestInitialProgressSummary();
+					// requestInitialProgressSummary();
 				}
 
 				if (event.type === "tool_result_end" && event.message) {
 					currentResult.messages.push(event.message as Message);
 					emitUpdate();
-					requestInitialProgressSummary();
+					// requestInitialProgressSummary();
 				}
 			};
 
@@ -515,15 +529,15 @@ async function runSingleAgentAttempt(
 			});
 
 			proc.on("close", (code) => {
-				childFinished = true;
-				if (progressSummaryTimer) clearInterval(progressSummaryTimer);
+				// childFinished = true;
+				// if (progressSummaryTimer) clearInterval(progressSummaryTimer);
 				if (buffer.trim()) processLine(buffer);
 				resolve(code ?? 0);
 			});
 
 			proc.on("error", () => {
-				childFinished = true;
-				if (progressSummaryTimer) clearInterval(progressSummaryTimer);
+				// childFinished = true;
+				// if (progressSummaryTimer) clearInterval(progressSummaryTimer);
 				resolve(1);
 			});
 
@@ -544,8 +558,8 @@ async function runSingleAgentAttempt(
 		if (wasAborted) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {
-		childFinished = true;
-		if (progressSummaryTimer) clearInterval(progressSummaryTimer);
+		// childFinished = true;
+		// if (progressSummaryTimer) clearInterval(progressSummaryTimer);
 		if (tmpPromptPath)
 			try {
 				fs.unlinkSync(tmpPromptPath);
@@ -923,6 +937,7 @@ export default function (pi: ExtensionAPI) {
 
 			const mdTheme = getMarkdownTheme();
 
+			/* Progress-summary rendering is disabled.
 			const renderStatusLine = (summary?: string) => {
 				if (!summary) return "";
 				return summary
@@ -936,6 +951,7 @@ export default function (pi: ExtensionAPI) {
 					})
 					.join("\n");
 			};
+			 */
 
 			const renderDisplayItems = (items: DisplayItem[], limit?: number) => {
 				const toShow = limit ? items.slice(-limit) : items;
@@ -965,7 +981,7 @@ export default function (pi: ExtensionAPI) {
 					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
-					if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
+					// if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
 					if (isError && r.errorMessage)
 						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 					container.addChild(new Spacer(1));
@@ -1001,7 +1017,7 @@ export default function (pi: ExtensionAPI) {
 
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
-				if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
+				// if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
@@ -1056,7 +1072,7 @@ export default function (pi: ExtensionAPI) {
 							),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
-						if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
+						// if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1099,7 +1115,7 @@ export default function (pi: ExtensionAPI) {
 					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
-					if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
+					// if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
@@ -1142,7 +1158,7 @@ export default function (pi: ExtensionAPI) {
 							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
-						if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
+						// if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1186,7 +1202,7 @@ export default function (pi: ExtensionAPI) {
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
-					if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
+					// if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;

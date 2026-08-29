@@ -111,7 +111,7 @@ The `agentScope` param controls where agents are loaded from:
 
 Project-local agents require user confirmation by default (`confirmProjectAgents`). Subagent tool-result details include per-task usage stats (tokens, cost, turns), and the statusline aggregates subagent cost into the total.
 
-Progress summaries: a secondary model (GPT-5.4-mini by default) is called every 60s to produce a one-line "Progress: ..." status line shown under the running agent.
+Subagent progress summaries are disabled. Their generation, activation, and rendering code remains commented in `subagent/index.ts` so it can be restored later.
 
 ### `thinking-tail`
 
@@ -119,7 +119,7 @@ Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the
 
 ### `tool-summary`
 
-Shows one compact, muted line after each turn that uses tools: `Tool: <summary>`. One italic ASD-STE100 summary combines the broader objective, current progress, and collective result of every tool call in that turn.
+Shows one compact, muted line after each turn that uses tools: `Tool: <summary>`. The italic ASD-STE100 text uses as few words as possible and focuses on tool actions and key results. It keeps the conversation context in mind without summarizing overall progress.
 
 The extension immediately reserves one transcript position after the turn's tool calls with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Toggle them for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
 
@@ -162,7 +162,7 @@ Centralized model configuration used by multiple extensions. It defines fallback
 | `recapGeneration` | `recap` | Scoped model fallback list in `model-config.json` |
 | `toolSummaryGeneration` | `tool-summary` | Scoped model fallback list in `model-config.json` |
 | `subagentModels` | `subagent` | `low`, `medium`, and `high` cyclic model lists, plus an image-only `image` list |
-| `subagentProgressSummary` | `subagent` | Scoped model fallback list in `model-config.json` |
+| `subagentProgressSummary` | `subagent` | Reserved fallback list for the currently disabled progress-summary code |
 | `webSummarization` | `web-use` | Scoped model fallback list in `model-config.json` |
 | `permissionClassification` | `permissions` | Scoped model fallback list in `model-config.json` |
 | `pythonWriteClassification` | `py-explore` | Scoped model fallback list in `model-config.json` |
