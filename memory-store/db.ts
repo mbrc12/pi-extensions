@@ -34,6 +34,14 @@ export interface AddResult {
   id?: number;
 }
 
+export interface MemoryEvent {
+  id: number;
+  occurred_at: string;
+  kind: string;
+  outcome: string;
+  detail: string;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS memories (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,6 +72,14 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
   INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.id, old.content);
   INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
 END;
+
+CREATE TABLE IF NOT EXISTS memory_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  outcome     TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT ''
+);
 `;
 
 export class MemoryDb {
@@ -162,22 +178,45 @@ export class MemoryDb {
       .all() as unknown as MemoryBlurb[];
   }
 
-  stats(): { total: number; by_category: Record<string, number> } {
+  stats(): { total: number; by_category: Record<string, number>; by_source: Record<string, number>; events: Record<string, number> } {
     const total = (this.db.prepare("SELECT COUNT(*) AS c FROM memories").get() as { c: number }).c;
-    const rows = this.db
+    const categoryRows = this.db
       .prepare("SELECT category, COUNT(*) AS c FROM memories GROUP BY category")
       .all() as { category: string; c: number }[];
+    const sourceRows = this.db
+      .prepare("SELECT source, COUNT(*) AS c FROM memories GROUP BY source")
+      .all() as { source: string; c: number }[];
+    const eventRows = this.db
+      .prepare("SELECT kind || ':' || outcome AS key, COUNT(*) AS c FROM memory_events GROUP BY kind, outcome")
+      .all() as { key: string; c: number }[];
     const by_category: Record<string, number> = {};
-    for (const row of rows) by_category[row.category] = row.c;
-    return { total, by_category };
+    const by_source: Record<string, number> = {};
+    const events: Record<string, number> = {};
+    for (const row of categoryRows) by_category[row.category] = row.c;
+    for (const row of sourceRows) by_source[row.source] = row.c;
+    for (const row of eventRows) events[row.key] = row.c;
+    return { total, by_category, by_source, events };
+  }
+
+  /** Record a compact outcome for background review, flush, or retrieval. */
+  recordEvent(kind: string, outcome: string, detail = ""): void {
+    this.db
+      .prepare("INSERT INTO memory_events (occurred_at, kind, outcome, detail) VALUES (?, ?, ?, ?)")
+      .run(new Date().toISOString(), kind, outcome, detail.slice(0, 500));
+  }
+
+  listEvents(limit = 10): MemoryEvent[] {
+    return this.db
+      .prepare("SELECT * FROM memory_events ORDER BY id DESC LIMIT ?")
+      .all(Math.min(Math.max(Math.floor(limit), 1), 100)) as unknown as MemoryEvent[];
   }
 
   /**
    * FTS5 keyword search. Returns up to `limit` candidates ordered by BM25.
-   * Escapes user input so it is treated as plain terms, not FTS query syntax.
+   * The broad OR query maximizes recall for the LLM reranker.
    */
   searchCandidates(query: string, limit: number): MemoryBlurb[] {
-    const matchExpr = this.buildMatchExpression(query);
+    const matchExpr = this.buildMatchExpression(query, "OR");
     if (!matchExpr) return [];
     try {
       const rows = this.db
@@ -193,6 +232,30 @@ export class MemoryDb {
       return rows;
     } catch {
       // A malformed MATCH expression must never break a search — return nothing.
+      return [];
+    }
+  }
+
+  /**
+   * Conservative FTS fallback: all query tokens must occur in a blurb.
+   * Used only if reranking is unavailable, so a provider failure cannot inject
+   * weak OR matches into the conversation.
+   */
+  searchStrictCandidates(query: string, limit: number): MemoryBlurb[] {
+    const matchExpr = this.buildMatchExpression(query, "AND");
+    if (!matchExpr) return [];
+    try {
+      return this.db
+        .prepare(
+          `SELECT m.id, m.content, m.category, m.created_at, m.last_used_at, m.source,
+                  bm25(memories_fts) AS rank
+           FROM memories_fts JOIN memories m ON m.id = memories_fts.rowid
+           WHERE memories_fts MATCH ?
+           ORDER BY rank
+           LIMIT ?`,
+        )
+        .all(matchExpr, limit) as unknown as MemoryBlurb[];
+    } catch {
       return [];
     }
   }
@@ -230,12 +293,12 @@ export class MemoryDb {
    * relevant blurbs whenever the query uses a synonym the entry lacks
    * (e.g. "drinks" vs "coffee"), which is exactly the case rerank exists for.
    */
-  private buildMatchExpression(query: string): string {
+  private buildMatchExpression(query: string, operator: "OR" | "AND"): string {
     const tokens = query
       .split(/\s+/)
       .map((t) => t.trim().replace(/"/g, ""))
       .filter((t) => t.length > 0);
     if (tokens.length === 0) return "";
-    return tokens.map((t) => `"${t}"`).join(" OR ");
+    return tokens.map((t) => `"${t}"`).join(` ${operator} `);
   }
 }

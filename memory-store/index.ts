@@ -15,7 +15,7 @@
  *   session_shutdown    — flush + DB close
  *
  * Tools:  memory_search, memory_add, memory_remove, memory_update
- * Commands: /memory-search, /memory-list, /memory-stats
+ * Commands: /memory-search, /memory-list, /memory-stats, /memory-health
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -149,17 +149,23 @@ export default function (pi: ExtensionAPI) {
         signal: ctx.signal,
       });
       if (result.ok && result.value) {
-        const { applied, errors } = applyPlan(result.value.operations);
+        const { applied, skipped, errors } = applyPlan(result.value.operations);
+        const outcome = `${applied > 0 ? "updated" : "no_change"}${result.fallbackModelUsed ? "_fallback_model" : ""}`;
+        db.recordEvent("review", outcome, `${applied} applied, ${skipped} skipped${result.modelReference ? `; ${result.modelReference}` : ""}`);
         if (applied > 0) {
           ctx.ui.notify("💾 Memory auto-reviewed and updated", "info");
         }
         for (const error of errors.slice(0, 2)) {
           console.warn(`[memory-store] review: ${error}`);
         }
-      } else if (result.fallbackReason === "provider_error") {
-        console.warn(`[memory-store] review failed: ${result.error ?? "provider error"}`);
+      } else {
+        db.recordEvent("review", "failed", result.error ?? result.fallbackReason ?? "unknown");
+        if (result.fallbackReason === "provider_error") {
+          console.warn(`[memory-store] review failed: ${result.error ?? "provider error"}`);
+        }
       }
     } catch (error) {
+      db.recordEvent("review", "failed", "exception");
       console.warn(`[memory-store] review threw: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       reviewInProgress = false;
@@ -191,9 +197,14 @@ export default function (pi: ExtensionAPI) {
         signal,
       });
       if (result.ok && result.value) {
-        applyPlan(result.value.operations);
+        const { applied, skipped } = applyPlan(result.value.operations);
+        const outcome = `${applied > 0 ? "updated" : "no_change"}${result.fallbackModelUsed ? "_fallback_model" : ""}`;
+        db.recordEvent("flush", outcome, `${applied} applied, ${skipped} skipped${result.modelReference ? `; ${result.modelReference}` : ""}`);
+      } else {
+        db.recordEvent("flush", "failed", result.error ?? result.fallbackReason ?? "unknown");
       }
     } catch {
+      db.recordEvent("flush", "failed", "exception");
       // Best-effort flush — never block shutdown.
     }
   }
@@ -312,9 +323,11 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // LLM rerank: ids only (minimal output tokens). On any failure, fall
-      // back to the FTS5 order — search must never break because of the model.
+      // The broad OR search is a recall gate. The reranker must explicitly
+      // approve results; if it is unavailable, use only all-token FTS matches.
+      // This avoids injecting unrelated memories after a provider failure.
       let rankedIds: number[] | null = null;
+      let retrievalMode = "reranked";
       try {
         const rerank = await llm.rerank(
           ctx,
@@ -324,17 +337,26 @@ export default function (pi: ExtensionAPI) {
           limit,
           ctx.signal,
         );
-        if (rerank.ok && rerank.value) rankedIds = rerank.value;
+        if (rerank.ok && rerank.value) {
+          rankedIds = rerank.value;
+          if (rerank.fallbackModelUsed) {
+            retrievalMode = `reranked_fallback:${rerank.modelReference ?? "unknown"}`;
+            db.recordEvent("rerank", "fallback_model", rerank.modelReference ?? "unknown");
+          }
+        } else {
+          retrievalMode = `strict_fallback:${rerank.fallbackReason ?? "unknown"}`;
+          db.recordEvent("rerank", "fallback", rerank.error ?? rerank.fallbackReason ?? "unknown");
+        }
       } catch {
-        // fall back to FTS5 order
+        retrievalMode = "strict_fallback:exception";
+        db.recordEvent("rerank", "fallback", "exception");
       }
 
       const byId = new Map(candidates.map((c) => [c.id, c]));
-      const ordered = rankedIds
+      const ordered = rankedIds !== null
         ? rankedIds.map((id) => byId.get(id)).filter((c): c is MemoryBlurb => !!c)
-        : candidates.slice(0, limit);
+        : db.searchStrictCandidates(query, limit);
 
-      // Keep only ranked ones that were actually in the candidate pool.
       const results = ordered.slice(0, limit);
       db.touch(results.map((r) => r.id));
 
@@ -347,6 +369,7 @@ export default function (pi: ExtensionAPI) {
         details: {
           query,
           count: results.length,
+          retrieval_mode: retrievalMode,
           results: results.map((r) => ({
             id: r.id,
             content: r.content,
@@ -501,7 +524,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const candidates = db.searchCandidates(query, config.rerankCandidates);
-      let results = candidates;
+      let results: MemoryBlurb[] = db.searchStrictCandidates(query, config.searchLimit);
       if (candidates.length > 0) {
         try {
           const rerank = await llm.rerank(
@@ -514,9 +537,14 @@ export default function (pi: ExtensionAPI) {
           if (rerank.ok && rerank.value) {
             const byId = new Map(candidates.map((c) => [c.id, c]));
             results = rerank.value.map((id) => byId.get(id)).filter((c): c is MemoryBlurb => !!c);
+            if (rerank.fallbackModelUsed) {
+              db.recordEvent("rerank", "fallback_model", rerank.modelReference ?? "unknown");
+            }
+          } else {
+            db.recordEvent("rerank", "fallback", rerank.error ?? rerank.fallbackReason ?? "unknown");
           }
         } catch {
-          // fall back to FTS5 order
+          db.recordEvent("rerank", "fallback", "exception");
         }
       }
       db.touch(results.slice(0, config.searchLimit).map((r) => r.id));
@@ -547,8 +575,27 @@ export default function (pi: ExtensionAPI) {
       const stats = db.stats();
       const body = [
         `Total blurbs: ${stats.total}`,
+        "By category:",
         ...Object.entries(stats.by_category).map(([cat, count]) => `  ${cat}: ${count}`),
+        "By source:",
+        ...Object.entries(stats.by_source).map(([source, count]) => `  ${source}: ${count}`),
+        "Automation events:",
+        ...(Object.keys(stats.events).length > 0
+          ? Object.entries(stats.events).map(([event, count]) => `  ${event}: ${count}`)
+          : ["  none yet"]),
       ].join("\n");
+      if (ctx.ui?.notify) ctx.ui.notify(body, "info");
+      else console.log(body);
+    },
+  });
+
+  pi.registerCommand("memory-health", {
+    description: "Show recent background-memory outcomes",
+    handler: async (_args: string | undefined, ctx: any) => {
+      const events = db.listEvents();
+      const body = events.length === 0
+        ? "No background-memory events have run yet."
+        : events.map((event) => `${event.occurred_at}  ${event.kind}: ${event.outcome}${event.detail ? ` (${event.detail})` : ""}`).join("\n");
       if (ctx.ui?.notify) ctx.ui.notify(body, "info");
       else console.log(body);
     },

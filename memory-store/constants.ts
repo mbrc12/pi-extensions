@@ -103,11 +103,15 @@ Respond with JSON only, in this exact shape:
  * reply with a JSON array of ids only, ranked best first. No prose, no
  * re-printed blurbs — that is the entire output.
  */
-export const RERANK_SYSTEM_PROMPT = `You select which memory blurbs are relevant to a search query.
+export const RERANK_SYSTEM_PROMPT = `You select memory blurbs that directly help answer a search query.
 
 You will receive:
 - The search query
 - A JSON array of candidate blurbs: [{"id": 1, "content": "..."}]
+
+Be strict: keyword overlap alone is not enough. Do not return entries merely
+because they share a generic word, a year, a model name, or a project-adjacent
+term. If the store has no direct answer, return an empty array.
 
 Return a JSON array of the ids most relevant to the query, ranked best first.
 Rules:

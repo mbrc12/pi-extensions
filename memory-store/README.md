@@ -38,7 +38,8 @@ Replaces the markdown-file + subprocess machinery of pi-hermes-memory with:
 |---|---|
 | `/memory-search <query>` | Search and show ranked blurbs in the TUI |
 | `/memory-list [category]` | List all blurbs, optionally filtered by category |
-| `/memory-stats` | Counts by category |
+| `/memory-stats` | Counts by category and source, plus automation outcomes |
+| `/memory-health` | Shows recent background-review, flush, and rerank-fallback outcomes |
 
 ## Config
 
@@ -47,6 +48,7 @@ All settings optional. Create `~/.pi/agent/memory-store/config.json`:
 ```json
 {
   "model": "opencode-go/deepseek-v4-flash",
+  "fallbackModels": ["openai-codex/gpt-5.6-luna"],
   "dbDir": "~/.pi/agent/memory-store",
   "reviewEnabled": true,
   "flushOnCompact": true,
@@ -62,8 +64,9 @@ All settings optional. Create `~/.pi/agent/memory-store/config.json`:
 ```
 
 `model` can be any model in your pi catalog (`provider/model-id`). It is used
-for background review, session flush, and rerank. Falls back to the session's
-active model if the configured one is unavailable.
+for background review, session flush, and rerank. `fallbackModels` are tried in
+order after a provider, authentication, or empty-response failure. The session's
+active model is tried last when it is different from those models.
 
 ## When memory gets written
 
@@ -90,9 +93,13 @@ All LLM flows reply with the same minimal JSON shape:
    so FTS syntax can't be injected.
 2. **LLM rerank** receives the query + candidates as JSON `{id, content}` and
    replies with a JSON array of ids only — no prose, no re-printed blurbs.
-3. **Fallback**: if the rerank call fails (no model, no auth, provider error,
-   unparseable response), search returns the FTS5 order. Search never breaks
-   because of the model.
+3. **Conservative fallback**: if reranking fails (no model, no auth, provider
+   error, or unparseable response), search returns only blurbs containing every
+   query token. It may return no result, but it never injects a weak broad-FTS
+   match after a failed rerank.
+
+The reranker is instructed to return an empty list when no blurb directly helps
+with the query. Keyword overlap alone is not enough.
 
 ## TUI behavior
 
@@ -112,6 +119,9 @@ Tool rows render compactly by default and expand on `ctrl+o` (`app.tools.expand`
 - **`last_used_at` aging.** Search hits bump the timestamp, so future pruning
   or compaction can be an ordinary SQL `DELETE`/`UPDATE` in one transaction —
   no markdown rewrite.
+- **Visible automation outcomes.** Compact audit events record whether a
+  background review or flush updated memory, found no change, or failed.
+  `/memory-health` exposes the recent events without storing conversation text.
 - **Exact-text dedup only.** Blurbs with the same text are skipped; near-
   duplicates are the model's job (review/correction prompts can emit
   `replace`).

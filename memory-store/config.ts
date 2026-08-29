@@ -4,7 +4,8 @@
  * Optional config file: ~/.pi/agent/memory-store/config.json
  *
  * {
- *   "model": "opencode-go/deepseek-v4-flash",   // LLM for review/rerank/etc.
+ *   "model": "opencode-go/deepseek-v4-flash",   // primary LLM for review/rerank/etc.
+ *   "fallbackModels": ["openai-codex/gpt-5.6-luna"], // tried after provider/auth failure
  *   "dbDir": "~/.pi/agent/memory-store",        // where memories.db lives
  *   "reviewEnabled": true,                      // background review loop
  *   "flushOnCompact": true,
@@ -37,6 +38,7 @@ import {
 
 export interface MemoryStoreConfig {
   model: string;
+  fallbackModels: string[];
   dbDir: string;
   reviewEnabled: boolean;
   flushOnCompact: boolean;
@@ -52,6 +54,7 @@ export interface MemoryStoreConfig {
 
 export const DEFAULT_CONFIG: MemoryStoreConfig = {
   model: DEFAULT_MODEL,
+  fallbackModels: [],
   dbDir: DEFAULT_DB_DIR,
   reviewEnabled: true,
   flushOnCompact: true,
@@ -104,6 +107,11 @@ export function loadConfig(configPath = resolveConfigPath()): MemoryStoreConfig 
 
     if (typeof parsed.model === "string" && parsed.model.trim()) {
       config.model = parsed.model.trim();
+    }
+    if (Array.isArray(parsed.fallbackModels)) {
+      config.fallbackModels = parsed.fallbackModels
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim());
     }
     if (typeof parsed.dbDir === "string" && parsed.dbDir.trim()) {
       config.dbDir = parsed.dbDir.trim();

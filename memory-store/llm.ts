@@ -31,6 +31,10 @@ export interface LlmResult<T> {
   ok: boolean;
   value?: T;
   error?: string;
+  /** Model that produced a successful response, when available. */
+  modelReference?: string;
+  /** True when a configured fallback or the session model handled the call. */
+  fallbackModelUsed?: boolean;
   /** Reason the call failed or produced nothing (for diagnostics/fallback). */
   fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty";
 }
@@ -67,17 +71,37 @@ function findExactModelReferenceMatch(modelReference: string, availableModels: M
   return idMatches.length === 1 ? idMatches[0] : undefined;
 }
 
-/** Resolve the configured model, falling back to the session's active model. */
-function resolveModel(
+interface ResolvedModel {
+  model: Model<Api>;
+  isFallback: boolean;
+}
+
+/** Resolve the primary, configured fallback, and session models in priority order. */
+function resolveModels(
   ctxModel: Model<Api> | undefined,
   modelRegistry: ModelRegistry,
   config: MemoryStoreConfig,
-): Model<Api> | undefined {
-  if (config.model?.trim()) {
-    const matched = findExactModelReferenceMatch(config.model, modelRegistry.getAll());
-    if (matched) return matched;
+): ResolvedModel[] {
+  const available = modelRegistry.getAll();
+  const references = [config.model, ...config.fallbackModels];
+  const resolved: ResolvedModel[] = [];
+  const seen = new Set<string>();
+
+  for (const [referenceIndex, reference] of references.entries()) {
+    const model = findExactModelReferenceMatch(reference, available);
+    if (!model) continue;
+    const key = `${model.provider}/${model.id}`.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      resolved.push({ model, isFallback: referenceIndex > 0 });
+    }
   }
-  return ctxModel;
+
+  if (ctxModel) {
+    const key = `${ctxModel.provider}/${ctxModel.id}`.toLowerCase();
+    if (!seen.has(key)) resolved.push({ model: ctxModel, isFallback: true });
+  }
+  return resolved;
 }
 
 async function resolveAuth(modelRegistry: ModelRegistry, model: Model<Api>): Promise<
@@ -109,13 +133,8 @@ async function completeOnce(
   config: MemoryStoreConfig,
   options: CompleteOptions,
 ): Promise<LlmResult<string>> {
-  const model = resolveModel(ctx.model, ctx.modelRegistry, config);
-  if (!model) return { ok: false, fallbackReason: "no_model", error: "No model available for memory calls" };
-
-  const auth = await resolveAuth(ctx.modelRegistry, model);
-  if (!auth.ok) {
-    return { ok: false, fallbackReason: "no_auth", error: auth.error };
-  }
+  const models = resolveModels(ctx.model, ctx.modelRegistry, config);
+  if (models.length === 0) return { ok: false, fallbackReason: "no_model", error: "No model available for memory calls" };
 
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 120_000;
@@ -131,34 +150,60 @@ async function completeOnce(
   };
 
   try {
-    const response = await completeSimple(
-      model,
-      { systemPrompt: options.systemPrompt, messages: [userMessage] },
-      {
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-        env: auth.env,
-        signal: controller.signal,
-        ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
-      },
-    );
+    let lastFailure: LlmResult<string> | undefined;
+    for (const { model, isFallback } of models) {
+      const auth = await resolveAuth(ctx.modelRegistry, model);
+      if (!auth.ok) {
+        lastFailure = { ok: false, fallbackReason: "no_auth", error: auth.error };
+        continue;
+      }
 
-    if (response.stopReason === "aborted") {
-      return { ok: false, fallbackReason: "aborted", error: "Model call aborted" };
-    }
+      try {
+        const response = await completeSimple(
+          model,
+          { systemPrompt: options.systemPrompt, messages: [userMessage] },
+          {
+            apiKey: auth.apiKey,
+            headers: auth.headers,
+            env: auth.env,
+            signal: controller.signal,
+            // Rerank/review prompts need structured text, not model reasoning.
+            reasoning: "off",
+            ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
+          },
+        );
 
-    const text = extractText(response.content);
-    if (!text?.trim()) return { ok: false, fallbackReason: "empty", error: "Empty model response" };
-    return { ok: true, value: text };
-  } catch (error) {
-    if (controller.signal.aborted) {
-      return { ok: false, fallbackReason: "aborted", error: "Model call aborted" };
+        if (response.stopReason === "aborted") {
+          return { ok: false, fallbackReason: "aborted", error: "Model call aborted" };
+        }
+
+        const text = extractText(response.content);
+        if (!text?.trim()) {
+          lastFailure = {
+            ok: false,
+            fallbackReason: "empty",
+            error: `Empty model response from ${model.provider}/${model.id} (stop reason: ${response.stopReason})`,
+          };
+          continue;
+        }
+        return {
+          ok: true,
+          value: text,
+          modelReference: `${model.provider}/${model.id}`,
+          fallbackModelUsed: isFallback,
+        };
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return { ok: false, fallbackReason: "aborted", error: "Model call aborted" };
+        }
+        lastFailure = {
+          ok: false,
+          fallbackReason: "provider_error",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     }
-    return {
-      ok: false,
-      fallbackReason: "provider_error",
-      error: error instanceof Error ? error.message : String(error),
-    };
+    return lastFailure ?? { ok: false, fallbackReason: "no_model", error: "No usable model available for memory calls" };
   } finally {
     clearTimeout(timeout);
   }
@@ -291,11 +336,22 @@ export function createLlm(): LlmOps {
       if (plan === null) {
         return { ok: false, fallbackReason: "parse_error", error: "Model response was not a valid operations plan" };
       }
-      return { ok: true, value: plan };
+      return {
+        ok: true,
+        value: plan,
+        modelReference: result.modelReference,
+        fallbackModelUsed: result.fallbackModelUsed,
+      };
     },
 
     async rerank(ctx, config, query, candidates, maxResults, signal) {
-      const systemPrompt = `You select which memory blurbs are relevant to a search query.
+      const systemPrompt = `You select memory blurbs that directly help answer a search query.
+
+Be strict: keyword overlap alone is not enough. A blurb is relevant only when it
+contains a durable fact, preference, convention, or environment detail that the
+agent could use to answer or act on this query. Do not return entries merely
+because they share a generic word, a year, a model name, or a project-adjacent
+term. If the store has no direct answer, return an empty array.
 
 Return a JSON array of the ids most relevant to the query, ranked best first.
 Rules:
@@ -316,7 +372,9 @@ Rules:
         userPrompt,
         timeoutMs: 30_000,
         signal,
-        maxTokens: 128,
+        // Reasoning models may use the first tokens before emitting the tiny
+        // JSON array. Leave enough room for both reasoning and the result.
+        maxTokens: 512,
       });
       if (!result.ok || result.value === undefined) return result as LlmResult<number[]>;
 
@@ -328,7 +386,12 @@ Rules:
       const ids = array
         .filter((v): v is number => typeof v === "number" && Number.isInteger(v))
         .slice(0, maxResults);
-      return { ok: true, value: ids };
+      return {
+        ok: true,
+        value: ids,
+        modelReference: result.modelReference,
+        fallbackModelUsed: result.fallbackModelUsed,
+      };
     },
   };
 }
