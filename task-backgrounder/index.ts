@@ -606,6 +606,11 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 			"task_clear skips running tasks unless include_running:true is explicitly requested.",
 		],
 		parameters: TaskClearParams,
+		// Cleanup is internal bookkeeping. Keep its tool row out of the transcript.
+		// The result still goes to the model, and `/task-clear` remains user-facing.
+		renderShell: "self",
+		renderCall: () => new Container(),
+		renderResult: () => new Container(),
 		async execute(_toolCallId, params) {
 			const result = await clearTrackedTasks(
 				pi,

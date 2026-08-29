@@ -48,7 +48,7 @@ If `task_status` is called with no `name` and multiple tasks exist, it prompts t
 
 The task status tool result shows the task name and status by default. Press `Ctrl+O` to show the requested output tail.
 
-After a task reaches a final state (`exited` or `error`), a hidden follow-up nudge is sent once to the model so it can call `task_clear` once the output is no longer needed.
+After a task reaches a final state (`exited` or `error`), a hidden follow-up nudge is sent once to the model so it can call `task_clear` once the output is no longer needed. The cleanup tool call and result are also hidden from the TUI transcript.
 
 The user can type:
 
