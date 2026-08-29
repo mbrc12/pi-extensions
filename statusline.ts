@@ -1,12 +1,10 @@
 /**
  * Custom Statusline Extension
  *
- * Replaces the default footer with a clean, two-line statusline:
- *   Line 1: cwd (git branch) · ctx · cost · provider limits · think:emoji
- *   Line 2: provider/model think:level · extension statuses
- *
- * The thinking-tail extension pushes a think:
- *   🤐 collapsed, 😮 expanded. It is surfaced on row 1 here.
+ * Replaces the default footer with a clean, three-line statusline:
+ *   Line 1: cwd (git branch) · ctx · cumulative token I/O · subagent time
+ *   Line 2: provider/model think:level · cost · provider limits
+ *   Line 3: extension statuses such as permissions, todo, and thinking-tail.
  *
  * Toggle with /statusline
  */
@@ -17,10 +15,6 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
-
-// Status key shared with the thinking-tail extension. Its value is rendered
-// on row 1 of this statusline (excluded from the row-2 status block).
-const THINK_STATUS_KEY = "thinking";
 
 const INR_RATE_URL = "https://open.er-api.com/v6/latest/USD";
 const INR_RATE_REFRESH_MS = 6 * 60 * 60 * 1_000;
@@ -133,6 +127,17 @@ function fmt(n: number): string {
   if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
   if (n < 10_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   return `${Math.round(n / 1_000_000)}M`;
+}
+
+function formatDuration(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (totalMinutes < 60) return `${totalMinutes}m${seconds.toString().padStart(2, "0")}s`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h${minutes.toString().padStart(2, "0")}m${seconds.toString().padStart(2, "0")}s`;
 }
 
 function formatInr(value: number): string {
@@ -323,6 +328,58 @@ function subagentCostFromToolResult(message: unknown): number {
 export default function (pi: ExtensionAPI) {
   let currentThinkingLevel = "off";
   let enabled = true;
+  let rupeesEnabled = false;
+  const activeSubagents = new Map<string, number>();
+  let subagentStartedAt: number | undefined;
+  let lastSubagentDurationMs: number | undefined;
+  let subagentTicker: ReturnType<typeof setInterval> | undefined;
+  let requestFooterRender: (() => void) | undefined;
+
+  function stopSubagentTicker(): void {
+    if (subagentTicker) clearInterval(subagentTicker);
+    subagentTicker = undefined;
+  }
+
+  function ensureSubagentTicker(): void {
+    if (!enabled || !requestFooterRender || subagentStartedAt === undefined || subagentTicker) return;
+    subagentTicker = setInterval(() => requestFooterRender?.(), 1_000);
+  }
+
+  function selectLatestRunningSubagent(): void {
+    subagentStartedAt = [...activeSubagents.values()].at(-1);
+  }
+
+  function resetSubagentTime(): void {
+    activeSubagents.clear();
+    subagentStartedAt = undefined;
+    lastSubagentDurationMs = undefined;
+    stopSubagentTicker();
+  }
+
+  // Restart the displayed timer whenever a new subagent tool starts. When
+  // calls overlap, display the most recently started call that is still active.
+  pi.on("tool_execution_start", (event) => {
+    if (event.toolName !== "subagent") return;
+    const startedAt = Date.now();
+    activeSubagents.delete(event.toolCallId);
+    activeSubagents.set(event.toolCallId, startedAt);
+    subagentStartedAt = startedAt;
+    lastSubagentDurationMs = 0;
+    stopSubagentTicker();
+    ensureSubagentTicker();
+    requestFooterRender?.();
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    if (event.toolName !== "subagent") return;
+    const startedAt = activeSubagents.get(event.toolCallId);
+    if (startedAt === undefined) return;
+    lastSubagentDurationMs = Math.max(0, Date.now() - startedAt);
+    activeSubagents.delete(event.toolCallId);
+    selectLatestRunningSubagent();
+    if (activeSubagents.size === 0) stopSubagentTicker();
+    requestFooterRender?.();
+  });
 
   // ---- track thinking level changes ----
   pi.on("thinking_level_select", (event) => {
@@ -332,7 +389,36 @@ export default function (pi: ExtensionAPI) {
   // ---- enable custom footer on every session start ----
   pi.on("session_start", (_event, ctx) => {
     currentThinkingLevel = pi.getThinkingLevel();
+    resetSubagentTime();
     if (enabled) installFooter(ctx);
+  });
+
+  pi.on("session_shutdown", () => {
+    resetSubagentTime();
+    requestFooterRender = undefined;
+  });
+
+  pi.registerCommand("rupees", {
+    description: "Use INR or USD for costs with /rupees on|off",
+    getArgumentCompletions: (prefix) => {
+      const options = [
+        { value: "on", label: "on", description: "Show costs in INR" },
+        { value: "off", label: "off", description: "Show costs in USD" },
+      ];
+      const normalized = prefix.trim().toLowerCase();
+      return options.filter((option) => option.value.startsWith(normalized));
+    },
+    handler: async (args, ctx) => {
+      const choice = args.trim().toLowerCase();
+      if (choice !== "on" && choice !== "off") {
+        ctx.ui.notify("Usage: /rupees on|off", "warning");
+        return;
+      }
+      rupeesEnabled = choice === "on";
+      if (rupeesEnabled) refreshInrRate(() => requestFooterRender?.());
+      requestFooterRender?.();
+      ctx.ui.notify(`Cost currency set to ${rupeesEnabled ? "INR" : "USD"}`, "info");
+    },
   });
 
   // ---- toggle command ----
@@ -342,8 +428,10 @@ export default function (pi: ExtensionAPI) {
       enabled = !enabled;
       if (enabled) {
         installFooter(ctx);
+        ensureSubagentTicker();
         ctx.ui.notify("Custom statusline enabled", "info");
       } else {
+        stopSubagentTicker();
         ctx.ui.setFooter(undefined);
         ctx.ui.notify("Default footer restored", "info");
       }
@@ -353,17 +441,26 @@ export default function (pi: ExtensionAPI) {
   // ---- install the custom footer component ----
   function installFooter(ctx: any) {
     ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
-      // Re-render on git branch changes
-      const unsub = footerData.onBranchChange(() => tui.requestRender());
+      // Re-render on git branch changes and once per second while a subagent runs.
+      const renderFooter = () => tui.requestRender();
+      requestFooterRender = renderFooter;
+      ensureSubagentTicker();
+      const unsub = footerData.onBranchChange(renderFooter);
 
       return {
-        dispose: unsub,
+        dispose() {
+          unsub();
+          stopSubagentTicker();
+          if (requestFooterRender === renderFooter) requestFooterRender = undefined;
+        },
         invalidate() {},
 
         render(width: number): string[] {
-          refreshInrRate(() => tui.requestRender());
+          if (rupeesEnabled) refreshInrRate(() => tui.requestRender());
 
-          // ----- cumulative cost stats -----
+          // ----- cumulative token and cost stats -----
+          let totalInput = 0;
+          let totalOutput = 0;
           let baseCost = 0;
           let estimatedModelCost = 0;
           let subagentCost = 0;
@@ -372,6 +469,8 @@ export default function (pi: ExtensionAPI) {
             if (entry.type !== "message") continue;
             if (entry.message.role === "assistant") {
               const m = entry.message as AssistantMessage;
+              totalInput += finiteNumber(m.usage.input);
+              totalOutput += finiteNumber(m.usage.output);
               const recordedCost = finiteNumber(m.usage.cost?.total);
               baseCost += recordedCost;
               // Only estimate a price when the response did not record one;
@@ -438,45 +537,45 @@ export default function (pi: ExtensionAPI) {
 
           const ctxSeg = theme.fg("dim", "ctx") + " " + ctxColored;
 
+          let tokSeg = "";
+          if (totalInput > 0 || totalOutput > 0) {
+            const io = `↑${fmt(totalInput)} ↓${fmt(totalOutput)}`;
+            tokSeg = theme.fg("dim", "tok") + " " + theme.fg("muted", io);
+          }
+
+          let subagentTimeSeg = "";
+          const subagentDuration = subagentStartedAt !== undefined
+            ? Date.now() - subagentStartedAt
+            : lastSubagentDurationMs;
+          if (subagentDuration !== undefined) {
+            const value = formatDuration(subagentDuration);
+            subagentTimeSeg = theme.fg("dim", "sub") + " " + theme.fg(
+              subagentStartedAt !== undefined ? "accent" : "muted",
+              value,
+            );
+          }
+
           const sub =
             ctx.model &&
             ctx.modelRegistry?.isUsingOAuth?.(ctx.model)
               ? " (sub)"
               : "";
+          const costSymbol = rupeesEnabled ? "₹" : "$";
+          const costValue = rupeesEnabled
+            ? formatInr(totalCost * inrPerUsd)
+            : totalCost.toFixed(3);
           const costSeg =
-            theme.fg("dim", "$") +
+            theme.fg("dim", costSymbol) +
             " " +
-            theme.fg("muted", totalCost.toFixed(3) + sub) +
-            theme.fg("borderMuted", " · ") +
-            theme.fg("dim", "₹") +
-            " " +
-            theme.fg("muted", formatInr(totalCost * inrPerUsd));
+            theme.fg("muted", costValue + sub);
 
-          // Provider limits go on line 1 beside cost. Other extension
-          // statuses stay on line 2 after the model.
           const statuses: ReadonlyMap<string, string> =
             footerData.getExtensionStatuses();
-
-          // The thinking-tail "think: <emoji>" status goes on row 1, so pull
-          // it out and exclude it from the row-2 status block.
           const providerStatusText = statuses.get("provider-status");
           const limitsSeg = providerStatusText ? sanitize(providerStatusText) : "";
 
-          const thinkStatusText = statuses.get(THINK_STATUS_KEY);
-          let thinkSeg = "";
-          if (thinkStatusText) {
-            const clean = sanitize(thinkStatusText);
-            const m = clean.match(/^(think:)\s+(.+)$/);
-            if (m) {
-              thinkSeg =
-                theme.fg("dim", m[1]!) + " " + theme.fg("accent", m[2]!);
-            } else {
-              thinkSeg = theme.fg("accent", clean);
-            }
-          }
-
           const sortedStatuses = Array.from(statuses.entries())
-            .filter(([key]) => key !== THINK_STATUS_KEY && key !== "provider-status")
+            .filter(([key]) => key !== "provider-status")
             .sort(([a], [b]) => {
               if (a === "permissions") return -1;
               if (b === "permissions") return 1;
@@ -485,24 +584,26 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: dir · ctx · cost · limits · think
-          const line1 = [dirSeg, ctxSeg, costSeg, limitsSeg, thinkSeg]
+          // Line 1: cwd · ctx · cumulative token I/O · current/last subagent time
+          const line1 = [dirSeg, ctxSeg, tokSeg, subagentTimeSeg]
             .filter(Boolean)
             .join(sep);
 
-          // Line 2: provider/model · permissions · extra1 · extra2
-          const line2Core = [modelSeg].filter(Boolean);
-          let line2 = line2Core.join(sep);
-          if (sortedStatuses.length > 0) {
-            const statusBlock = sortedStatuses.join(sep);
-            line2 = line2
-              ? line2 + sep + statusBlock
-              : statusBlock;
-          }
+          // Line 2: provider/model spec · cost · provider limits
+          const line2 = [modelSeg, costSeg, limitsSeg]
+            .filter(Boolean)
+            .join(sep);
+
+          // Line 3 is reserved for statuses supplied by other extensions.
+          const externalStatusPrefix = theme.fg("dim", "🧩:");
+          const line3 = sortedStatuses.length > 0
+            ? externalStatusPrefix + " " + sortedStatuses.join(sep)
+            : externalStatusPrefix;
 
           return [
             truncateToWidth(line1, width, theme.fg("dim", "…")),
             truncateToWidth(line2, width, theme.fg("dim", "…")),
+            truncateToWidth(line3, width, theme.fg("dim", "…")),
           ];
         },
       };

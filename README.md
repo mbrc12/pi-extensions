@@ -65,10 +65,15 @@ Toggle with `/permissions allow|classify|ask` or `F8`.
 
 ### `statusline`
 
-Replaces the default footer with a compact two-line statusline:
+Replaces the default footer with a compact three-line statusline:
 
-- Line 1: cwd (with git branch) · context · cost · provider limits
-- Line 2: provider/model · thinking · permissions and other extension statuses
+- Line 1: cwd (with git branch) · context · cumulative token input/output · current or last subagent time
+- Line 2: provider/model · thinking level · cost · provider limits
+- Line 3: `🧩:` followed by statuses supplied by other extensions, such as permissions, todo, and thinking-tail
+
+The `sub` timer on line 1 restarts at `0s` for each new subagent tool call. It updates once per second while a subagent runs, then keeps the duration of the last completed subagent.
+
+Costs use US dollars by default. Use `/rupees on` to replace the USD cost with INR and `/rupees off` to switch back to USD.
 
 Toggle with `/statusline`.
 
@@ -114,9 +119,9 @@ Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the
 
 ### `tool-summary`
 
-Shows one compact, muted line after each completed tool result: `Tool: <summary>`. The italic summary combines the broader objective, current progress, and important tool result.
+Shows one compact, muted line after each turn that uses tools: `Tool: <summary>`. One italic ASD-STE100 summary combines the broader objective, current progress, and collective result of every tool call in that turn.
 
-The extension immediately reserves the correct transcript position with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Toggle them for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
+The extension immediately reserves one transcript position after the turn's tool calls with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Toggle them for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
 
 ### `todo-list`
 
