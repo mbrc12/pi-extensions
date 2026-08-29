@@ -30,7 +30,7 @@ Sends a desktop notification (via terminal bell + OSC sequences / Windows toast)
 
 ### `provider-status`
 
-Adds provider-specific limits to the statusline. The first adapter supports `openai-codex` and numbered aliases such as `openai-codex-2`: it fetches the account's available 5-hour and 7-day windows, shows the remaining percentage and reset countdown, refreshes usage every five minutes, and updates countdowns every minute. Run `/provider-status` to force a refresh and see both used and remaining percentages.
+Adds provider-specific limits to the statusline. The first adapter supports `openai-codex` and numbered aliases such as `openai-codex-2`: it shows each available 5-hour or 7-day window as its remaining percentage and reset countdown. Usage refreshes every five minutes, while countdowns update every minute. Run `/provider-status` to force a detailed refresh.
 
 ### `py-explore`
 
@@ -67,8 +67,8 @@ Toggle with `/permissions allow|classify|ask` or `F8`.
 
 Replaces the default footer with a compact two-line statusline:
 
-- Line 1: cwd (with git branch) · context · cost · token I/O
-- Line 2: provider/model · thinking · extension statuses (provider limits first, then permissions and other items)
+- Line 1: cwd (with git branch) · context · cost · provider limits
+- Line 2: provider/model · thinking · permissions and other extension statuses
 
 Toggle with `/statusline`.
 

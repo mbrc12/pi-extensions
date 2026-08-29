@@ -2,8 +2,8 @@
  * Custom Statusline Extension
  *
  * Replaces the default footer with a clean, two-line statusline:
- *   Line 1: cwd (git branch) · ctx · tok · think:emoji
- *   Line 2: provider/model think:level · cost · extension statuses
+ *   Line 1: cwd (git branch) · ctx · cost · provider limits · think:emoji
+ *   Line 2: provider/model think:level · extension statuses
  *
  * The thinking-tail extension pushes a think:
  *   🤐 collapsed, 😮 expanded. It is surfaced on row 1 here.
@@ -363,9 +363,7 @@ export default function (pi: ExtensionAPI) {
         render(width: number): string[] {
           refreshInrRate(() => tui.requestRender());
 
-          // ----- cumulative token / cost stats -----
-          let totalInput = 0;
-          let totalOutput = 0;
+          // ----- cumulative cost stats -----
           let baseCost = 0;
           let estimatedModelCost = 0;
           let subagentCost = 0;
@@ -374,8 +372,6 @@ export default function (pi: ExtensionAPI) {
             if (entry.type !== "message") continue;
             if (entry.message.role === "assistant") {
               const m = entry.message as AssistantMessage;
-              totalInput += m.usage.input;
-              totalOutput += m.usage.output;
               const recordedCost = finiteNumber(m.usage.cost?.total);
               baseCost += recordedCost;
               // Only estimate a price when the response did not record one;
@@ -456,20 +452,16 @@ export default function (pi: ExtensionAPI) {
             " " +
             theme.fg("muted", formatInr(totalCost * inrPerUsd));
 
-          let tokSeg = "";
-          if (totalInput > 0 || totalOutput > 0) {
-            const io = `↑${fmt(totalInput)} ↓${fmt(totalOutput)}`;
-            tokSeg =
-              theme.fg("dim", "tok") + " " + theme.fg("muted", io);
-          }
-
-          // Extension statuses on line 2 after core items.
-          // Keep provider limits visible before other status items.
+          // Provider limits go on line 1 beside cost. Other extension
+          // statuses stay on line 2 after the model.
           const statuses: ReadonlyMap<string, string> =
             footerData.getExtensionStatuses();
 
           // The thinking-tail "think: <emoji>" status goes on row 1, so pull
           // it out and exclude it from the row-2 status block.
+          const providerStatusText = statuses.get("provider-status");
+          const limitsSeg = providerStatusText ? sanitize(providerStatusText) : "";
+
           const thinkStatusText = statuses.get(THINK_STATUS_KEY);
           let thinkSeg = "";
           if (thinkStatusText) {
@@ -484,10 +476,8 @@ export default function (pi: ExtensionAPI) {
           }
 
           const sortedStatuses = Array.from(statuses.entries())
-            .filter(([key]) => key !== THINK_STATUS_KEY)
+            .filter(([key]) => key !== THINK_STATUS_KEY && key !== "provider-status")
             .sort(([a], [b]) => {
-              if (a === "provider-status") return -1;
-              if (b === "provider-status") return 1;
               if (a === "permissions") return -1;
               if (b === "permissions") return 1;
               return a.localeCompare(b);
@@ -495,8 +485,8 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: dir · ctx · cost · tok · think
-          const line1 = [dirSeg, ctxSeg, costSeg, tokSeg, thinkSeg]
+          // Line 1: dir · ctx · cost · limits · think
+          const line1 = [dirSeg, ctxSeg, costSeg, limitsSeg, thinkSeg]
             .filter(Boolean)
             .join(sep);
 

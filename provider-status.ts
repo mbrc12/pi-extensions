@@ -159,7 +159,7 @@ function formatWindow(
 ): string {
   const used = Math.round(window.usedPercent);
   const remaining = Math.max(0, 100 - used);
-  return `${windowLabel(window, position)} ${used}% used/${remaining}% left/reset ${formatDuration(window.resetAt, now)}`;
+  return `${windowLabel(window, position)} ${used}% used/${remaining}%/${formatDuration(window.resetAt, now)}`;
 }
 
 export function formatProviderUsage(snapshot: ProviderUsageSnapshot, now = Date.now()): string {
@@ -173,10 +173,10 @@ export function formatProviderUsage(snapshot: ProviderUsageSnapshot, now = Date.
 function formatCompactUsage(snapshot: ProviderUsageSnapshot, now = Date.now()): string {
   return [
     snapshot.primary
-      ? `${windowLabel(snapshot.primary, "primary")} ${Math.max(0, Math.round(100 - snapshot.primary.usedPercent))}% left/${formatDuration(snapshot.primary.resetAt, now)}`
+      ? `${windowLabel(snapshot.primary, "primary")} ${Math.max(0, Math.round(100 - snapshot.primary.usedPercent))}%/${formatDuration(snapshot.primary.resetAt, now)}`
       : undefined,
     snapshot.secondary
-      ? `${windowLabel(snapshot.secondary, "secondary")} ${Math.max(0, Math.round(100 - snapshot.secondary.usedPercent))}% left/${formatDuration(snapshot.secondary.resetAt, now)}`
+      ? `${windowLabel(snapshot.secondary, "secondary")} ${Math.max(0, Math.round(100 - snapshot.secondary.usedPercent))}%/${formatDuration(snapshot.secondary.resetAt, now)}`
       : undefined,
   ].filter((value): value is string => Boolean(value)).join(" · ");
 }
@@ -215,13 +215,13 @@ export default function (pi: ExtensionAPI) {
     }
     const failure = failures.get(currentProvider);
     if (failure) {
-      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "limits unavailable"));
+      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "lim unavailable"));
       return;
     }
     const snapshot = snapshots.get(currentProvider);
     if (!snapshot) return;
 
-    const prefix = ctx.ui.theme.fg("dim", "limits");
+    const prefix = ctx.ui.theme.fg("dim", "lim");
     const details = ctx.ui.theme.fg(usageColor(snapshot), formatCompactUsage(snapshot));
     ctx.ui.setStatus(STATUS_KEY, `${prefix} ${details}`);
   }
@@ -256,7 +256,7 @@ export default function (pi: ExtensionAPI) {
     const signal = AbortSignal.any([controller.signal, timeoutController.signal]);
 
     if (!cached) {
-      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "limits loading…"));
+      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "lim loading…"));
     }
 
     try {
@@ -326,7 +326,7 @@ export default function (pi: ExtensionAPI) {
       } else if (!provider || !adapterFor(provider)) {
         ctx.ui.notify(`No limits adapter is available for ${provider ?? "the current provider"}`, "info");
       } else {
-        ctx.ui.notify(`${provider}: ${failures.get(provider) ?? "limits unavailable"}`, "warning");
+        ctx.ui.notify(`${provider}: ${failures.get(provider) ?? "lim unavailable"}`, "warning");
       }
     },
   });
