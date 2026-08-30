@@ -89,7 +89,19 @@ Supports three modes:
 | `parallel` | `tasks` array | Run multiple agents concurrently (up to 16 concurrency, 16 max tasks) |
 | `chain` | `chain` array | Run agents sequentially, each sees the previous agent's output via `{previous}` placeholder |
 
-Each agent frontmatter sets `capability: low`, `medium`, `high`, or `image`. Model lists live only in `model-config.json` under `subagentModels`. The tool cycles general-purpose tiers as `low → medium → high`, `medium → high → low`, or `high → low → medium`. The `image` tier tries only its listed image-capable models. Within a tier, it uses the first model that responds.
+Each agent frontmatter sets `capability: low`, `medium`, `high`, or `image`. The caller can set one invocation-level `strength` override (`low`, `medium`, or `high`) for every selected agent. The tool description tells callers to use the lowest strength that can reliably complete the task. The subagent UI shows the requested override and each agent's effective strength.
+
+A caller can also set `wise: true` for any subagent. Use top-level `wise` in single mode, or set it on an individual item in `tasks` or `chain`. Wise mode sends the caller's active, compaction-aware conversation context to the cheap `wiseCompacter` model, then passes its compact Markdown packet to that subagent as untrusted background beside the normal delegated task. It omits assistant thinking and bounds unusually large source text before compaction. Parallel and chain calls generate the packet once and share it only with items that set `wise: true`. `wise` is a caller option, not agent frontmatter.
+
+```json
+{"agent":"worker","task":"Implement the fix","wise":true}
+```
+
+```json
+{"tasks":[{"agent":"scout","task":"Inspect the code","wise":true},{"agent":"reviewer","task":"Review this file"}]}
+```
+
+Model lists live only in `model-config.json`. `subagentModels` controls agent execution: the tool cycles general-purpose tiers as `low → medium → high`, `medium → high → low`, or `high → low → medium`; the `image` tier tries only its listed image-capable models. `wiseCompacter` is an independent cheap-model fallback list for wise-mode context compaction. Within any list, Pi uses the first model that responds.
 
 For example:
 
@@ -163,6 +175,7 @@ Centralized model configuration used by multiple extensions. It defines fallback
 | `toolSummaryGeneration` | `tool-summary` | Scoped model fallback list in `model-config.json` |
 | `subagentModels` | `subagent` | `low`, `medium`, and `high` cyclic model lists, plus an image-only `image` list |
 | `subagentProgressSummary` | `subagent` | Reserved fallback list for the currently disabled progress-summary code |
+| `wiseCompacter` | `subagent` | Cheap-model fallback list for caller-selected wise context compaction |
 | `webSummarization` | `web-use` | Scoped model fallback list in `model-config.json` |
 | `permissionClassification` | `permissions` | Scoped model fallback list in `model-config.json` |
 | `pythonWriteClassification` | `py-explore` | Scoped model fallback list in `model-config.json` |

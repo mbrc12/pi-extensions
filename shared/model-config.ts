@@ -9,6 +9,7 @@ export type ModelConfigPurpose =
   | "recapGeneration"
   | "toolSummaryGeneration"
   | "subagentProgressSummary"
+  | "wiseCompacter"
   | "webSummarization"
   | "permissionClassification"
   | "pythonWriteClassification";
@@ -47,6 +48,11 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   ],
   subagentProgressSummary: [
     "openai-codex/gpt-5.4-mini",
+    "openai-codex/gpt-5.6-luna",
+  ],
+  wiseCompacter: [
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/mimo-v2.5",
     "openai-codex/gpt-5.6-luna",
   ],
   webSummarization: [

@@ -316,9 +316,15 @@ function subagentCostFromDetails(details: unknown): number {
 
 function subagentCostFromToolResult(message: unknown): number {
   if (!message || typeof message !== "object") return 0;
-  const record = message as { role?: string; toolName?: string; details?: unknown };
+  const record = message as {
+    role?: string;
+    toolName?: string;
+    details?: unknown;
+    usage?: { cost?: { total?: unknown } };
+  };
   if (record.role !== "toolResult" || record.toolName !== "subagent") return 0;
-  return subagentCostFromDetails(record.details);
+  const reportedToolCost = finiteNumber(record.usage?.cost?.total);
+  return reportedToolCost > 0 ? reportedToolCost : subagentCostFromDetails(record.details);
 }
 
 // ---------------------------------------------------------------------------
