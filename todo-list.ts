@@ -22,9 +22,10 @@
  *     follow-up telling it to call `todo({ action: "clear" })` so stale
  *     completed todos are not left behind.
  *
- * State lives in tool-result details (not external files), so branching keeps
- * the correct todo state for that point in history — same approach as the
- * bundled todo.ts example.
+ * Tool actions persist state in tool-result details. User commands persist
+ * state in custom session entries because commands do not produce tool
+ * results. Both entry types are branch-aware, so each branch restores the
+ * correct todo state.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -44,6 +45,13 @@ interface TodoDetails {
 	nextId: number;
 	error?: string;
 }
+
+interface TodoStateEntryData {
+	todos: Todo[];
+	nextId: number;
+}
+
+const TODO_STATE_ENTRY_TYPE = "todo-list-state";
 
 const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "complete", "clear"] as const),
@@ -163,13 +171,20 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		todos = [];
 		nextId = 1;
 		for (const entry of ctx.sessionManager.getBranch()) {
-			if (entry.type !== "message") continue;
-			const msg = (entry as { message: { role?: string; toolName?: string; details?: unknown } }).message;
-			if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
-			const details = msg.details as TodoDetails | undefined;
-			if (details && Array.isArray(details.todos)) {
-				todos = details.todos;
-				nextId = details.nextId ?? nextId;
+			let state: TodoStateEntryData | undefined;
+
+			if (entry.type === "message") {
+				const msg = (entry as { message: { role?: string; toolName?: string; details?: unknown } }).message;
+				if (msg.role === "toolResult" && msg.toolName === "todo") {
+					state = msg.details as TodoDetails | undefined;
+				}
+			} else if (entry.type === "custom" && entry.customType === TODO_STATE_ENTRY_TYPE) {
+				state = entry.data as TodoStateEntryData | undefined;
+			}
+
+			if (state && Array.isArray(state.todos)) {
+				todos = state.todos;
+				nextId = state.nextId ?? nextId;
 			}
 		}
 		lastIncompleteCount = remaining().length;
@@ -418,6 +433,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			nudgeCount = 0;
 			cleanupNudgeSent = false;
 			updateWidget(ctx);
+			pi.appendEntry<TodoStateEntryData>(TODO_STATE_ENTRY_TYPE, { todos: [], nextId: 1 });
 			ctx.ui.notify(`Cleared ${count} todo(s).`, "info");
 		},
 	});

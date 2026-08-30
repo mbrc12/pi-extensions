@@ -215,15 +215,14 @@ export default function (pi: ExtensionAPI) {
     }
     const failure = failures.get(currentProvider);
     if (failure) {
-      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "lim unavailable"));
+      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "unavailable"));
       return;
     }
     const snapshot = snapshots.get(currentProvider);
     if (!snapshot) return;
 
-    const prefix = ctx.ui.theme.fg("dim", "lim");
     const details = ctx.ui.theme.fg(usageColor(snapshot), formatCompactUsage(snapshot));
-    ctx.ui.setStatus(STATUS_KEY, `${prefix} ${details}`);
+    ctx.ui.setStatus(STATUS_KEY, details);
   }
 
   async function refresh(ctx: ExtensionContext, force = false): Promise<boolean> {
@@ -256,7 +255,7 @@ export default function (pi: ExtensionAPI) {
     const signal = AbortSignal.any([controller.signal, timeoutController.signal]);
 
     if (!cached) {
-      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "lim loading…"));
+      ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "loading…"));
     }
 
     try {
@@ -326,7 +325,7 @@ export default function (pi: ExtensionAPI) {
       } else if (!provider || !adapterFor(provider)) {
         ctx.ui.notify(`No limits adapter is available for ${provider ?? "the current provider"}`, "info");
       } else {
-        ctx.ui.notify(`${provider}: ${failures.get(provider) ?? "lim unavailable"}`, "warning");
+        ctx.ui.notify(`${provider}: ${failures.get(provider) ?? "usage unavailable"}`, "warning");
       }
     },
   });
