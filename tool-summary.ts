@@ -7,9 +7,10 @@ const RESOLUTION_ENTRY_TYPE = "tool-summary-resolution";
 const STATE_ENTRY_TYPE = "tool-summary-state";
 const RENDER_DRIVER_WIDGET_ID = "tool-summary-render-driver";
 // A turn that uses one of these tools gets no summary, even when it also uses other tools.
+// Todo adds and clears are bookkeeping, so keep them out of the transcript.
 const TURN_SUMMARY_SUPPRESSORS = new Set(["todo"]);
-// Tool calls in this set do not appear in summaries. Add names here as needed.
-const SUMMARY_TOOL_BLACKLIST = new Set(["ask_question", "web_use"]);
+// Tool calls in this set do not appear in summaries. Notes and task cleanup are bookkeeping.
+const SUMMARY_TOOL_BLACKLIST = new Set(["ask_question", "web_use", "notes", "task_clear"]);
 // Safety limit for display and fallback text; the model prompt uses no character quota.
 const MAX_LINE_LENGTH = 160;
 const MAX_CONVERSATION_CHARS = 12_000;
