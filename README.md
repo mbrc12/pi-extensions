@@ -4,6 +4,10 @@ Custom extensions for [pi](https://pi.dev/).
 
 ## Extensions
 
+### `cleanup`
+
+Registers `/cleanup`, which sends the model a hidden comprehensive instruction to stop active processing and clean up session-related local and cloud resources. It steers the current turn when the agent is busy and does not directly execute cleanup actions.
+
 ### `ask-question`
 
 Adds an `ask_question` tool that renders an interactive TUI dialog. Supports single-choice (radio), multiple-choice (checkboxes), and free-text input. Emits a `prompt_wait` notification when the UI opens and aborts the turn on cancel.
