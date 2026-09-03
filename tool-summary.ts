@@ -6,8 +6,10 @@ const SUMMARY_ENTRY_TYPE = "tool-summary";
 const RESOLUTION_ENTRY_TYPE = "tool-summary-resolution";
 const STATE_ENTRY_TYPE = "tool-summary-state";
 const RENDER_DRIVER_WIDGET_ID = "tool-summary-render-driver";
+// A turn that uses one of these tools gets no summary, even when it also uses other tools.
+const TURN_SUMMARY_SUPPRESSORS = new Set(["todo"]);
 // Tool calls in this set do not appear in summaries. Add names here as needed.
-const SUMMARY_TOOL_BLACKLIST = new Set(["todo", "ask_question", "web_use"]);
+const SUMMARY_TOOL_BLACKLIST = new Set(["ask_question", "web_use"]);
 // Safety limit for display and fallback text; the model prompt uses no character quota.
 const MAX_LINE_LENGTH = 160;
 const MAX_CONVERSATION_CHARS = 12_000;
@@ -363,6 +365,10 @@ export default function toolSummaryExtension(pi: ExtensionAPI): void {
 
 	pi.on("turn_end", (event, ctx) => {
 		const toolResults = Array.isArray(event.toolResults) ? event.toolResults as any[] : [];
+		const suppressSummary = toolResults.some((result) =>
+			typeof result?.toolName === "string"
+			&& TURN_SUMMARY_SUPPRESSORS.has(result.toolName)
+		);
 		const tools: CompletedTool[] = toolResults
 			.filter((result) =>
 				typeof result?.toolCallId === "string"
@@ -377,7 +383,7 @@ export default function toolSummaryExtension(pi: ExtensionAPI): void {
 				isError: result.isError === true,
 			}));
 		toolArgs.clear();
-		if (!enabled || ctx.mode !== "tui" || tools.length === 0) return;
+		if (suppressSummary || !enabled || ctx.mode !== "tui" || tools.length === 0) return;
 
 		const toolCallIds = tools.map((tool) => tool.toolCallId);
 		const toolNames = tools.map((tool) => tool.toolName);

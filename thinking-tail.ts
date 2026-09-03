@@ -2,7 +2,7 @@
  * Thinking Tail Extension
  *
  * Shows the final five non-empty lines of each thinking run in Pi's native
- * gray/italic thinking style. Ctrl+O expands the full thinking; Ctrl+O again
+ * gray/italic thinking style on a light-gray background. Ctrl+O expands the full thinking; Ctrl+O again
  * returns to the tail. The tail updates as thinking streams and is applied to
  * restored historical messages too.
  */
@@ -32,7 +32,39 @@ type AssistantMessageLike = {
 
 type ComponentLike = {
   lastMessage?: AssistantMessageLike;
+  contentContainer?: {
+    children?: unknown[];
+  };
 };
+
+type ThinkingMarkdownLike = {
+  defaultTextStyle?: {
+    italic?: boolean;
+    color?: unknown;
+    bgColor?: (text: string) => string;
+  };
+  invalidate?: () => void;
+};
+
+// A light gray that keeps the existing theme-controlled thinking text unchanged.
+const LIGHT_GRAY_THINKING_BACKGROUND = "\x1b[48;2;224;224;224m";
+const RESET_BACKGROUND = "\x1b[49m";
+
+function lightGrayThinkingBackground(text: string): string {
+  return `${LIGHT_GRAY_THINKING_BACKGROUND}${text}${RESET_BACKGROUND}`;
+}
+
+/** Add a full-width light-gray background to the native thinking Markdown. */
+function applyThinkingBackground(component: ComponentLike): void {
+  for (const child of component.contentContainer?.children ?? []) {
+    const markdown = child as ThinkingMarkdownLike;
+    const style = markdown.defaultTextStyle;
+    // Native thinking Markdown is the only assistant child with both styles.
+    if (!style?.italic || !style.color) continue;
+    style.bgColor = lightGrayThinkingBackground;
+    markdown.invalidate?.();
+  }
+}
 
 // Minimal slice of ExtensionUIContext needed to push the footer status.
 type StatusUI = {
@@ -164,6 +196,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     originalUpdateContent.call(this, { ...message, content });
+    applyThinkingBackground(this);
 
     // Critical: retain the raw message for invalidate(), theme changes, and
     // setExpanded(). Without this, Ctrl+O can only re-expand the tail itself.

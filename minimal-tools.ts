@@ -2,7 +2,7 @@
  * Minimal Tool Display Extension
  * 
  * Provides compact rendering for all built-in tools:
- * - Bash: Shows compressed command (truncated if too long)
+ * - Bash: Shows compressed command (truncated if too long) and its start time
  * - Read/Write/Edit: Shows just the path
  * - Uses renderShell: "self" to minimize padding
  * 
@@ -37,6 +37,21 @@ function compressCommand(cmd: string, maxLen: number = 60): string {
 	return `${cmd.substring(0, 35)}...${cmd.slice(-20)}`;
 }
 
+interface BashRenderState {
+	startedAt?: number;
+}
+
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+	hour: "2-digit",
+	minute: "2-digit",
+	second: "2-digit",
+	hourCycle: "h23",
+});
+
+function formatStartTime(timestamp: number): string {
+	return timeFormatter.format(timestamp);
+}
+
 const cwd = process.cwd();
 const tools = {
 	read: createReadTool(cwd),
@@ -62,16 +77,24 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme, context) {
+			const state = context.state as BashRenderState;
+			if (context.executionStarted && state.startedAt === undefined) {
+				state.startedAt = Date.now();
+			}
+
 			const command = args.command || "...";
 			const timeout = args.timeout as number | undefined;
+			const startedAtSuffix = state.startedAt === undefined
+				? ""
+				: theme.fg("dim", ` ${formatStartTime(state.startedAt)}`);
 			const timeoutSuffix = timeout ? theme.fg("muted", ` (${timeout}s)`) : "";
 			
 			if (context.expanded) {
-				return new Text(theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", command) + timeoutSuffix, 0, 0);
+				return new Text(theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", command) + startedAtSuffix + timeoutSuffix, 0, 0);
 			}
 			
 			const compressed = compressCommand(command);
-			return new Text(theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", compressed) + timeoutSuffix, 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", compressed) + startedAtSuffix + timeoutSuffix, 0, 0);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, _context) {

@@ -133,7 +133,7 @@ Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the
 
 Shows one compact, muted line after each turn that uses tools: `Tool: <summary>`. The italic ASD-STE100 text prefers a few words over a full sentence and focuses on tool actions and key results. It keeps the conversation context in mind without summarizing overall progress or repeating an obvious file name from the tool call.
 
-The extension immediately reserves one transcript position after the turn's tool calls with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. The blacklist in `tool-summary.ts` excludes `todo`, `ask_question`, and `web_use`; turns containing only blacklisted tools produce no summary. Toggle summaries for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
+The extension immediately reserves one transcript position after the turn's tool calls with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Any turn that uses `todo` gets no summary, even if it also uses other tools. The blacklist in `tool-summary.ts` omits `ask_question` and `web_use` from summaries; turns containing only blacklisted tools also produce no summary. Toggle summaries for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
 
 ### `todo-list`
 
