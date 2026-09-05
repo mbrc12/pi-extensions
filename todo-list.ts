@@ -69,6 +69,7 @@ export type TodoInput = Static<typeof TodoParams>;
 const MAX_NUDGES = 3;
 const COMPLETED_DISPLAY_MS = 10_000;
 const WIDGET_REFRESH_MS = 100;
+const MAX_WIDGET_ITEMS = 5;
 export default function todoListExtension(pi: ExtensionAPI): void {
 	let todos: Todo[] = [];
 	let nextId = 1;
@@ -212,7 +213,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 					ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(t.text)) +
 					ctx.ui.theme.fg("warning", ` ${bar}`),
 			];
-		});
+		}).slice(0, MAX_WIDGET_ITEMS);
 		ctx.ui.setWidget("todo-list", lines.length > 0 ? lines : undefined);
 	}
 
