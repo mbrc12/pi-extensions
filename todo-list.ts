@@ -36,6 +36,7 @@ interface Todo {
 	id: number;
 	text: string;
 	done: boolean;
+	completedAt?: number;
 }
 
 interface TodoDetails {
@@ -66,7 +67,8 @@ export type TodoInput = Static<typeof TodoParams>;
 
 // Stop auto-continuing after this many consecutive no-progress turns.
 const MAX_NUDGES = 3;
-
+const COMPLETED_DISPLAY_MS = 10_000;
+const WIDGET_REFRESH_MS = 100;
 export default function todoListExtension(pi: ExtensionAPI): void {
 	let todos: Todo[] = [];
 	let nextId = 1;
@@ -76,6 +78,9 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	let lastIncompleteCount = 0;
 	let nudgeCount = 0;
 	let cleanupNudgeSent = false;
+	let widgetRefreshTimer: ReturnType<typeof setInterval> | undefined;
+	let widgetContext: ExtensionContext | undefined;
+	let cleanupNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const remaining = (): Todo[] => todos.filter((t) => !t.done);
 	const completed = (): Todo[] => todos.filter((t) => t.done);
@@ -150,6 +155,31 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		});
 	}
 
+	function stopWidgetRefresh(): void {
+		if (widgetRefreshTimer) {
+			clearInterval(widgetRefreshTimer);
+			widgetRefreshTimer = undefined;
+		}
+		widgetContext = undefined;
+	}
+
+	function stopCleanupNudgeTimer(): void {
+		if (cleanupNudgeTimer) {
+			clearTimeout(cleanupNudgeTimer);
+			cleanupNudgeTimer = undefined;
+		}
+	}
+
+	function hasFadingCompletedTodos(now = Date.now()): boolean {
+		return todos.some(
+			(t) =>
+				t.done &&
+				typeof t.completedAt === "number" &&
+				t.completedAt > 0 &&
+				t.completedAt + COMPLETED_DISPLAY_MS > now,
+		);
+	}
+
 	function updateWidget(ctx: ExtensionContext): void {
 		if (todos.length === 0) {
 			ctx.ui.setStatus("todo-list", undefined);
@@ -162,13 +192,45 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			"todo-list",
 			ctx.ui.theme.fg("accent", `📋 ${done}/${total}${injectEnabled ? " 📌" : ""}`),
 		);
-		const lines = todos.map((t) =>
-			t.done
-				? ctx.ui.theme.fg("success", "🟢 ") +
-						ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(t.text))
-				: ctx.ui.theme.fg("muted", "⭕ ") + ctx.ui.theme.fg("text", t.text),
-		);
-		ctx.ui.setWidget("todo-list", lines);
+
+		const now = Date.now();
+		const lines = todos.flatMap((t) => {
+			if (!t.done) {
+				return [ctx.ui.theme.fg("muted", "⭕ ") + ctx.ui.theme.fg("text", t.text)];
+			}
+
+			const expiresAt = t.completedAt ? t.completedAt + COMPLETED_DISPLAY_MS : 0;
+			const remainingMs = expiresAt - now;
+			if (remainingMs <= 0) return [];
+
+			const fraction = Math.min(1, remainingMs / COMPLETED_DISPLAY_MS);
+			const barWidth = 5;
+			const filled = Math.max(1, Math.ceil(fraction * barWidth));
+			const bar = "━".repeat(filled) + "─".repeat(barWidth - filled);
+			return [
+				ctx.ui.theme.fg("success", "🟢 ") +
+					ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(t.text)) +
+					ctx.ui.theme.fg("warning", ` ${bar}`),
+			];
+		});
+		ctx.ui.setWidget("todo-list", lines.length > 0 ? lines : undefined);
+	}
+
+	function refreshWidget(ctx: ExtensionContext): void {
+		updateWidget(ctx);
+		const now = Date.now();
+		if (!hasFadingCompletedTodos(now)) {
+			stopWidgetRefresh();
+			return;
+		}
+		widgetContext = ctx;
+		if (!widgetRefreshTimer) {
+			widgetRefreshTimer = setInterval(() => {
+				if (!widgetContext) return;
+				updateWidget(widgetContext);
+				if (!hasFadingCompletedTodos()) stopWidgetRefresh();
+			}, WIDGET_REFRESH_MS);
+		}
 	}
 
 	/** Rebuild in-memory state from session entries on the current branch. */
@@ -201,11 +263,16 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		lastIncompleteCount = remaining().length;
 		nudgeCount = 0;
 		cleanupNudgeSent = false;
-		updateWidget(ctx);
+		stopCleanupNudgeTimer();
+		refreshWidget(ctx);
 	}
 
 	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
+	pi.on("session_shutdown", () => {
+		stopWidgetRefresh();
+		stopCleanupNudgeTimer();
+	});
 
 	// --- The todo tool -------------------------------------------------------
 	pi.registerTool({
@@ -261,7 +328,8 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 					const t: Todo = { id: nextId++, text: params.text.trim(), done: false };
 					todos.push(t);
 					cleanupNudgeSent = false;
-					updateWidget(ctx);
+					stopCleanupNudgeTimer();
+					refreshWidget(ctx);
 					return {
 						content: [{ type: "text", text: `Added #${t.id}: ${t.text}` }],
 						details: { action: "add", todos: [...todos], nextId } as TodoDetails,
@@ -293,8 +361,12 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 						};
 					}
 					t.done = true;
-					if (remaining().length === 0) cleanupNudgeSent = false;
-					updateWidget(ctx);
+					t.completedAt = Date.now();
+					if (remaining().length === 0) {
+						cleanupNudgeSent = false;
+						stopCleanupNudgeTimer();
+					}
+					refreshWidget(ctx);
 					return {
 						content: [{ type: "text", text: `Completed #${t.id}: ${t.text}` }],
 						details: { action: "complete", todos: [...todos], nextId } as TodoDetails,
@@ -308,7 +380,9 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 					lastIncompleteCount = 0;
 					nudgeCount = 0;
 					cleanupNudgeSent = false;
-					updateWidget(ctx);
+					stopCleanupNudgeTimer();
+					stopWidgetRefresh();
+					refreshWidget(ctx);
 					return {
 						content: [{ type: "text", text: `Cleared ${count} todo(s)` }],
 						details: { action: "clear", todos: [], nextId: 1 } as TodoDetails,
@@ -374,19 +448,31 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			lastIncompleteCount = 0;
 			nudgeCount = 0;
 			// All jobs are done but the model left completed todos in the list.
-			// Nudge it once to clear them out rather than leaving stale state.
+			// Wait until the widget's 10-second completion display has finished,
+			// then nudge it once to clear the stale state.
 			if (todos.length > 0 && !cleanupNudgeSent) {
 				cleanupNudgeSent = true;
-				pi.sendMessage(
-					{
-						customType: "todo-list-cleanup-nudge",
-						content:
-							"All todos are complete, but the list has not been cleared yet. " +
-							'Call todo with action "clear" now to empty the list. Do not reply to the user until the todo list is empty.',
-						display: false,
-					},
-					{ deliverAs: "followUp", triggerTurn: true },
+				const latestCompletion = Math.max(
+					...todos.map((todo) => todo.completedAt ?? 0),
 				);
+				const delay = Math.max(0, latestCompletion + COMPLETED_DISPLAY_MS - Date.now());
+				cleanupNudgeTimer = setTimeout(() => {
+					cleanupNudgeTimer = undefined;
+					if (todos.length === 0 || remaining().length > 0) {
+						cleanupNudgeSent = false;
+						return;
+					}
+					pi.sendMessage(
+						{
+							customType: "todo-list-cleanup-nudge",
+							content:
+								"All todos are complete, but the list has not been cleared yet. " +
+								'Call todo with action "clear" now to empty the list. Do not reply to the user until the todo list is empty.',
+							display: false,
+						},
+						{ deliverAs: "followUp", triggerTurn: true },
+					);
+				}, delay);
 			}
 			return;
 		}
@@ -449,7 +535,9 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			lastIncompleteCount = 0;
 			nudgeCount = 0;
 			cleanupNudgeSent = false;
-			updateWidget(ctx);
+			stopCleanupNudgeTimer();
+			stopWidgetRefresh();
+			refreshWidget(ctx);
 			pi.appendEntry<TodoStateEntryData>(TODO_STATE_ENTRY_TYPE, { todos: [], nextId: 1 });
 			ctx.ui.notify(`Cleared ${count} todo(s).`, "info");
 		},
@@ -475,7 +563,8 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			lastIncompleteCount = remaining().length;
 			nudgeCount = 0;
 			cleanupNudgeSent = false;
-			updateWidget(ctx);
+			stopCleanupNudgeTimer();
+			refreshWidget(ctx);
 			pi.appendEntry<TodoInjectStateEntryData>(TODO_INJECT_STATE_ENTRY_TYPE, {
 				enabled: injectEnabled,
 			});
