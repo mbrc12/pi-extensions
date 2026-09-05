@@ -1,18 +1,18 @@
 /**
  * Todo-List Extension (simplified plan mode)
  *
- * A persistent todo list the model is *forced* to consult.
+ * A persistent todo list with optional per-turn model-context injection.
  *
- * The crucial behavior — "the model sees the todo list every turn and does not
- * ignore it" — is achieved by layering four reinforcement mechanisms:
+ * The extension layers four reinforcement mechanisms:
  *
  *  1. promptGuidelines on the `todo` tool: tells the model to create todos only
  *     for multi-step work, mark jobs complete as it finishes them, and clear the
  *     list once every job is done.
- *  2. before_agent_start system-prompt injection: every turn, the per-turn
- *     system prompt re-states remaining and completed todos (or reminds the
- *     model to clear the list when all are complete) without adding a transcript
- *     message.
+ *  2. Optional before_agent_start system-prompt injection: when enabled with
+ *     `/todo-inject on`, the per-turn system prompt re-states remaining and
+ *     completed todos (or reminds the model to clear the list when all are
+ *     complete) without adding a transcript message. Injection is off by
+ *     default and can be disabled with `/todo-inject off`.
  *  3. agent_end watchdog: if todos remain incomplete and the last turn made no
  *     progress, automatically send a hidden custom follow-up (triggerTurn: true)
  *     that tells the model to continue. Capped at MAX_NUDGES consecutive
@@ -51,7 +51,12 @@ interface TodoStateEntryData {
 	nextId: number;
 }
 
+interface TodoInjectStateEntryData {
+	enabled: boolean;
+}
+
 const TODO_STATE_ENTRY_TYPE = "todo-list-state";
+const TODO_INJECT_STATE_ENTRY_TYPE = "todo-list-inject-state";
 
 const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "complete", "clear"] as const),
@@ -66,6 +71,7 @@ const MAX_NUDGES = 3;
 export default function todoListExtension(pi: ExtensionAPI): void {
 	let todos: Todo[] = [];
 	let nextId = 1;
+	let injectEnabled = false;
 
 	// Watchdog state
 	let lastIncompleteCount = 0;
@@ -155,7 +161,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		const total = todos.length;
 		ctx.ui.setStatus(
 			"todo-list",
-			ctx.ui.theme.fg("accent", `📋 ${done}/${total}`),
+			ctx.ui.theme.fg("accent", `📋 ${done}/${total}${injectEnabled ? " 📌" : ""}`),
 		);
 		const lines = todos.map((t) =>
 			t.done
@@ -170,6 +176,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	function reconstructState(ctx: ExtensionContext): void {
 		todos = [];
 		nextId = 1;
+		injectEnabled = false;
 		for (const entry of ctx.sessionManager.getBranch()) {
 			let state: TodoStateEntryData | undefined;
 
@@ -178,8 +185,13 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 				if (msg.role === "toolResult" && msg.toolName === "todo") {
 					state = msg.details as TodoDetails | undefined;
 				}
-			} else if (entry.type === "custom" && entry.customType === TODO_STATE_ENTRY_TYPE) {
-				state = entry.data as TodoStateEntryData | undefined;
+			} else if (entry.type === "custom") {
+				if (entry.customType === TODO_STATE_ENTRY_TYPE) {
+					state = entry.data as TodoStateEntryData | undefined;
+				} else if (entry.customType === TODO_INJECT_STATE_ENTRY_TYPE) {
+					const injectState = entry.data as { enabled?: unknown } | undefined;
+					if (typeof injectState?.enabled === "boolean") injectEnabled = injectState.enabled;
+				}
 			}
 
 			if (state && Array.isArray(state.todos)) {
@@ -207,7 +219,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		// Bullets appended to the Guidelines section while the tool is active.
 		// Each bullet must name the tool explicitly.
 		promptGuidelines: [
-			"The current todo list is injected into your context automatically at the start of each turn, so you do NOT need to call todo with action \"list\" just to check it. Only call todo list if you need to re-verify state after several mutations.",
+			"Call todo with action \"list\" when you need to inspect or re-verify the current todo state; automatic per-turn todo injection may be disabled.",
 			"When you finish a job, immediately call todo with action \"complete\" and that job's id to mark it done.",
 			"Do not end your turn while incomplete todos remain. Pick the next remaining job and continue working on it. You may use the ask_question tool to clarify something if needed, but do not stop or hand back to the user while jobs remain unless the user explicitly asked you to stop, wait, pause, or obtain approval before further work.",
 			"Do not create todos for single-task requests. If the list is empty and the user gives you a multi-step task, call todo with action \"add\" for each step first, then work through them.",
@@ -340,7 +352,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	// - All complete but not cleared: include completed state and suggest clearing.
 	// - Incomplete todos remain: include remaining/completed state and instruct to continue.
 	pi.on("before_agent_start", async (event) => {
-		if (todos.length === 0) return;
+		if (!injectEnabled || todos.length === 0) return;
 		return { systemPrompt: `${event.systemPrompt}\n\n${renderTodoSystemPrompt()}` };
 	});
 
@@ -435,6 +447,31 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			updateWidget(ctx);
 			pi.appendEntry<TodoStateEntryData>(TODO_STATE_ENTRY_TYPE, { todos: [], nextId: 1 });
 			ctx.ui.notify(`Cleared ${count} todo(s).`, "info");
+		},
+	});
+
+	pi.registerCommand("todo-inject", {
+		description: "Toggle per-turn todo-list context injection with /todo-inject on|off",
+		getArgumentCompletions: (prefix) => {
+			const options = [
+				{ value: "on", label: "on", description: "Inject the current todo list each turn" },
+				{ value: "off", label: "off", description: "Do not inject the todo list each turn" },
+			];
+			const matches = options.filter((option) => option.value.startsWith(prefix.trim().toLowerCase()));
+			return matches.length > 0 ? matches : null;
+		},
+		handler: async (args, ctx) => {
+			const value = args.trim().toLowerCase();
+			if (value !== "on" && value !== "off") {
+				ctx.ui.notify("Usage: /todo-inject on|off", "warning");
+				return;
+			}
+			injectEnabled = value === "on";
+			updateWidget(ctx);
+			pi.appendEntry<TodoInjectStateEntryData>(TODO_INJECT_STATE_ENTRY_TYPE, {
+				enabled: injectEnabled,
+			});
+			ctx.ui.notify(`Todo-list injection ${injectEnabled ? "enabled" : "disabled"}.`, "info");
 		},
 	});
 

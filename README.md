@@ -145,15 +145,15 @@ The extension immediately reserves one transcript position after the turn's tool
 
 ### `todo-list`
 
-A simplified plan-mode todo list the model can't ignore. Registers a `todo` tool (list/add/complete/clear) plus a `/todo-clear` command.
+A simplified plan-mode todo list. Registers a `todo` tool (list/add/complete/clear), a `/todo-clear` command, and a `/todo-inject on|off` toggle.
 
 The model is kept on-task by layering three reinforcement mechanisms:
 
-- `promptGuidelines` instruct the model to call `todo list` at the start of every turn and mark jobs complete as it finishes them.
-- `before_agent_start` re-injects the remaining todos each turn so they're never out of context.
+- `promptGuidelines` tell the model when to create todos, inspect their state, and mark jobs complete.
+- Optional `before_agent_start` injection adds the remaining todos to the model context each turn. It is off by default. Use `/todo-inject on` to enable it and `/todo-inject off` to disable it for the current session. When injection is on, the existing todo status shows `📌`; when it is off, the status has no injection marker.
 - `agent_end` watchdog auto-continues (via a follow-up user message) when the model stops with incomplete todos, capped at 3 consecutive no-progress turns. It also nudges the model once if it stops with all todos marked complete but the list not yet cleared.
 
-`clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. Tool actions store state in tool-result details. `/todo-clear` stores an empty-state marker as a custom session entry. Both are reconstructed from the session branch, so clearing survives resume and branching keeps the correct state.
+`clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. Tool actions store state in tool-result details. User commands store state as custom session entries. State is reconstructed from the session branch, so settings survive resume and branching keeps the correct state.
 
 Todo mutations are hidden from the transcript (`renderShell/renderCall/renderResult: Container`) so the todo widget and `/todos` command remain the user-facing interface.
 
