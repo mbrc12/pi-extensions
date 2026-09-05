@@ -8,56 +8,56 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const FALLBACK_MESSAGES = [
-  "Gathering",
-  "Connecting dots",
-  "Shaping ideas",
-  "Polishing edges",
-  "Checking details",
-  "Warming neurons",
-  "Taming semicolons",
-  "Comparing notes",
-  "Hunting edge-cases",
-  "Making plans",
-  "Unfolding complexity",
-  "Following threads",
-  "Mapping state",
-  "Questioning assumptions",
-  "Sharpening logic",
-  "Negotiating types",
-  "Ordering pieces",
-  "Sweeping corners",
-  "Second look",
-  "Building context",
-  "Translating intent",
-  "Seeking shortcuts",
-  "Testing shapes",
-  "Untangling knots",
-  "Watching surprises",
-  "Counting brackets",
-  "Checking seams",
-  "Tuning knobs",
-  "Tiny robots",
-  "Reading between",
-  "Assembling pieces",
-  "Smoothing edges",
-  "Checking exits",
-  "Searching attic",
-  "Checking receipts",
-  "Trying basics",
-  "Making progress",
-  "Adding polish",
-  "Avoiding cleverness",
-  "Verifying fixes",
-  "One more pass",
-  "Finding pieces",
-  "Labeled chaos",
-  "Checking maps",
-  "Careful clicks",
-  "Finding surprises",
-  "Simplifying complexity",
-  "Tying threads",
-  "Almost there",
-  "Last details",
+  "Conjuring",
+  "Orchestrating",
+  "Deciphering",
+  "Distilling",
+  "Refining",
+  "Triangulating",
+  "Excavating",
+  "Interrogating",
+  "Calibrating",
+  "Crosschecking",
+  "Untangling",
+  "Reframing",
+  "Inferring",
+  "Synthesizing",
+  "Decomposing",
+  "Reconciling",
+  "Disambiguating",
+  "Enumerating",
+  "Dissecting",
+  "Scaffolding",
+  "Navigating",
+  "Deriving",
+  "Inspecting",
+  "Probing",
+  "Correlating",
+  "Validating",
+  "Simulating",
+  "Benchmarking",
+  "Compiling",
+  "Interpreting",
+  "Translating",
+  "Constructing",
+  "Composing",
+  "Balancing",
+  "Sequencing",
+  "Generalizing",
+  "Specializing",
+  "Contextualizing",
+  "Investigating",
+  "Reasoning",
+  "Optimizing",
+  "Resolving",
+  "Finalizing",
+  "Consolidating",
+  "Rechecking",
+  "Polishing",
+  "Focusing",
+  "Deliberating",
+  "Contemplating",
+  "Marshaling",
 ];
 
 // A dot travels across a small track, then bounces back. The fixed-width
@@ -72,7 +72,7 @@ const PING_PONG_DOT_FRAMES = [
   "··●··",
   "·●···",
 ];
-const MESSAGE_INTERVAL_MS = 1_800;
+const MESSAGE_INTERVAL_MS = 3_600;
 const SPINNER_INTERVAL_MS = 110;
 
 function shorten(value: unknown, maxLength = 34): string {
@@ -151,6 +151,10 @@ export default function (pi: ExtensionAPI) {
     return Array.from(activeTools.values()).pop();
   }
 
+  function fallbackMessage(): string {
+    return `${FALLBACK_MESSAGES[messageIndex]!}…`;
+  }
+
   function updateMessage(ctx: ExtensionContext): void {
     const activity = latestActivity();
     if (activity) {
@@ -162,7 +166,7 @@ export default function (pi: ExtensionAPI) {
       messageIndex = (messageIndex + 1) % FALLBACK_MESSAGES.length;
       lastMessageChangeAt = Date.now();
     }
-    ctx.ui.setWorkingMessage(`${FALLBACK_MESSAGES[messageIndex]!} · ${elapsed()}`);
+    ctx.ui.setWorkingMessage(`${fallbackMessage()} · ${elapsed()}`);
   }
 
   function applyWorkingStyle(ctx: ExtensionContext): void {
@@ -171,7 +175,7 @@ export default function (pi: ExtensionAPI) {
       frames: PING_PONG_DOT_FRAMES.map((frame) => theme.fg("accent", frame)),
       intervalMs: SPINNER_INTERVAL_MS,
     });
-    ctx.ui.setWorkingMessage(FALLBACK_MESSAGES[messageIndex]!);
+    ctx.ui.setWorkingMessage(fallbackMessage());
   }
 
   function startMessageRotation(ctx: ExtensionContext): void {
@@ -206,7 +210,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", (_event, ctx) => {
     stopMessageRotation();
     activeTools.clear();
-    ctx.ui.setWorkingMessage(FALLBACK_MESSAGES[0]!);
+    ctx.ui.setWorkingMessage(`${FALLBACK_MESSAGES[0]!}…`);
   });
 
   pi.on("session_shutdown", () => {
