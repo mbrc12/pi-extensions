@@ -151,7 +151,7 @@ The model is kept on-task by layering three reinforcement mechanisms:
 
 - `promptGuidelines` tell the model when to create todos, inspect their state, and mark jobs complete.
 - Optional `before_agent_start` injection adds the remaining todos to the model context each turn. It is off by default. Use `/todo-inject on` to enable it and `/todo-inject off` to disable it for the current session. When injection is on, the existing todo status shows `📌`; when it is off, the status has no injection marker.
-- `agent_end` watchdog auto-continues (via a follow-up user message) when the model stops with incomplete todos, capped at 3 consecutive no-progress turns. It also nudges the model once if it stops with all todos marked complete but the list not yet cleared.
+- While injection is enabled, the `agent_end` watchdog auto-continues (via a follow-up user message) when the model stops with incomplete todos, capped at 3 consecutive no-progress turns. It also nudges the model once if it stops with all todos marked complete but the list not yet cleared. `/todo-inject off` disables both watchdog behaviours.
 
 `clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. Tool actions store state in tool-result details. User commands store state as custom session entries. State is reconstructed from the session branch, so settings survive resume and branching keeps the correct state.
 

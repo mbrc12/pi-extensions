@@ -13,14 +13,13 @@
  *     completed todos (or reminds the model to clear the list when all are
  *     complete) without adding a transcript message. Injection is off by
  *     default and can be disabled with `/todo-inject off`.
- *  3. agent_end watchdog: if todos remain incomplete and the last turn made no
- *     progress, automatically send a hidden custom follow-up (triggerTurn: true)
- *     that tells the model to continue. Capped at MAX_NUDGES consecutive
- *     no-progress turns to avoid loops, after which the user is notified.
- *  4. agent_end clear-nudge: if the model stops after all todos are marked
- *     complete but the list itself is not empty, send a single hidden custom
- *     follow-up telling it to call `todo({ action: "clear" })` so stale
- *     completed todos are not left behind.
+ *  3. Optional agent_end watchdog: while injection is enabled, if todos remain
+ *     incomplete and the last turn made no progress, automatically send a hidden
+ *     custom follow-up (triggerTurn: true) that tells the model to continue.
+ *     Capped at MAX_NUDGES consecutive no-progress turns to avoid loops.
+ *  4. Optional agent_end clear-nudge: while injection is enabled, if the model
+ *     stops after all todos are marked complete but the list itself is not empty,
+ *     send one hidden follow-up telling it to clear the stale completed list.
  *
  * Tool actions persist state in tool-result details. User commands persist
  * state in custom session entries because commands do not produce tool
@@ -359,6 +358,12 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	// --- Watchdog: auto-continue when the model stops early ------------------
 	pi.on("agent_end", async (_event, ctx) => {
 		const rem = remaining();
+		if (!injectEnabled) {
+			lastIncompleteCount = rem.length;
+			nudgeCount = 0;
+			cleanupNudgeSent = false;
+			return;
+		}
 		if (isAbortedAgentEnd(_event.messages)) {
 			lastIncompleteCount = rem.length;
 			nudgeCount = 0;
@@ -467,6 +472,9 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			injectEnabled = value === "on";
+			lastIncompleteCount = remaining().length;
+			nudgeCount = 0;
+			cleanupNudgeSent = false;
 			updateWidget(ctx);
 			pi.appendEntry<TodoInjectStateEntryData>(TODO_INJECT_STATE_ENTRY_TYPE, {
 				enabled: injectEnabled,
