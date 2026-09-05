@@ -83,6 +83,19 @@ function shorten(value: unknown, maxLength = 34): string {
     : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
+function formatDuration(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+  return parts.join(" ");
+}
+
 function activityFor(toolName: string, args: unknown): string {
   const input = args && typeof args === "object" ? args as Record<string, unknown> : {};
   const path = shorten(input.path ?? input.file_path ?? input.filename);
@@ -131,8 +144,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function elapsed(): string {
-    const seconds = Math.max(0, Math.floor((Date.now() - turnStartedAt) / 1_000));
-    return `${seconds}s`;
+    return formatDuration(Date.now() - turnStartedAt);
   }
 
   function latestActivity(): string | undefined {
