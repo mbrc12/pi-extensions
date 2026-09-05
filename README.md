@@ -133,6 +133,10 @@ Subagent progress summaries are disabled. Their generation, activation, and rend
 
 Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
 
+### `working-indicator`
+
+Replaces the default working loader with a ping-pong dots spinner, a large set of short rotating fallback messages, live tool activity, and elapsed time.
+
 ### `tool-summary`
 
 Shows one compact, muted line after each turn that uses tools: `Tool: <summary>`. The italic ASD-STE100 text prefers a few words over a full sentence and focuses on tool actions and key results. It keeps the conversation context in mind without summarizing overall progress or repeating an obvious file name from the tool call.
