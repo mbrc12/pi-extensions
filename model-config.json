@@ -1,4 +1,18 @@
 {
+  "profiles": {
+    "home": {
+      "allow": [
+        ".*"
+      ],
+      "defaultModel": "openai-codex/gpt-5.6-luna"
+    },
+    "work": {
+      "allow": [
+        "^openai-codex-2/.*$"
+      ],
+      "defaultModel": "openai-codex-2/gpt-5.6-sol"
+    }
+  },
   "subagentModels": {
     "low": [
       "opencode-go/deepseek-v4-flash",
@@ -36,7 +50,8 @@
     "openai-codex/gpt-5.4-mini",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
-    "opencode-go/deepseek-v4-pro"
+    "opencode-go/deepseek-v4-pro",
+    "openai-codex-2/gpt-5.6-luna"
   ],
   "toolSummaryGeneration": [
     "opencode-go/mimo-v2.5",
@@ -46,11 +61,13 @@
     "openai-codex/gpt-5.4-mini",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
-    "opencode-go/deepseek-v4-pro"
+    "opencode-go/deepseek-v4-pro",
+    "openai-codex-2/gpt-5.6-luna"
   ],
   "subagentProgressSummary": [
     "openai-codex/gpt-5.4-mini",
-    "openai-codex/gpt-5.6-luna"
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex-2/gpt-5.6-luna"
   ],
   "webSummarization": [
     "opencode-go/deepseek-v4-pro",
@@ -60,7 +77,8 @@
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
-    "openai-codex/gpt-5.4-mini"
+    "openai-codex/gpt-5.4-mini",
+    "openai-codex-2/gpt-5.6-luna"
   ],
   "permissionClassification": [
     "opencode-go/deepseek-v4-pro",
@@ -74,7 +92,8 @@
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
-    "google/gemini-2.0-flash"
+    "google/gemini-2.0-flash",
+    "openai-codex-2/gpt-5.6-luna"
   ],
   "pythonWriteClassification": [
     "opencode-go/deepseek-v4-pro",
@@ -88,6 +107,7 @@
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
-    "google/gemini-2.0-flash"
+    "google/gemini-2.0-flash",
+    "openai-codex-2/gpt-5.6-luna"
   ]
 }

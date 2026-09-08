@@ -47,6 +47,14 @@ Adds a `py_explore` tool for running read-only/exploratory Python scripts.
 - Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
 - Also registers `/py-explore-test` to tune the LLM write-check prompt against a built-in test suite.
 
+### `profile`
+
+Adds `/profile` to limit model use in the current session. Run `/profile` to choose a profile, or use `/profile <name>` directly. Each profile has an `allow` list of JavaScript regular expressions matched against the full `provider/model-id` string. It also has a `defaultModel`. Selecting a profile switches the main session to that model.
+
+The profile filters Pi's model picker and model cycling. It also filters every fallback list read through `shared/model-config.ts`, including subagents, summaries, web extraction, permission checks, and Python write checks. These background operations still use their own model-config entries; they do not use the profile's default model. Spawned subagents inherit the active filter while preserving the model selected for their capability tier. If the session already has a model scope, the profile is applied as an additional filter.
+
+The selected profile is stored in the session and restored on resume. New sessions start with `home`. Profiles are configured under `profiles` in `model-config.json`. At startup, the extension checks every profile's regular expressions and default model. It also checks that every shared model category and each subagent capability tier has at least one allowed model in Pi's model catalog. Invalid profiles are reported and cannot be activated.
+
 ### `prompt-prefix`
 
 Adds a `»` prefix before the editor prompt to visually distinguish it from assistant output.
@@ -182,6 +190,7 @@ Centralized model configuration used by multiple extensions. It defines fallback
 
 | Config key | Used by | Model selection |
 |---|---|---|
+| `profiles` | `profile` and all shared model selection | Named `allow` regex lists and main-session default models |
 | `recapGeneration` | `recap` | Scoped model fallback list in `model-config.json` |
 | `toolSummaryGeneration` | `tool-summary` | Scoped model fallback list in `model-config.json` |
 | `subagentModels` | `subagent` | `low`, `medium`, and `high` cyclic model lists, plus an image-only `image` list |

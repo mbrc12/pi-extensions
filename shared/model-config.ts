@@ -5,19 +5,41 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 type Model = PiModel<any>;
 
-export type ModelConfigPurpose =
-  | "recapGeneration"
-  | "toolSummaryGeneration"
-  | "subagentProgressSummary"
-  | "wiseCompacter"
-  | "webSummarization"
-  | "permissionClassification"
-  | "pythonWriteClassification";
+export const MODEL_CONFIG_PURPOSES = [
+  "recapGeneration",
+  "toolSummaryGeneration",
+  "subagentProgressSummary",
+  "wiseCompacter",
+  "webSummarization",
+  "permissionClassification",
+  "pythonWriteClassification",
+] as const;
+export type ModelConfigPurpose = typeof MODEL_CONFIG_PURPOSES[number];
 
-export type SubagentCapability = "low" | "medium" | "high" | "image";
+export const SUBAGENT_CAPABILITIES = ["low", "medium", "high", "image"] as const;
+export type SubagentCapability = typeof SUBAGENT_CAPABILITIES[number];
 export type ModelRef = readonly [provider: string, id: string];
+export interface ModelProfileConfig {
+  allow: string[];
+  defaultModel?: string;
+}
+export type ModelProfiles = Record<string, ModelProfileConfig>;
+
+export const MODEL_PROFILE_ENV = "PI_MODEL_PROFILE";
+export const DEFAULT_MODEL_PROFILE = "home";
 
 const CONFIG_PATH = path.join(getAgentDir(), "extensions", "model-config.json");
+const DEFAULT_MODEL_PROFILES: ModelProfiles = {
+  home: {
+    allow: [".*"],
+    defaultModel: "openai-codex/gpt-5.6-luna",
+  },
+  work: {
+    allow: ["^openai-codex-2/.*$"],
+    defaultModel: "openai-codex-2/gpt-5.6-sol",
+  },
+};
+let activeModelProfile = process.env[MODEL_PROFILE_ENV] || DEFAULT_MODEL_PROFILE;
 const SUBAGENT_CAPABILITY_FALLBACKS: Record<SubagentCapability, readonly SubagentCapability[]> = {
   low: ["low", "medium", "high"],
   medium: ["medium", "high", "low"],
@@ -36,6 +58,7 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
     "opencode-go/deepseek-v4-pro",
+    "openai-codex-2/gpt-5.6-luna",
   ],
   toolSummaryGeneration: [
     "opencode-go/deepseek-v4-flash",
@@ -45,15 +68,18 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
     "opencode-go/deepseek-v4-pro",
+    "openai-codex-2/gpt-5.6-luna",
   ],
   subagentProgressSummary: [
     "openai-codex/gpt-5.4-mini",
     "openai-codex/gpt-5.6-luna",
+    "openai-codex-2/gpt-5.6-luna",
   ],
   wiseCompacter: [
     "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
     "openai-codex/gpt-5.6-luna",
+    "openai-codex-2/gpt-5.6-luna",
   ],
   webSummarization: [
     "opencode-go/deepseek-v4-flash",
@@ -62,6 +88,7 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
     "openai-codex/gpt-5.4-mini",
+    "openai-codex-2/gpt-5.6-luna",
   ],
   permissionClassification: [
     "opencode-go/deepseek-v4-flash",
@@ -74,6 +101,7 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
     "google/gemini-2.0-flash",
+    "openai-codex-2/gpt-5.6-luna",
   ],
   pythonWriteClassification: [
     "opencode-go/deepseek-v4-flash",
@@ -86,6 +114,7 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
     "google/gemini-2.0-flash",
+    "openai-codex-2/gpt-5.6-luna",
   ],
 };
 
@@ -149,9 +178,90 @@ function parseModelRefs(raw: unknown, defaults: readonly string[]): ModelRef[] {
   return source.filter((item): item is ModelRef => Boolean(item));
 }
 
-export function getModelFallbacks(purpose: ModelConfigPurpose): ModelRef[] {
+export function getModelProfiles(): ModelProfiles {
+  const raw = loadRawConfig().profiles;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...DEFAULT_MODEL_PROFILES };
+  }
+
+  const profiles: ModelProfiles = {};
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    // Keep the original array form compatible with older configurations.
+    const record = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
+    const rawAllow = Array.isArray(value) ? value : record?.allow;
+    if (!Array.isArray(rawAllow)) continue;
+    const allow = rawAllow.filter((pattern): pattern is string => typeof pattern === "string");
+    if (allow.length === 0) continue;
+    profiles[name] = {
+      allow,
+      ...(typeof record?.defaultModel === "string" ? { defaultModel: record.defaultModel } : {}),
+    };
+  }
+  return Object.keys(profiles).length > 0 ? profiles : { ...DEFAULT_MODEL_PROFILES };
+}
+
+export function getProfileDefaultModel(name: string): ModelRef | undefined {
+  return parseModelRef(getModelProfiles()[name]?.defaultModel);
+}
+
+export function getActiveModelProfile(): string {
+  return process.env[MODEL_PROFILE_ENV] || activeModelProfile;
+}
+
+export function setActiveModelProfile(name: string): void {
+  const profile = getModelProfiles()[name];
+  if (!profile) throw new Error(`Unknown model profile: ${name}`);
+  for (const pattern of profile.allow) new RegExp(pattern);
+
+  activeModelProfile = name;
+  process.env[MODEL_PROFILE_ENV] = name;
+}
+
+export function resetActiveModelProfile(): void {
+  activeModelProfile = DEFAULT_MODEL_PROFILE;
+  delete process.env[MODEL_PROFILE_ENV];
+}
+
+export function modelMatchesProfile(
+  model: { provider: string; id: string },
+  profile?: string,
+): boolean {
+  const config = getModelProfiles()[profile ?? getActiveModelProfile()];
+  if (!config) return false;
+  const key = `${model.provider}/${model.id}`;
+  return config.allow.some((pattern) => {
+    try {
+      return new RegExp(pattern).test(key);
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function getModelFallbacksForProfile(
+  purpose: ModelConfigPurpose,
+  profile: string,
+): ModelRef[] {
   const raw = loadRawConfig()[purpose];
-  return parseModelRefs(raw, DEFAULT_MODEL_CONFIG[purpose]);
+  return parseModelRefs(raw, DEFAULT_MODEL_CONFIG[purpose])
+    .filter(([provider, id]) => modelMatchesProfile({ provider, id }, profile));
+}
+
+export function getModelFallbacks(purpose: ModelConfigPurpose): ModelRef[] {
+  return getModelFallbacksForProfile(purpose, getActiveModelProfile());
+}
+
+export function getSubagentTierModels(
+  capability: SubagentCapability,
+  profile: string,
+): ModelRef[] {
+  const rawConfig = loadRawConfig();
+  return parseModelRefs(
+    (rawConfig.subagentModels as Record<string, unknown> | undefined)?.[capability],
+    DEFAULT_SUBAGENT_MODELS[capability],
+  ).filter(([provider, id]) => modelMatchesProfile({ provider, id }, profile));
 }
 
 /**
@@ -159,15 +269,11 @@ export function getModelFallbacks(purpose: ModelConfigPurpose): ModelRef[] {
  * The image tier uses only its image-capable models. Duplicate models are skipped.
  */
 export function getSubagentModelFallbacks(capability: SubagentCapability): ModelRef[] {
-  const rawConfig = loadRawConfig();
   const candidates: ModelRef[] = [];
   const seen = new Set<string>();
 
   for (const tier of SUBAGENT_CAPABILITY_FALLBACKS[capability]) {
-    for (const model of parseModelRefs(
-      (rawConfig.subagentModels as Record<string, unknown> | undefined)?.[tier],
-      DEFAULT_SUBAGENT_MODELS[tier],
-    )) {
+    for (const model of getSubagentTierModels(tier, getActiveModelProfile())) {
       const key = `${model[0]}/${model[1]}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -215,7 +321,7 @@ async function getConfiguredModelsWithAuth(
   const candidates: Model[] = [];
 
   const add = (model: Model | undefined): void => {
-    if (!model) return;
+    if (!model || !modelMatchesProfile(model)) return;
     const key = modelKey(model);
     if (seen.has(key)) return;
     seen.add(key);
