@@ -342,14 +342,14 @@ export default function (pi: ExtensionAPI) {
   let requestFooterRender: (() => void) | undefined;
 
   // ---- generation speed (tokens/sec) ----
-  // A token-driven exponential moving average of output speed with a one-minute
-  // half-life: after a minute of generation, a past sample's influence on the
+  // A token-driven exponential moving average of output speed with a 20-second
+  // half-life: after 20 seconds of generation, a past sample's influence on the
   // displayed rate has halved. Streamed deltas are what move the average; a
   // finished response only seeds the first value and teaches the token-density
   // estimate. The average therefore never lurches when generation stops - it glides
   // while text arrives and then holds still. Idle gaps never drag the rate down,
   // because only generation events feed the average.
-  const RATE_HALF_LIFE_MS = 60_000;
+  const RATE_HALF_LIFE_MS = 20_000;
   // A new model can generate much faster or slower than the previous one, so the
   // first response on a new model converges quickly instead of holding a stale rate
   // for a full minute.

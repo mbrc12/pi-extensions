@@ -88,7 +88,7 @@ Replaces the default footer with a compact three-line statusline:
 
 The `sub` timer on line 1 restarts at `0s` for each new subagent tool call. It updates once per second while a subagent runs, then keeps the duration of the last completed subagent.
 
-The `tok/s` item shows output speed in tokens per second as an exponential moving average with a one-minute half-life. Streamed deltas are what move it, and each tick uses the model's learned characters-per-token density so the estimate stays close to the reported token counts. A finished response seeds the first value and re-learns that density, but never re-blends the exact rate: the number does not jump when generation stops. Idle time between responses and while tools run does not lower the value. The item first appears when the session's first response finishes, and after a model switch the average converges over that model's first response instead of holding the previous model's rate for a minute.
+The `tok/s` item shows output speed in tokens per second as an exponential moving average with a 20-second half-life. Streamed deltas are what move it, and each tick uses the model's learned characters-per-token density so the estimate stays close to the reported token counts. A finished response seeds the first value and re-learns that density, but never re-blends the exact rate: the number does not jump when generation stops. Idle time between responses and while tools run does not lower the value. The item first appears when the session's first response finishes, and after a model switch the average converges over that model's first response instead of holding the previous model's rate.
 
 Costs use US dollars by default. Use `/rupees on` to replace the USD cost with INR and `/rupees off` to switch back to USD.
 
@@ -156,6 +156,12 @@ Shows one compact, muted line after each turn that uses tools: `Tool: <summary>`
 
 The extension immediately reserves one transcript position after the turn's tool calls with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Any turn that uses `todo` gets no summary, even if it also uses other tools. The blacklist in `tool-summary.ts` omits `ask_question` and `web_use` from summaries; turns containing only blacklisted tools also produce no summary. Toggle summaries for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
 
+Each stored resolution entry also records the provider and model that produced the summary, such as `opencode-go/mimo-v2.5`, so a session can be audited for the model that really answered.
+
+Run `/tool-summary-model` to probe the configured fallback list. It sends one minimal request through the same selection path and shows the candidate order, the active profile, every skipped or failed candidate with its error, and the model that answered. The same report is written to a widget above the editor.
+
+Summary generation asks OpenCode models to answer without reasoning. `mimo-v2.5` otherwise spends 700–1750 tokens reasoning about a one-line summary, and a small token cap is then consumed before it writes any text, so the selector treats the response as empty and moves to the next model. The request allows 1024 output tokens so a reasoning fallback model still fits. For the same reason the `toolSummaryGeneration` list is short: `opencode-go/mimo-v2.5`, then the two Codex Luna accounts.
+
 ### `todo-list`
 
 A simplified plan-mode todo list. Registers a `todo` tool (list/add/complete/clear), a `/todo-clear` command, and a `/todo-inject on|off` toggle.
@@ -203,3 +209,7 @@ Centralized model configuration used by multiple extensions. It defines fallback
 | `pythonWriteClassification` | `py-explore` | Scoped model fallback list in `model-config.json` |
 
 Managed via `model-config.json` in the extensions root.
+
+The shared selector also adds the `x-opencode-session` and `x-opencode-client` headers for OpenCode-hosted models. Pi adds these only inside its own agent loop; extension requests call the model registry directly, and the OpenCode gateway rejects them with `MissingSessionID` without the headers. Every purpose list that starts with an `opencode-go` model needs this, or the first candidate fails and the request silently falls through to the next model. Pass `onCandidateFailure` to a completion call to see those failures.
+
+Set `disableReasoning` in the same options to send `reasoning_effort: "none"` for OpenCode-hosted models. Other providers reject that value, as do OpenCode's own `minimax-m2.7` and `glm-5.3`, so keep it off for any purpose list that contains them.

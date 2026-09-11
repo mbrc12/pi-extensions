@@ -287,6 +287,21 @@ export function getSubagentModelFallbacks(capability: SubagentCapability): Model
 export interface SelectConfiguredModelOptions {
   fallbackToCurrent?: boolean;
   fallbackToAnyAvailable?: boolean;
+  /**
+   * Report a candidate that could not be used: no usable auth, a rejected request,
+   * or a response that carried an error or no text. Diagnostics only.
+   */
+  onCandidateFailure?: (modelKey: string, error: Error) => void;
+  /**
+   * Ask OpenCode-hosted models to answer without reasoning. Pi's OpenAI-style branch
+   * sends `thinkingLevelMap[effort] ?? effort`, so "none" reaches the gateway, which
+   * accepts it for mimo and deepseek and returns no reasoning at all.
+   *
+   * Keep this scoped to OpenCode hosts. Other providers reject the value, and
+   * OpenCode's own minimax-m2.7 and glm-5.3 answer 500 and 400 for it, so do not
+   * enable this for a purpose list that contains them.
+   */
+  disableReasoning?: boolean;
 }
 
 export interface CompletionFallbackResult {
@@ -297,6 +312,68 @@ export interface CompletionFallbackResult {
 
 function modelKey(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+/** Extension-facing model access. `sessionManager` is optional for legacy callers. */
+export interface ModelCompletionContext {
+  modelRegistry: any;
+  model?: Model;
+  sessionManager?: { getSessionId?: () => string };
+}
+
+const OPENCODE_SESSION_HOST = "opencode.ai";
+
+function isOpencodeHosted(model: { provider?: unknown; baseUrl?: unknown }): boolean {
+  if (model.provider === "opencode" || model.provider === "opencode-go") return true;
+  if (typeof model.baseUrl !== "string") return false;
+  try {
+    return new URL(model.baseUrl).hostname === OPENCODE_SESSION_HOST;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pi adds these headers for OpenCode-hosted models inside its own stream wrapper,
+ * but extensions call the model registry directly and bypass that wrapper. Without
+ * them the OpenCode gateway rejects the request with "MissingSessionID". Mirror
+ * pi's rule: the opencode/opencode-go providers, or an opencode.ai base URL.
+ */
+function opencodeSessionHeaders(
+  model: { provider?: unknown; baseUrl?: unknown },
+  sessionId: string | undefined,
+): Record<string, string> | undefined {
+  if (!sessionId || !isOpencodeHosted(model)) return undefined;
+  return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
+}
+
+function completionSessionId(ctx: ModelCompletionContext): string | undefined {
+  try {
+    const id = ctx.sessionManager?.getSessionId?.();
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Add the session headers on top of any header transform the caller already uses. */
+function withSessionHeaders(
+  completionOptions: Record<string, any>,
+  sessionHeaders: Record<string, string> | undefined,
+): Record<string, any> {
+  if (!sessionHeaders) return completionOptions;
+  const existing = completionOptions.transformHeaders;
+  return {
+    ...completionOptions,
+    transformHeaders: async (headers: Record<string, string> | undefined) => {
+      const base = typeof existing === "function" ? await existing(headers) : headers;
+      return { ...(base ?? {}), ...sessionHeaders };
+    },
+  };
 }
 
 async function getAvailableModels(ctx: { modelRegistry: any }): Promise<any[]> {
@@ -311,7 +388,7 @@ async function getAvailableModels(ctx: { modelRegistry: any }): Promise<any[]> {
 }
 
 async function getConfiguredModelsWithAuth(
-  ctx: { modelRegistry: any; model?: Model },
+  ctx: ModelCompletionContext,
   purpose: ModelConfigPurpose,
   options: SelectConfiguredModelOptions,
 ): Promise<Array<{ model: Model; auth: any }>> {
@@ -346,16 +423,28 @@ async function getConfiguredModelsWithAuth(
   for (const model of candidates) {
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok) usable.push({ model, auth });
-    } catch {
+      if (auth.ok) {
+        usable.push({ model, auth });
+      } else {
+        options.onCandidateFailure?.(
+          modelKey(model),
+          new Error(
+            typeof auth.error === "string" && auth.error
+              ? `no usable auth: ${auth.error}`
+              : "no usable auth",
+          ),
+        );
+      }
+    } catch (error) {
       // An auth provider can fail independently of the model request. Try the next model.
+      options.onCandidateFailure?.(modelKey(model), toError(error));
     }
   }
   return usable;
 }
 
 export async function selectConfiguredModelWithAuth(
-  ctx: { modelRegistry: any; model?: Model },
+  ctx: ModelCompletionContext,
   purpose: ModelConfigPurpose,
   options: SelectConfiguredModelOptions = {},
 ): Promise<{ model: Model; auth: any } | undefined> {
@@ -385,13 +474,14 @@ function responseFailure(response: any): Error | undefined {
  * next model. A caller abort is never retried.
  */
 export async function completeWithModelFallback(
-  ctx: { modelRegistry: any; model?: Model },
+  ctx: ModelCompletionContext,
   purpose: ModelConfigPurpose,
   request: any,
   completionOptions: Record<string, any> = {},
   selectionOptions: SelectConfiguredModelOptions = {},
 ): Promise<CompletionFallbackResult> {
   const candidates = await getConfiguredModelsWithAuth(ctx, purpose, selectionOptions);
+  const sessionId = completionSessionId(ctx);
   let lastError: unknown;
 
   for (const { model, auth } of candidates) {
@@ -399,13 +489,20 @@ export async function completeWithModelFallback(
       throw new Error("Model request was aborted");
     }
     try {
-      const response = await ctx.modelRegistry.complete(model, request, completionOptions);
+      const requestOptions = {
+        ...withSessionHeaders(completionOptions, opencodeSessionHeaders(model, sessionId)),
+      };
+      if (selectionOptions.disableReasoning && isOpencodeHosted(model)) {
+        requestOptions.reasoningEffort = "none";
+      }
+      const response = await ctx.modelRegistry.complete(model, request, requestOptions);
       const failure = responseFailure(response);
       if (failure) throw failure;
       return { response, model, auth };
     } catch (error) {
       if (completionOptions.signal?.aborted) throw error;
       lastError = error;
+      selectionOptions.onCandidateFailure?.(modelKey(model), toError(error));
     }
   }
 

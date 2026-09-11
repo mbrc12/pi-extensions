@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type Component, type TUI } from "@earendil-works/pi-tui";
-import { completeWithModelFallback } from "./shared/model-config.ts";
+import { completeWithModelFallback, getActiveModelProfile, getModelFallbacks } from "./shared/model-config.ts";
 
 const SUMMARY_ENTRY_TYPE = "tool-summary";
 const RESOLUTION_ENTRY_TYPE = "tool-summary-resolution";
@@ -13,6 +13,29 @@ const TURN_SUMMARY_SUPPRESSORS = new Set(["todo"]);
 const SUMMARY_TOOL_BLACKLIST = new Set(["ask_question", "web_use", "notes", "task_clear"]);
 // Safety limit for display and fallback text; the model prompt uses no character quota.
 const MAX_LINE_LENGTH = 160;
+// Reasoning is disabled for OpenCode models (see TOOL_SUMMARY_SELECTION), but a
+// fallback model may still reason before it answers, so keep room for that plus the
+// one-line summary. A tighter cap made reasoning models return no text at all.
+const TOOL_SUMMARY_MAX_TOKENS = 1024;
+
+/**
+ * Build the completion options. The probe and the real call share this function so
+ * a diagnostic can never disagree with the request used in production.
+ */
+function toolSummaryCompletionOptions(signal?: AbortSignal): Record<string, unknown> {
+	return {
+		signal,
+		reasoningEffort: "low",
+		maxTokens: TOOL_SUMMARY_MAX_TOKENS,
+	};
+}
+
+/**
+ * Ask OpenCode models to answer without reasoning. mimo-v2.5 otherwise reasons for
+ * 700-1750 tokens about a one-line summary and hits the token cap before it writes
+ * any text, so the selector treats it as a failure and moves on.
+ */
+const TOOL_SUMMARY_SELECTION = { disableReasoning: true } as const;
 const MAX_CONVERSATION_CHARS = 12_000;
 const MAX_TOOL_DATA_CHARS = 10_000;
 const CONTEXT_MESSAGES = 18;
@@ -36,6 +59,8 @@ interface ToolSummaryResolution {
 	toolCallId?: string;
 	summary: string;
 	isError: boolean;
+	/** Provider/model that produced the summary, for auditing which model answered. */
+	model?: string;
 }
 
 interface CompletedTool {
@@ -150,11 +175,21 @@ function normalizeModelSummary(text: string, fallback: string): string {
 	return normalizedSummary(flattenNewlines(text), fallback);
 }
 
+/** Join the text parts of a completion response. */
+function responseText(response: any): string {
+	return Array.isArray(response?.content)
+		? response.content
+			.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+			.map((part: any) => part.text)
+			.join(" ")
+		: "";
+}
+
 async function generateToolSummary(
 	ctx: ExtensionContext,
 	tools: CompletedTool[],
 	signal: AbortSignal | undefined,
-): Promise<string> {
+): Promise<{ text: string; modelKey?: string }> {
 	const fallback = fallbackSummary(tools);
 	const perToolBudget = Math.max(1, Math.floor(MAX_TOOL_DATA_CHARS / (tools.length * 2)));
 	const toolData = tools.map((tool, index) => {
@@ -194,7 +229,7 @@ async function generateToolSummary(
 		"</tools>",
 	].join("\n");
 
-	const { response } = await completeWithModelFallback(
+	const { response, model } = await completeWithModelFallback(
 		ctx,
 		"toolSummaryGeneration",
 		{
@@ -204,18 +239,14 @@ async function generateToolSummary(
 				timestamp: Date.now(),
 			}],
 		},
-		{
-			signal,
-			reasoningEffort: "low",
-			maxTokens: 120,
-		},
+		toolSummaryCompletionOptions(signal),
+		TOOL_SUMMARY_SELECTION,
 	);
 
-	const text = response.content
-		.filter((part: any) => part?.type === "text" && typeof part.text === "string")
-		.map((part: any) => part.text)
-		.join(" ");
-	return normalizeModelSummary(text, fallback);
+	return {
+		text: normalizeModelSummary(responseText(response), fallback),
+		modelKey: `${model.provider}/${model.id}`,
+	};
 }
 
 class LiveToolSummaryComponent implements Component {
@@ -424,8 +455,11 @@ export default function toolSummaryExtension(pi: ExtensionAPI): void {
 
 			void (async () => {
 				let summary: string;
+				let modelKey: string | undefined;
 				try {
-					summary = await generateToolSummary(ctx, tools, signal);
+					const generated = await generateToolSummary(ctx, tools, signal);
+					summary = generated.text;
+					modelKey = generated.modelKey;
 				} catch {
 					if (signal.aborted || !enabled || requestGeneration !== sessionGeneration) return;
 					summary = fallbackSummary(tools);
@@ -440,6 +474,7 @@ export default function toolSummaryExtension(pi: ExtensionAPI): void {
 					summaryId,
 					summary,
 					isError,
+					...(modelKey ? { model: modelKey } : {}),
 				} satisfies ToolSummaryResolution);
 			})()
 				.catch(() => {
@@ -465,6 +500,56 @@ export default function toolSummaryExtension(pi: ExtensionAPI): void {
 		liveComponents.clear();
 		activeTui = undefined;
 		if (ctx.mode === "tui") ctx.ui.setWidget(RENDER_DRIVER_WIDGET_ID, undefined);
+	});
+
+	// Diagnostics: show which model really answers toolSummaryGeneration. The shared
+	// selector reports skipped and failed candidates, so a silent fallback becomes
+	// visible instead of a guess.
+	pi.registerCommand("tool-summary-model", {
+		description: "Probe which model answers tool summaries",
+		handler: async (_args, ctx) => {
+			const profile = getActiveModelProfile();
+			const configured = getModelFallbacks("toolSummaryGeneration")
+				.map(([provider, id]) => `${provider}/${id}`);
+			const failures: string[] = [];
+			const startedAt = Date.now();
+			let winner: string | undefined;
+			let reply: string | undefined;
+			let failureText: string | undefined;
+			try {
+				const result = await completeWithModelFallback(
+					ctx,
+					"toolSummaryGeneration",
+					{
+						messages: [{
+							role: "user" as const,
+							content: [{ type: "text" as const, text: "Reply with the single word: ok" }],
+							timestamp: Date.now(),
+						}],
+					},
+					toolSummaryCompletionOptions(),
+					{ ...TOOL_SUMMARY_SELECTION, onCandidateFailure: (key, error) => failures.push(`${key}: ${error.message}`) },
+				);
+				winner = `${result.model.provider}/${result.model.id}`;
+				reply = flattenNewlines(responseText(result.response)).slice(0, 120);
+			} catch (error) {
+				failureText = error instanceof Error ? error.message : String(error);
+			}
+			const elapsedMs = Date.now() - startedAt;
+			ctx.ui.setWidget("tool-summary-model", [
+				`toolSummaryGeneration probe - profile: ${profile}, ${elapsedMs} ms`,
+				`configured order: ${configured.join(", ") || "(none)"}`,
+				...(failures.length > 0 ? failures.map((failure) => `x ${failure}`) : ["no candidate was skipped or failed"]),
+				winner ? `ok: ${winner} answered` : `no model answered: ${failureText ?? "unknown error"}`,
+				...(reply ? [`reply: ${reply}`] : []),
+			]);
+			ctx.ui.notify(
+				winner
+					? `tool summaries use ${winner}${failures.length > 0 ? ` (${failures.length} failed first)` : ""}`
+					: `tool summary probe failed: ${failureText ?? "no model answered"}`,
+				winner ? "info" : "error",
+			);
+		},
 	});
 
 	pi.registerCommand("tool-summary", {
