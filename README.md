@@ -65,18 +65,15 @@ Shows a small recap widget after 30 seconds without user input, then hides it as
 
 ### `permissions`
 
-Intercepts tool calls and classifies them before execution. Emits `prompt_wait` before approval dialogs. Four modes:
+Intercepts tool calls and classifies them before execution. Emits `prompt_wait` before approval dialogs. Three modes:
 
 | Mode | Behavior |
 |---|---|
 | `allow` | Everything passes through |
 | `classify` | Two-stage: rule-based → LLM → prompt user |
 | `ask` | Every tool call prompts for confirmation |
-| `plan` | Deny-by-default planning with only approved read and interaction tools |
 
-Plan mode hides and blocks Bash, file edits, subagents, and unknown tools. Enter it explicitly with `/plan` or the startup flag. The model submits the complete Markdown plan through `plan_exit`. `plan_exit` keeps restrictions active through the end of the planning run. After approval, Pi restores the previous permission mode and tool surface, then starts implementation in a fresh agent turn with the approved plan. Plan state follows the active session branch.
-
-Use `/permissions allow|classify|ask|plan` or `/plan [optional goal]`. `F8` continues to cycle the three normal permission modes; pressing it during plan mode exits to `ask`. Start Pi with `--plan` to begin in plan mode.
+Plan mode is disabled. Permission controls remain available through `/permissions allow|classify|ask` and the `F8` shortcut.
 
 ### `statusline`
 

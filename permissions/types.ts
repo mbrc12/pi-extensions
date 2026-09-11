@@ -1,11 +1,10 @@
 /**
  * Permissions extension - shared types.
  *
- * Four modes:
+ * Three modes:
  *  - allow   : everything passes through
  *  - classify: rule-based + optional LLM classifier auto-approves/blocks/asks
  *  - ask     : every tool call is presented to the user for confirmation
- *  - plan    : deny-by-default read-only planning until explicit approval
  *
  * Pipeline (classify mode):
  *   Rule classifier → allow | dangerous | defer (→ LLM)
@@ -13,7 +12,7 @@
  *   User prompt: dangerous → ⛔ DANGER marker, escalate → ⚠️ normal
  */
 
-export type PermissionMode = "allow" | "classify" | "ask" | "plan";
+export type PermissionMode = "allow" | "classify" | "ask";
 
 /** Rule classifier output. "defer" = "I can't decide, ask the LLM". */
 export type RuleClass = "allow" | "dangerous" | "defer";

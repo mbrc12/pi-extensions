@@ -1,34 +1,23 @@
 /**
  * Permissions Extension for pi
  *
- * Intercepts tool calls and classifies them in four modes:
+ * Intercepts tool calls and classifies them in three modes:
  *
  *   allow    – everything passes through (no interception)
  *   classify – rule-based + optional LLM classifier →
  *              allow (auto-approve) / dangerous (block) / review (ask user)
  *   ask      – present every tool call to the user for confirmation
- *   plan     – deny-by-default read-only planning until the user approves
  *
  * Commands:
- *   /permissions [allow|classify|ask|plan] – switch mode or show current
- *   /plan                                  – toggle plan mode
+ *   /permissions [allow|classify|ask] – switch mode or show current
  *
- * Inspired by Claude Code's permission and plan modes.
+ * Inspired by Claude Code's permission modes.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { promptWait } from "../notify-on-idle";
 import { classifyToolCall } from "./classifier";
 import { classifyWithLLM } from "./llm-classifier";
-import {
-  normalModeToolNames,
-  type NormalPermissionMode,
-  PLAN_EXIT_TOOL,
-  PLAN_MODE_SYSTEM_PROMPT,
-  planModeBlockReason,
-  planModeToolNames,
-} from "./plan-mode";
 import type { Classification, PermissionMode } from "./types";
 import { showAskDialog } from "./ask-dialog";
 import { COMMAND_PREVIEW_LENGTH } from "./types";
@@ -41,21 +30,11 @@ const STATE_KEY = "permissions-mode";
 
 interface PersistedPermissionState {
   mode: PermissionMode;
-  prePlanMode?: NormalPermissionMode;
-  toolsBeforePlanMode?: string[];
   activeTools?: string[];
-  baselineTools?: string[];
-  approvedPlan?: string;
-  pendingPlanExecution?: boolean;
 }
 
 let currentMode: PermissionMode = "classify"; // default
-let prePlanMode: NormalPermissionMode | undefined;
-let toolsBeforePlanMode: string[] | undefined;
-let approvedPlan: string | undefined;
-let pendingPlanExecution = false;
 let modeGeneration = 0;
-let sessionBaselineTools: string[] | undefined;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,8 +48,6 @@ function modeLabel(mode: PermissionMode): string {
       return "🤖 classify (F8)";
     case "ask":
       return "🔴 ask (F8)";
-    case "plan":
-      return "⏸ plan";
   }
 }
 
@@ -82,8 +59,6 @@ function modeColor(mode: PermissionMode): "success" | "warning" | "error" {
       return "warning"; // 🤖
     case "ask":
       return "error"; // 🔴
-    case "plan":
-      return "warning"; // ⏸
   }
 }
 
@@ -423,10 +398,6 @@ async function askUserForClassification(
 // ---------------------------------------------------------------------------
 
 function isPermissionMode(value: unknown): value is PermissionMode {
-  return value === "allow" || value === "classify" || value === "ask" || value === "plan";
-}
-
-function isNormalPermissionMode(value: unknown): value is NormalPermissionMode {
   return value === "allow" || value === "classify" || value === "ask";
 }
 
@@ -439,70 +410,15 @@ function stringArray(value: unknown): string[] | undefined {
 function persistState(pi: ExtensionAPI): void {
   pi.appendEntry(STATE_KEY, {
     mode: currentMode,
-    prePlanMode,
-    toolsBeforePlanMode,
-    activeTools: pi.getActiveTools(),
-    baselineTools: sessionBaselineTools,
-    approvedPlan,
-    pendingPlanExecution,
+    activeTools: pi.getActiveTools().filter(
+      (name) => name !== "plan_exit" && name !== "notes",
+    ),
   } satisfies PersistedPermissionState);
-}
-
-function enterPlanMode(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  reason?: string,
-): void {
-  if (currentMode === "plan") return;
-
-  prePlanMode = currentMode;
-  toolsBeforePlanMode = pi.getActiveTools();
-  sessionBaselineTools ??= normalModeToolNames(toolsBeforePlanMode);
-  approvedPlan = undefined;
-  pendingPlanExecution = false;
-  currentMode = "plan";
-  modeGeneration += 1;
-  pi.setActiveTools(
-    planModeToolNames([...toolsBeforePlanMode, PLAN_EXIT_TOOL]),
-  );
-  persistState(pi);
-  updateStatus(ctx);
-  ctx.ui.notify(
-    reason?.trim()
-      ? `Plan mode enabled: ${reason.trim()}`
-      : "Plan mode enabled. Mutating tools are blocked until approval.",
-    "info",
-  );
-}
-
-function leavePlanMode(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  targetMode?: NormalPermissionMode,
-): NormalPermissionMode {
-  const restoredMode = targetMode ?? prePlanMode ?? "classify";
-  const restoredTools = normalModeToolNames(
-    toolsBeforePlanMode ?? pi.getActiveTools(),
-  );
-
-  currentMode = restoredMode;
-  modeGeneration += 1;
-  prePlanMode = undefined;
-  toolsBeforePlanMode = undefined;
-  pendingPlanExecution = false;
-  pi.setActiveTools(restoredTools);
-  persistState(pi);
-  updateStatus(ctx);
-  return restoredMode;
 }
 
 function reconstructState(pi: ExtensionAPI, ctx: ExtensionContext): void {
   modeGeneration += 1;
   currentMode = "classify";
-  prePlanMode = undefined;
-  toolsBeforePlanMode = undefined;
-  approvedPlan = undefined;
-  pendingPlanExecution = false;
 
   let restored: PersistedPermissionState | undefined;
   for (const entry of ctx.sessionManager.getBranch()) {
@@ -511,49 +427,21 @@ function reconstructState(pi: ExtensionAPI, ctx: ExtensionContext): void {
     if (!data || !isPermissionMode(data.mode)) continue;
     restored = {
       mode: data.mode,
-      prePlanMode: isNormalPermissionMode(data.prePlanMode)
-        ? data.prePlanMode
-        : undefined,
-      toolsBeforePlanMode: stringArray(data.toolsBeforePlanMode),
       activeTools: stringArray(data.activeTools),
-      baselineTools: stringArray(data.baselineTools),
-      approvedPlan: typeof data.approvedPlan === "string"
-        ? data.approvedPlan
-        : undefined,
-      pendingPlanExecution: data.pendingPlanExecution === true,
     };
   }
 
   if (restored) {
     currentMode = restored.mode;
-    prePlanMode = restored.prePlanMode;
-    toolsBeforePlanMode = restored.toolsBeforePlanMode;
-    approvedPlan = restored.approvedPlan;
-    pendingPlanExecution = restored.pendingPlanExecution === true;
-    sessionBaselineTools = restored.baselineTools ?? sessionBaselineTools;
-  }
-
-  if (currentMode === "plan") {
-    prePlanMode ??= "classify";
-    const sourceTools = toolsBeforePlanMode ?? restored?.activeTools ?? sessionBaselineTools ?? [];
-    pi.setActiveTools(planModeToolNames([...sourceTools, PLAN_EXIT_TOOL]));
-  } else {
-    const sourceTools = restored?.activeTools ?? sessionBaselineTools ?? pi.getActiveTools();
-    pi.setActiveTools(normalModeToolNames(sourceTools));
+    if (restored.activeTools) {
+      pi.setActiveTools(
+        restored.activeTools.filter(
+          (name) => name !== "plan_exit" && name !== "notes",
+        ),
+      );
+    }
   }
   updateStatus(ctx);
-}
-
-function initializeSessionBaseline(pi: ExtensionAPI, ctx: ExtensionContext): void {
-  let persistedBaseline: string[] | undefined;
-  for (const entry of ctx.sessionManager.getEntries()) {
-    if (entry.type !== "custom" || entry.customType !== STATE_KEY) continue;
-    const data = entry.data as Partial<PersistedPermissionState> | undefined;
-    persistedBaseline ??= stringArray(data?.baselineTools);
-    persistedBaseline ??= stringArray(data?.toolsBeforePlanMode);
-    if (persistedBaseline) break;
-  }
-  sessionBaselineTools = persistedBaseline ?? normalModeToolNames(pi.getActiveTools());
 }
 
 // ---------------------------------------------------------------------------
@@ -561,139 +449,9 @@ function initializeSessionBaseline(pi: ExtensionAPI, ctx: ExtensionContext): voi
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
-  pi.registerFlag("plan", {
-    description: "Start in read-only plan mode",
-    type: "boolean",
-    default: false,
-  });
-
-  pi.registerTool({
-    name: PLAN_EXIT_TOOL,
-    label: "Present Plan for Approval",
-    description:
-      "Present a complete implementation plan for user approval and leave plan mode only if approved.",
-    promptSnippet: "Present the complete Markdown plan and request approval to implement it.",
-    parameters: Type.Object({
-      plan: Type.String({
-        minLength: 1,
-        description: "Complete decision-ready implementation plan in Markdown",
-      }),
-    }),
-    executionMode: "sequential",
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      if (currentMode !== "plan") {
-        return {
-          content: [{ type: "text", text: "Cannot exit plan mode because it is not active." }],
-          details: { approved: false, mode: currentMode },
-        };
-      }
-      if (pendingPlanExecution) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "The plan is already approved. End this response so implementation can start in a fresh turn.",
-            },
-          ],
-          details: { approved: true, pending: true, mode: currentMode, plan: approvedPlan },
-        };
-      }
-
-      const plan = params.plan.trim();
-      if (!plan) {
-        return {
-          content: [{ type: "text", text: "The plan is empty. Continue planning and submit a complete plan." }],
-          details: { approved: false, mode: currentMode },
-        };
-      }
-      if (!ctx.hasUI) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Plan approval requires an interactive UI. Plan mode remains active.",
-            },
-          ],
-          details: { approved: false, mode: currentMode, plan },
-        };
-      }
-
-      const approvalGeneration = modeGeneration;
-      const approvalSessionId = ctx.sessionManager.getSessionId();
-      promptWait(pi, { title: "Pi", body: "Plan ready for approval" });
-      const approved = ctx.mode === "tui"
-        ? await showAskDialog(ctx, {
-            header: "Approve this plan and start implementation?",
-            preview: plan.slice(0, COMMAND_PREVIEW_LENGTH * 10),
-            full: plan,
-            truncated: plan.length > COMMAND_PREVIEW_LENGTH * 10,
-            allowLabel: "Approve and Implement",
-            denyLabel: "Keep Planning",
-            background: "customMessageBg",
-          })
-        : await ctx.ui.confirm(
-            "Approve plan",
-            `${plan}\n\nApprove this plan and start implementation?`,
-          );
-
-      if (!approved) {
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                "The user did not approve the plan. Stay in plan mode, ask for feedback if needed, and refine it.",
-            },
-          ],
-          details: { approved: false, mode: currentMode, plan },
-        };
-      }
-
-      if (
-        signal?.aborted ||
-        modeGeneration !== approvalGeneration ||
-        currentMode !== "plan" ||
-        ctx.sessionManager.getSessionId() !== approvalSessionId
-      ) {
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                "The session or permission mode changed while approval was open. The approval was discarded; submit the plan again if needed.",
-            },
-          ],
-          details: { approved: false, stale: true, mode: currentMode, plan },
-        };
-      }
-
-      approvedPlan = plan;
-      pendingPlanExecution = true;
-      persistState(pi);
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              "Plan approved. End this response without calling more tools. Implementation will start automatically in a new turn with the previous permission mode restored.",
-          },
-        ],
-        details: { approved: true, pending: true, mode: currentMode, plan },
-      };
-    },
-  });
-
   // ---------- Intercept tool calls ----------
   pi.on("tool_call", async (event, ctx) => {
     const callGeneration = modeGeneration;
-    if (currentMode === "plan") {
-      const reason = planModeBlockReason(
-        event.toolName,
-        event.input as Record<string, unknown>,
-      );
-      return reason ? { block: true, reason } : undefined;
-    }
-
     // Only intercept built-in and known tools; skip extension-only tools that
     // we can't classify (they pass through — classified by their own logic).
     const knownTools = [
@@ -732,38 +490,11 @@ export default function (pi: ExtensionAPI) {
     return result;
   });
 
-  pi.on("before_agent_start", async (event) => {
-    if (currentMode !== "plan") return;
-    pi.setActiveTools(
-      planModeToolNames([...pi.getActiveTools(), PLAN_EXIT_TOOL]),
-    );
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`,
-    };
-  });
-
-  // Leave plan mode only after the planning run has fully settled. This gives
-  // the implementation turn a freshly rebuilt system prompt and tool surface.
-  pi.on("agent_settled", async (_event, ctx) => {
-    if (currentMode !== "plan" || !pendingPlanExecution || !approvedPlan) return;
-
-    const plan = approvedPlan;
-    const restoredMode = leavePlanMode(pi, ctx);
-    pi.sendMessage(
-      {
-        customType: "plan-mode-approved",
-        content: `[APPROVED IMPLEMENTATION PLAN]\n\n${plan}\n\nPlan mode has ended. Permission mode is ${restoredMode}. Implement and verify this plan now.`,
-        display: false,
-      },
-      { deliverAs: "followUp", triggerTurn: true },
-    );
-  });
-
-  // ---------- /permissions and /plan commands ----------
+  // ---------- /permissions command ----------
   pi.registerCommand("permissions", {
-    description: "Set permission mode: allow, classify, ask, or plan",
+    description: "Set permission mode: allow, classify, or ask",
     getArgumentCompletions: (prefix: string) => {
-      const modes = ["allow", "classify", "ask", "plan"];
+      const modes = ["allow", "classify", "ask"];
       const filtered = modes.filter((m) => m.startsWith(prefix));
       return filtered.length > 0
         ? filtered.map((m) => ({ value: m, label: m }))
@@ -772,43 +503,23 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const arg = args?.trim().toLowerCase();
 
-      if (arg === "plan") {
-        enterPlanMode(pi, ctx);
-      } else if (arg === "allow" || arg === "classify" || arg === "ask") {
-        if (currentMode === "plan") {
-          leavePlanMode(pi, ctx, arg);
-        } else {
-          currentMode = arg;
-          modeGeneration += 1;
-          persistState(pi);
-          updateStatus(ctx);
-        }
+      if (arg === "allow" || arg === "classify" || arg === "ask") {
+        currentMode = arg;
+        modeGeneration += 1;
+        persistState(pi);
+        updateStatus(ctx);
         ctx.ui.notify(`Permission mode: ${modeLabel(currentMode)}`, "info");
       } else if (!arg) {
         ctx.ui.notify(
-          `Current mode: ${modeLabel(currentMode)}. Use /permissions allow|classify|ask|plan`,
+          `Current mode: ${modeLabel(currentMode)}. Use /permissions allow|classify|ask`,
           "info",
         );
       } else {
         ctx.ui.notify(
-          `Unknown mode "${arg}". Use: allow, classify, ask, plan`,
+          `Unknown mode "${arg}". Use: allow, classify, ask`,
           "error",
         );
       }
-    },
-  });
-
-  pi.registerCommand("plan", {
-    description: "Enter plan mode and optionally submit a goal; run again to exit",
-    handler: async (args, ctx) => {
-      if (currentMode === "plan") {
-        const restored = leavePlanMode(pi, ctx);
-        ctx.ui.notify(`Plan mode disabled. Restored ${restored} mode.`, "info");
-        return;
-      }
-      const goal = args?.trim() ?? "";
-      enterPlanMode(pi, ctx, goal);
-      if (goal) pi.sendUserMessage(goal);
     },
   });
 
@@ -1023,33 +734,19 @@ PY` }, expectRule: "allow" },
   });
 
   // ---------- Restore branch-local state ----------
-  pi.on("session_start", (event, ctx) => {
-    initializeSessionBaseline(pi, ctx);
-    reconstructState(pi, ctx);
-    if (
-      event.reason === "startup" &&
-      pi.getFlag("plan") === true &&
-      currentMode !== "plan"
-    ) {
-      enterPlanMode(pi, ctx, "Started with --plan");
-    }
-  });
+  pi.on("session_start", (_event, ctx) => reconstructState(pi, ctx));
   pi.on("session_tree", (_event, ctx) => reconstructState(pi, ctx));
 
-  // ---------- F8 toggles normal permission modes ----------
-  const modes: NormalPermissionMode[] = ["ask", "classify", "allow"];
+  // ---------- F8 toggles permission modes ----------
+  const modes: PermissionMode[] = ["ask", "classify", "allow"];
   pi.registerShortcut("f8", {
     description: "Cycle permission mode",
     handler: async (ctx) => {
-      if (currentMode === "plan") {
-        leavePlanMode(pi, ctx, "ask");
-      } else {
-        const idx = modes.indexOf(currentMode);
-        currentMode = modes[(idx + 1) % modes.length];
-        modeGeneration += 1;
-        persistState(pi);
-        updateStatus(ctx);
-      }
+      const idx = modes.indexOf(currentMode);
+      currentMode = modes[(idx + 1) % modes.length];
+      modeGeneration += 1;
+      persistState(pi);
+      updateStatus(ctx);
       ctx.ui.notify(`Permissions: ${modeLabel(currentMode)}`, "info");
     },
   });
