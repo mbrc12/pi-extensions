@@ -2,7 +2,7 @@
  * Custom Statusline Extension
  *
  * Replaces the default footer with a clean, three-line statusline:
- *   Line 1: cwd (git branch) · ctx · cumulative token I/O · t/s · subagent time
+ *   Line 1: cwd (git branch) · ctx · cumulative token I/O · tok/s · subagent time
  *   Line 2: provider/model think:level · cost · provider limits
  *   Line 3: extension statuses such as permissions, todo, and thinking-tail.
  *
@@ -701,7 +701,7 @@ export default function (pi: ExtensionAPI) {
             rateSeg =
               theme.fg(streamStartedAt !== undefined ? "accent" : "muted", rateText) +
               " " +
-              theme.fg("dim", "t/s");
+              theme.fg("dim", "tok/s");
           }
 
           let subagentTimeSeg = "";
@@ -745,7 +745,7 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: cwd · ctx · cumulative token I/O · t/s · current/last subagent time
+          // Line 1: cwd · ctx · cumulative token I/O · tok/s · current/last subagent time
           const line1 = [dirSeg, ctxSeg, tokSeg, rateSeg, subagentTimeSeg]
             .filter(Boolean)
             .join(sep);
