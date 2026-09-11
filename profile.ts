@@ -310,7 +310,7 @@ export default function profileExtension(pi: ExtensionAPI): void {
 
     try {
       assertValidProfile(requestedProfile);
-      const usable = await applyProfile(requestedProfile, ctx);
+      const usable = await applyProfile(requestedProfile, ctx, true);
       if (!usable) {
         ctx.ui.notify(
           `Profile "${requestedProfile}" has no allowed authenticated model; prompts will be blocked`,
