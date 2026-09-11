@@ -34,7 +34,12 @@ Sends a desktop notification (via terminal bell + OSC sequences / Windows toast)
 
 ### `provider-status`
 
-Adds provider-specific limits to the statusline. The first adapter supports `openai-codex` and numbered aliases such as `openai-codex-2`: it shows each available 5-hour or 7-day window as its remaining percentage and reset countdown. Usage refreshes every five minutes, while countdowns update every minute. Run `/provider-status` to force a detailed refresh.
+Adds provider-specific limits to the statusline. Two adapters are available:
+
+- `openai-codex` and numbered aliases such as `openai-codex-2`: each 5-hour or 7-day window as its remaining percentage and reset countdown.
+- `opencode-go`: the rolling 5-hour, weekly, and monthly Go plan windows, read from `https://opencode.ai/zen/go/v1/usage` with the stored API key.
+
+Usage refreshes every five minutes, while countdowns update every minute. Run `/provider-status` to force a detailed refresh.
 
 ### `py-explore`
 

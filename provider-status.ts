@@ -2,23 +2,33 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const STATUS_KEY = "provider-status";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
+const OPENCODE_GO_PLAN = "Go";
 const USAGE_REFRESH_MS = 5 * 60 * 1_000;
 const DISPLAY_REFRESH_MS = 60 * 1_000;
 const REQUEST_TIMEOUT_MS = 10 * 1_000;
 
 export type ProviderUsageWindow = {
+  /** Short display label, for example "5h", "7d", or "30d". */
+  label: string;
   usedPercent: number;
-  resetAt: number;
+  /** When this window resets. Absent when the provider omits a reset time. */
+  resetAt?: number;
   windowSeconds?: number;
+  /** Provider-reported status such as "ok". Absent when the provider sends none. */
+  status?: string;
 };
 
 export type ProviderUsageSnapshot = {
   provider: string;
   fetchedAt: number;
   plan?: string;
-  primary?: ProviderUsageWindow;
-  secondary?: ProviderUsageWindow;
+  /** Windows in throttle order, shortest window first. */
+  windows: ProviderUsageWindow[];
 };
+
+/** A parsed window before its provider-specific label is applied. */
+type UnlabeledWindow = Omit<ProviderUsageWindow, "label">;
 
 type ProviderAdapter = {
   supports(provider: string): boolean;
@@ -40,7 +50,7 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
-function parseWindow(value: unknown, fetchedAt: number): ProviderUsageWindow | undefined {
+function parseCodexWindow(value: unknown, fetchedAt: number): UnlabeledWindow | undefined {
   const source = record(value);
   const used = finiteNumber(source.used_percent ?? source.utilization);
   if (used === undefined) return undefined;
@@ -60,6 +70,18 @@ function parseWindow(value: unknown, fetchedAt: number): ProviderUsageWindow | u
   };
 }
 
+/**
+ * Label a Codex window. The API reports the window length in seconds; when it is
+ * missing, fall back to the position, since Codex sends the 5-hour window first.
+ */
+function codexWindowLabel(window: UnlabeledWindow, position: "primary" | "secondary"): string {
+  const seconds = window.windowSeconds;
+  if (seconds === undefined) return position === "primary" ? "5h" : "7d";
+  if (seconds >= 6 * 86_400) return "7d";
+  if (seconds >= 20 * 3_600) return "24h";
+  return `${Math.max(1, Math.round(seconds / 3_600))}h`;
+}
+
 export function parseCodexUsageBody(
   provider: string,
   body: unknown,
@@ -67,9 +89,12 @@ export function parseCodexUsageBody(
 ): ProviderUsageSnapshot {
   const source = record(body);
   const rateLimit = record(source.rate_limit);
-  const primary = parseWindow(rateLimit.primary_window, fetchedAt);
-  const secondary = parseWindow(rateLimit.secondary_window, fetchedAt);
-  if (!primary && !secondary) {
+  const primary = parseCodexWindow(rateLimit.primary_window, fetchedAt);
+  const secondary = parseCodexWindow(rateLimit.secondary_window, fetchedAt);
+  const windows: ProviderUsageWindow[] = [];
+  if (primary) windows.push({ ...primary, label: codexWindowLabel(primary, "primary") });
+  if (secondary) windows.push({ ...secondary, label: codexWindowLabel(secondary, "secondary") });
+  if (windows.length === 0) {
     throw new Error("Codex usage response contains no limit windows");
   }
 
@@ -77,8 +102,7 @@ export function parseCodexUsageBody(
     provider,
     fetchedAt,
     plan: typeof source.plan_type === "string" ? source.plan_type : undefined,
-    primary,
-    secondary,
+    windows,
   };
 }
 
@@ -122,8 +146,72 @@ async function fetchCodexUsage(
   return parseCodexUsageBody(provider, await response.json());
 }
 
+const OPENCODE_GO_WINDOWS: ReadonlyArray<{ key: string; label: string }> = [
+  { key: "rolling", label: "5h" },
+  { key: "weekly", label: "7d" },
+  { key: "monthly", label: "30d" },
+];
+
+function isOpencodeGoProvider(provider: string): boolean {
+  return provider === "opencode-go";
+}
+
+/**
+ * Parse one Go quota window. The endpoint reports `percent` as quota used, and a
+ * `status` that is normally "ok"; a window without a numeric percent is dropped.
+ */
+function parseOpencodeWindow(value: unknown, label: string): ProviderUsageWindow | undefined {
+  const source = record(value);
+  const used = finiteNumber(source.percent);
+  if (used === undefined) return undefined;
+
+  const resetAt = typeof source.resetsAt === "string" ? Date.parse(source.resetsAt) : Number.NaN;
+  return {
+    label,
+    usedPercent: Math.min(100, Math.max(0, used)),
+    ...(Number.isFinite(resetAt) ? { resetAt } : {}),
+    ...(typeof source.status === "string" ? { status: source.status } : {}),
+  };
+}
+
+export function parseOpencodeGoUsageBody(
+  provider: string,
+  body: unknown,
+  fetchedAt = Date.now(),
+): ProviderUsageSnapshot {
+  const usage = record(record(body).usage);
+  const windows = OPENCODE_GO_WINDOWS
+    .map(({ key, label }) => parseOpencodeWindow(usage[key], label))
+    .filter((window): window is ProviderUsageWindow => Boolean(window));
+  if (windows.length === 0) {
+    throw new Error("OpenCode Go usage response contains no limit windows");
+  }
+
+  return { provider, fetchedAt, plan: OPENCODE_GO_PLAN, windows };
+}
+
+async function fetchOpencodeGoUsage(
+  provider: string,
+  ctx: ExtensionContext,
+  signal: AbortSignal,
+): Promise<ProviderUsageSnapshot> {
+  const apiKey = await ctx.modelRegistry.getApiKeyForProvider(provider);
+  if (!apiKey) throw new Error(`${provider} has no resolved API key`);
+
+  const response = await fetch(OPENCODE_GO_USAGE_URL, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`OpenCode Go usage endpoint returned HTTP ${response.status}`);
+  }
+  return parseOpencodeGoUsageBody(provider, await response.json());
+}
+
 const PROVIDER_ADAPTERS: readonly ProviderAdapter[] = [
   { supports: isCodexProvider, fetch: fetchCodexUsage },
+  { supports: isOpencodeGoProvider, fetch: fetchOpencodeGoUsage },
 ];
 
 function adapterFor(provider: string): ProviderAdapter | undefined {
@@ -141,50 +229,31 @@ function formatDuration(resetAt: number, now = Date.now()): string {
   return restHours ? `${days}d${restHours}h` : `${days}d`;
 }
 
-function windowLabel(
-  window: ProviderUsageWindow,
-  position: "primary" | "secondary",
-): string {
-  const seconds = window.windowSeconds;
-  if (seconds === undefined) return position === "primary" ? "5h" : "7d";
-  if (seconds >= 6 * 86_400) return "7d";
-  if (seconds >= 20 * 3_600) return "24h";
-  return `${Math.max(1, Math.round(seconds / 3_600))}h`;
-}
-
-function formatWindow(
-  window: ProviderUsageWindow,
-  position: "primary" | "secondary",
-  now = Date.now(),
-): string {
+function formatWindow(window: ProviderUsageWindow, now = Date.now()): string {
   const used = Math.round(window.usedPercent);
   const remaining = Math.max(0, 100 - used);
-  return `${windowLabel(window, position)} ${used}% used/${remaining}%/${formatDuration(window.resetAt, now)}`;
+  const reset = window.resetAt === undefined ? "" : `/${formatDuration(window.resetAt, now)}`;
+  const status = window.status && window.status !== "ok" ? ` (${window.status})` : "";
+  return `${window.label} ${used}% used/${remaining}%${reset}${status}`;
 }
 
 export function formatProviderUsage(snapshot: ProviderUsageSnapshot, now = Date.now()): string {
-  const windows = [
-    snapshot.primary ? formatWindow(snapshot.primary, "primary", now) : undefined,
-    snapshot.secondary ? formatWindow(snapshot.secondary, "secondary", now) : undefined,
-  ].filter((value): value is string => Boolean(value));
+  const windows = snapshot.windows.map((window) => formatWindow(window, now));
   return [snapshot.plan, ...windows].filter(Boolean).join(" · ");
 }
 
 function formatCompactUsage(snapshot: ProviderUsageSnapshot, now = Date.now()): string {
-  return [
-    snapshot.primary
-      ? `${windowLabel(snapshot.primary, "primary")} ${Math.max(0, Math.round(100 - snapshot.primary.usedPercent))}%/${formatDuration(snapshot.primary.resetAt, now)}`
-      : undefined,
-    snapshot.secondary
-      ? `${windowLabel(snapshot.secondary, "secondary")} ${Math.max(0, Math.round(100 - snapshot.secondary.usedPercent))}%/${formatDuration(snapshot.secondary.resetAt, now)}`
-      : undefined,
-  ].filter((value): value is string => Boolean(value)).join(" · ");
+  return snapshot.windows
+    .map((window) => {
+      const remaining = Math.max(0, Math.round(100 - window.usedPercent));
+      const reset = window.resetAt === undefined ? "" : `/${formatDuration(window.resetAt, now)}`;
+      return `${window.label} ${remaining}%${reset}`;
+    })
+    .join(" · ");
 }
 
 function usageColor(snapshot: ProviderUsageSnapshot): "success" | "warning" | "error" {
-  const remaining = [snapshot.primary, snapshot.secondary]
-    .filter((window): window is ProviderUsageWindow => Boolean(window))
-    .map((window) => 100 - window.usedPercent);
+  const remaining = snapshot.windows.map((window) => 100 - window.usedPercent);
   const lowest = remaining.length ? Math.min(...remaining) : 100;
   if (lowest <= 10) return "error";
   if (lowest <= 30) return "warning";
