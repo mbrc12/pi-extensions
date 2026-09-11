@@ -1,12 +1,9 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-
 import type { UserMessage } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { completeWithModelFallback } from "../shared/model-config.ts";
+import { curlFetchFull, runFetch, runSearch } from "./web.ts";
 
 const WebUseParams = Type.Object({
   mode: Type.Union([Type.Literal("search"), Type.Literal("fetch"), Type.Literal("full")]),
@@ -54,60 +51,6 @@ function formatFetchResult(result: {
     "Important text:",
     result.important_text ?? "",
   ].join("\n").trim();
-}
-
-function getHelperPaths() {
-  const base = join(getAgentDir(), "extensions", "web-use");
-  return {
-    base,
-    scriptPath: join(base, "web_use.py"),
-  };
-}
-
-function resolvePython(): string {
-  return process.platform === "win32" ? "python" : "python3";
-}
-
-function runScript(command: string, args: string[], cwd: string, signal?: AbortSignal): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    const abortHandler = () => {
-      child.kill("SIGTERM");
-      reject(new Error("web_use aborted"));
-    };
-
-    signal?.addEventListener("abort", abortHandler, { once: true });
-
-    child.on("error", (error) => {
-      signal?.removeEventListener("abort", abortHandler);
-      reject(error);
-    });
-
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", abortHandler);
-      if (code === 0) {
-        resolve(stdout);
-        return;
-      }
-      reject(new Error(stderr.trim() || stdout.trim() || `web_use exited with code ${code}`));
-    });
-  });
 }
 
 function extractText(message: { content?: Array<{ type?: string; text?: string }> }): string {
@@ -181,11 +124,18 @@ async function summarizeFetchedPage(ctx: any, url: string, pageTitle: string, pa
   };
 }
 
+/** Collapsed-result suffix naming the backend that answered, for example " (curl)". */
+function engineSuffix(details: Record<string, unknown> | undefined, extra?: string): string {
+  const parts = [details?.engine, extra]
+    .filter((part): part is string => typeof part === "string" && part.length > 0);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
 export default function webUseExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_use",
     label: "Web Use",
-    description: "Search the web (Exa primary, DuckDuckGo fallback), fetch a URL and extract important text, or fetch the full HTML of a page.",
+    description: "Search the web, fetch a URL and extract important text, or fetch the full HTML of a page.",
     promptSnippet: "Search the web, fetch a URL and summarize the important content, or fetch the full HTML of a page.",
     promptGuidelines: [
       "Use web_use with mode=search when the user wants web search results with titles, URLs, and short descriptions.",
@@ -201,72 +151,53 @@ export default function webUseExtension(pi: ExtensionAPI) {
         throw new Error(`web_use ${params.mode} mode requires url`);
       }
 
-      const { scriptPath } = getHelperPaths();
-      if (!existsSync(scriptPath)) {
-        throw new Error(`Missing helper script: ${scriptPath}`);
-      }
-
-      const python = resolvePython();
-      const args = [scriptPath];
-
       if (params.mode === "search") {
-        args.push("--search", params.query!);
-        args.push("--limit", String(params.limit ?? 5));
-        onUpdate?.({ content: [{ type: "text", text: `Searching the web for: ${params.query}` }] });
-      } else if (params.mode === "full") {
-        args.push("--full", params.url!);
-        onUpdate?.({ content: [{ type: "text", text: `Fetching full HTML with curl: ${params.url}` }] });
-      } else {
-        args.push("--fetch", params.url!);
-        onUpdate?.({ content: [{ type: "text", text: `Fetching URL with curl: ${params.url}` }] });
-      }
-
-      const raw = await runScript(python, args, ctx.cwd, signal);
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-      if (params.mode === "search") {
-        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, string>> : [];
+        onUpdate?.({ content: [{ type: "text", text: `Searching the web for: ${params.query}` }], details: {} });
+        const payload = await runSearch(params.query!, params.limit ?? 5, "auto", signal);
         const text = [
-          `Search results for: ${String(parsed.query ?? params.query ?? "")}`,
+          `Search results for: ${payload.query} (via ${payload.engine})`,
           "",
-          ...results.map((result, index) => `${index + 1}. ${formatSearchResult(result)}`),
+          ...payload.results.map((result, index) => `${index + 1}. ${formatSearchResult(result)}`),
         ].join("\n\n");
 
         return {
           content: [{ type: "text", text }],
-          details: { ...parsed, resultCount: results.length },
+          details: { ...payload, resultCount: payload.results.length },
         };
       }
 
       if (params.mode === "full") {
-        const html = String(parsed.html ?? "");
-        const htmlLength = Number(parsed.html_length ?? html.length);
+        onUpdate?.({ content: [{ type: "text", text: `Fetching full HTML with curl: ${params.url}` }], details: {} });
+        const payload = await curlFetchFull(params.url!, signal);
         const MAX_HTML_DISPLAY = 8000;
-        const displayHtml = html.length > MAX_HTML_DISPLAY
-          ? html.slice(0, MAX_HTML_DISPLAY) + `\n\n... (truncated in display, full HTML is ${htmlLength} bytes)`
-          : html;
+        const displayHtml = payload.html.length > MAX_HTML_DISPLAY
+          ? payload.html.slice(0, MAX_HTML_DISPLAY) + `\n\n... (truncated in display, full HTML is ${payload.html_length} bytes)`
+          : payload.html;
 
         return {
-          content: [{ type: "text", text: `Full HTML from ${params.url} (${htmlLength} bytes):\n\n${displayHtml}` }],
-          details: parsed,
+          content: [{ type: "text", text: `Full HTML from ${params.url} (${payload.html_length} bytes):\n\n${displayHtml}` }],
+          details: payload,
         };
       }
 
-      const pageTitle = String(parsed.page_title ?? "");
-      const pageText = String(parsed.page_text ?? "");
+      onUpdate?.({ content: [{ type: "text", text: `Fetching URL: ${params.url}` }], details: {} });
+      const payload = await runFetch(params.url!, "auto", signal);
+      const pageTitle = payload.page_title;
+      const pageText = payload.page_text;
       if (!pageText) {
         throw new Error("Fetched page did not return readable text");
       }
 
-      onUpdate?.({ content: [{ type: "text", text: "Summarizing fetched page with a pi model..." }] });
+      onUpdate?.({ content: [{ type: "text", text: "Summarizing fetched page with a pi model..." }], details: {} });
       const summary = await summarizeFetchedPage(ctx, params.url!, pageTitle, pageText);
 
       const result = {
         mode: "fetch",
+        engine: payload.engine,
         url: params.url,
         page_title: pageTitle,
-        text_length: parsed.text_length,
-        truncated: parsed.truncated,
+        text_length: payload.text_length,
+        truncated: payload.truncated,
         ...summary,
       };
 
@@ -304,12 +235,16 @@ export default function webUseExtension(pi: ExtensionAPI) {
         const details = result.details as Record<string, unknown> | undefined;
         if (details?.mode === "fetch") {
           const title = String(details.page_title ?? "");
-          const truncated = details.truncated ? " (truncated)" : "";
-          return new Text(theme.fg("muted", ` → fetched${title ? `: ${title}` : ""}${truncated}`), 0, 0);
+          const suffix = engineSuffix(details, details.truncated ? "truncated" : undefined);
+          return new Text(theme.fg("muted", ` → fetched${title ? `: ${title}` : ""}${suffix}`), 0, 0);
         }
         if (details?.resultCount !== undefined) {
           const count = Number(details.resultCount) || 0;
-          return new Text(theme.fg("muted", ` → ${count} result${count !== 1 ? "s" : ""}`), 0, 0);
+          return new Text(
+            theme.fg("muted", ` → ${count} result${count !== 1 ? "s" : ""}${engineSuffix(details)}`),
+            0,
+            0,
+          );
         }
         if (details?.html_length !== undefined) {
           const len = Number(details.html_length) || 0;

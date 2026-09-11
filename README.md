@@ -180,15 +180,28 @@ Todo mutations are hidden from the transcript (`renderShell/renderCall/renderRes
 
 ### `web-use`
 
-Adds a `web_use` tool for search and fetch:
+Adds a `web_use` tool for search and fetch, implemented in TypeScript in `web-use/web.ts`:
 
 | Mode | Description |
 |---|---|
-| `search` | Search DuckDuckGo, return titles/URLs/descriptions |
+| `search` | Search the web via Exa, return titles/URLs/descriptions |
 | `fetch` | Fetch a URL and extract the important text |
 | `full` | Fetch the raw HTML of a page via curl (8 KB preview in output) |
 
-Uses DuckDuckGo for search and a local Python script with `readability-lxml` for extraction. Model selection for summarization is configurable via `model-config.json`.
+Backend order lives at the top of `web-use/web.ts`. Swap or drop entries in these two arrays to change which backend runs first; a request tries them left to right until one succeeds.
+
+| Constant | Default | Order |
+|---|---|---|
+| `SEARCH_BACKENDS` | `["ddg", "exa"]` | DuckDuckGo, then Exa |
+| `FETCH_BACKENDS` | `["curl", "exa"]` | curl, then Exa |
+
+The backends:
+
+- `ddg` — DuckDuckGo's no-JS endpoint at `https://html.duckduckgo.com/html/`. DuckDuckGo gates its JS result payload (`links.duckduckgo.com/d.js`) behind an anti-bot challenge, so that route returns an anomaly page; the HTML endpoint still answers a browser-like GET.
+- `exa` — keyless Exa MCP (`https://mcp.exa.ai/mcp`) for search and fetch. Set `EXA_API_KEY` to send `x-api-key` and lift the free-plan rate limits, or `EXA_MCP_URL` to point at another endpoint.
+- `curl` — plain page fetch, with the text extracted by the HTML parser in the same file.
+
+Model selection for summarization is configurable via `model-config.json` (`webSummarization`).
 
 ---
 
