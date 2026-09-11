@@ -82,11 +82,13 @@ Use `/permissions allow|classify|ask|plan` or `/plan [optional goal]`. `F8` cont
 
 Replaces the default footer with a compact three-line statusline:
 
-- Line 1: cwd (with git branch) · context · cumulative token input/output · current or last subagent time
+- Line 1: cwd (with git branch) · context · cumulative token input/output · generation speed (`t/s`) · current or last subagent time
 - Line 2: provider/model · thinking level · cost · provider limits
 - Line 3: `🧩:` followed by statuses supplied by other extensions, such as permissions, todo, and thinking-tail
 
 The `sub` timer on line 1 restarts at `0s` for each new subagent tool call. It updates once per second while a subagent runs, then keeps the duration of the last completed subagent.
+
+The `t/s` item shows output speed in tokens per second as an exponential moving average with a one-minute half-life. Streamed deltas are what move it, and each tick uses the model's learned characters-per-token density so the estimate stays close to the reported token counts. A finished response seeds the first value and re-learns that density, but never re-blends the exact rate: the number does not jump when generation stops. Idle time between responses and while tools run does not lower the value. The item first appears when the session's first response finishes, and after a model switch the average converges over that model's first response instead of holding the previous model's rate for a minute.
 
 Costs use US dollars by default. Use `/rupees on` to replace the USD cost with INR and `/rupees off` to switch back to USD.
 

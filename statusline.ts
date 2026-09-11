@@ -2,7 +2,7 @@
  * Custom Statusline Extension
  *
  * Replaces the default footer with a clean, three-line statusline:
- *   Line 1: cwd (git branch) · ctx · cumulative token I/O · subagent time
+ *   Line 1: cwd (git branch) · ctx · cumulative token I/O · t/s · subagent time
  *   Line 2: provider/model think:level · cost · provider limits
  *   Line 3: extension statuses such as permissions, todo, and thinking-tail.
  *
@@ -341,6 +341,71 @@ export default function (pi: ExtensionAPI) {
   let subagentTicker: ReturnType<typeof setInterval> | undefined;
   let requestFooterRender: (() => void) | undefined;
 
+  // ---- generation speed (tokens/sec) ----
+  // A token-driven exponential moving average of output speed with a one-minute
+  // half-life: after a minute of generation, a past sample's influence on the
+  // displayed rate has halved. Streamed deltas are what move the average; a
+  // finished response only seeds the first value and teaches the token-density
+  // estimate. The average therefore never lurches when generation stops - it glides
+  // while text arrives and then holds still. Idle gaps never drag the rate down,
+  // because only generation events feed the average.
+  const RATE_HALF_LIFE_MS = 60_000;
+  // A new model can generate much faster or slower than the previous one, so the
+  // first response on a new model converges quickly instead of holding a stale rate
+  // for a full minute.
+  const RATE_SWITCH_HALF_LIFE_MS = 10_000;
+  const DEFAULT_CHARS_PER_TOKEN = 4;
+  const MIN_CHARS_PER_TOKEN = 1.5;
+  const MAX_CHARS_PER_TOKEN = 8;
+  const DENSITY_LEARN_WEIGHT = 0.5;
+  const MAX_DELTA_GAP_MS = 5_000;
+  let emaTokPerSec: number | undefined;
+  let rateModelKey: string | undefined;
+  let rateHalfLifeMs = RATE_HALF_LIFE_MS;
+  let charsPerToken = DEFAULT_CHARS_PER_TOKEN;
+  let streamStartedAt: number | undefined;
+  let firstTokenAt: number | undefined;
+  let lastDeltaAt: number | undefined;
+  let activeChars = 0;
+
+  /** Share of an average that a sample measured `elapsedMs` ago may claim. */
+  function rateWeight(elapsedMs: number): number {
+    if (elapsedMs <= 0) return 0;
+    return 1 - Math.pow(0.5, elapsedMs / rateHalfLifeMs);
+  }
+
+  /**
+   * Blend a measured rate into the average. The average is never seeded here: a
+   * single noisy stream tick would otherwise freeze for a full half-life, so only
+   * a finished response may create the first value.
+   */
+  function blendTokPerSec(rate: number, elapsedMs: number): void {
+    if (!Number.isFinite(rate) || rate <= 0 || emaTokPerSec === undefined) return;
+    const weight = Math.min(1, rateWeight(elapsedMs));
+    if (weight <= 0) return;
+    emaTokPerSec += weight * (rate - emaTokPerSec);
+  }
+
+  /**
+   * Learn how many characters this model really emits per output token. Live ticks
+   * estimate tokens from characters, so keeping this honest is what stops the
+   * displayed rate from drifting away from the reported token counts.
+   */
+  function learnTokenDensity(chars: number, outputTokens: number): void {
+    if (chars <= 0 || outputTokens <= 0) return;
+    const observed = chars / outputTokens;
+    if (!Number.isFinite(observed) || observed <= 0) return;
+    const bounded = Math.min(MAX_CHARS_PER_TOKEN, Math.max(MIN_CHARS_PER_TOKEN, observed));
+    charsPerToken += DENSITY_LEARN_WEIGHT * (bounded - charsPerToken);
+  }
+
+  function resetStreamRate(): void {
+    streamStartedAt = undefined;
+    firstTokenAt = undefined;
+    lastDeltaAt = undefined;
+    activeChars = 0;
+  }
+
   function stopSubagentTicker(): void {
     if (subagentTicker) clearInterval(subagentTicker);
     subagentTicker = undefined;
@@ -392,10 +457,91 @@ export default function (pi: ExtensionAPI) {
     currentThinkingLevel = event.level;
   });
 
+  // ---- generation speed: live ticks from the token stream ----
+  pi.on("message_start", (event) => {
+    if (event.message.role !== "assistant") return;
+    resetStreamRate();
+    streamStartedAt = Date.now();
+
+    // Speed and token density are model-specific. On a switch, converge over this
+    // first response instead of clearing the value or reporting the old model's
+    // rate for a full minute.
+    const message = event.message as AssistantMessage;
+    const modelKey = `${message.provider}/${message.model}`;
+    if (rateModelKey !== modelKey) {
+      if (rateModelKey !== undefined) {
+        rateHalfLifeMs = RATE_SWITCH_HALF_LIFE_MS;
+        charsPerToken = DEFAULT_CHARS_PER_TOKEN;
+      }
+      rateModelKey = modelKey;
+    }
+  });
+
+  pi.on("message_update", (event) => {
+    if (event.message.role !== "assistant") return;
+    const streamEvent = event.assistantMessageEvent;
+    const delta =
+      streamEvent.type === "text_delta" ||
+      streamEvent.type === "thinking_delta" ||
+      streamEvent.type === "toolcall_delta"
+        ? streamEvent.delta
+        : "";
+    const now = Date.now();
+    // Only real deltas count: skipping start/end frames keeps time-to-first-token
+    // out of the measured generation time.
+    if (delta.length === 0) return;
+    activeChars += delta.length;
+    if (firstTokenAt === undefined) firstTokenAt = now;
+
+    if (lastDeltaAt !== undefined) {
+      const elapsed = now - lastDeltaAt;
+      // Gaps longer than MAX_DELTA_GAP_MS look like a stall or a new block, so
+      // measure no rate across them rather than reporting a near-zero speed.
+      if (elapsed > 0 && elapsed < MAX_DELTA_GAP_MS) {
+        const instant = delta.length / charsPerToken / (elapsed / 1000);
+        blendTokPerSec(instant, elapsed);
+      }
+    }
+    lastDeltaAt = now;
+  });
+
+  // ---- generation speed: exact usage seeds the average and corrects the estimate
+  pi.on("message_end", (event) => {
+    if (event.message.role !== "assistant") return;
+    const message = event.message as AssistantMessage;
+    const output = finiteNumber(message.usage?.output);
+    const streamedChars = activeChars;
+    const startedAt = firstTokenAt ?? streamStartedAt;
+    if (output > 0 && startedAt !== undefined) {
+      const elapsed = Math.max(0, Date.now() - startedAt);
+      if (elapsed > 0) {
+        const rate = output / (elapsed / 1000);
+        if (emaTokPerSec === undefined) {
+          // Seed the first value from a real measurement, never from a stream tick.
+          emaTokPerSec = rate;
+        } else if (streamedChars === 0) {
+          // Nothing was streamed for this response, so it is the only sample we have.
+          blendTokPerSec(rate, elapsed);
+        }
+        // When the response did stream, its ticks already carried the average.
+        // Blending the exact rate again would lurch the display the instant
+        // generation stops; the density update below corrects the estimate instead.
+      }
+    }
+    learnTokenDensity(streamedChars, output);
+    rateHalfLifeMs = RATE_HALF_LIFE_MS;
+    resetStreamRate();
+  });
+
   // ---- enable custom footer on every session start ----
   pi.on("session_start", (_event, ctx) => {
     currentThinkingLevel = pi.getThinkingLevel();
     resetSubagentTime();
+    emaTokPerSec = undefined;
+    rateModelKey = undefined;
+    rateHalfLifeMs = RATE_HALF_LIFE_MS;
+    charsPerToken = DEFAULT_CHARS_PER_TOKEN;
+    resetStreamRate();
     if (enabled) installFooter(ctx);
   });
 
@@ -549,6 +695,15 @@ export default function (pi: ExtensionAPI) {
             tokSeg = theme.fg("dim", "tok") + " " + theme.fg("muted", io);
           }
 
+          let rateSeg = "";
+          if (emaTokPerSec !== undefined && emaTokPerSec > 0) {
+            const rateText = emaTokPerSec.toFixed(emaTokPerSec >= 100 ? 0 : 1);
+            rateSeg =
+              theme.fg(streamStartedAt !== undefined ? "accent" : "muted", rateText) +
+              " " +
+              theme.fg("dim", "t/s");
+          }
+
           let subagentTimeSeg = "";
           const subagentDuration = subagentStartedAt !== undefined
             ? Date.now() - subagentStartedAt
@@ -590,8 +745,8 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: cwd · ctx · cumulative token I/O · current/last subagent time
-          const line1 = [dirSeg, ctxSeg, tokSeg, subagentTimeSeg]
+          // Line 1: cwd · ctx · cumulative token I/O · t/s · current/last subagent time
+          const line1 = [dirSeg, ctxSeg, tokSeg, rateSeg, subagentTimeSeg]
             .filter(Boolean)
             .join(sep);
 
