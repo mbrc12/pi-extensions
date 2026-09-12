@@ -188,8 +188,12 @@ export default function profileExtension(pi: ExtensionAPI): void {
       throw new Error(`Profile "${name}" matches no models in the current session scope`);
     }
 
+    const currentKey = ctx.model ? modelKey(ctx.model) : undefined;
+    const currentModelIsAllowed = currentKey !== undefined
+      && scoped.some(({ model }) => modelKey(model) === currentKey);
+
     let defaultModel: Model | undefined;
-    if (switchToDefault) {
+    if (switchToDefault && !currentModelIsAllowed) {
       const defaultRef = getProfileDefaultModel(name);
       if (!defaultRef) throw new Error(`Profile "${name}" has no valid defaultModel`);
       defaultModel = ctx.modelRegistry.find(defaultRef[0], defaultRef[1]);
