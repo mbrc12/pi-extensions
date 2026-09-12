@@ -154,7 +154,7 @@ Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the
 
 ### `working-indicator`
 
-Replaces the default working loader with a ping-pong dots spinner, a large set of short rotating fallback messages, live tool activity, and elapsed time.
+Replaces the default working loader with a ping-pong dots spinner, 200 randomly selected deadpan technical excuses, live tool activity, and elapsed time. Consecutive fallback messages never repeat.
 
 ### `tool-summary`
 
