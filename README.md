@@ -26,7 +26,7 @@ Registers `/exit` as a shorthand alias for `/quit`.
 
 ### `fast`
 
-Registers `/fast` to toggle OpenAI priority processing for the current session. Use `/fast on`, `/fast off`, or `/fast status` for an explicit action. The setting applies to direct OpenAI and OpenAI Codex providers, including numbered Codex account aliases, and survives session reloads and branching. Priority processing may use paid API capacity or plan credits faster.
+Registers `/fast` to toggle OpenAI priority processing for the current session. Use `/fast on`, `/fast off`, or `/fast status` for an explicit action. The setting applies to direct OpenAI and OpenAI Codex providers, including numbered Codex account aliases, and survives session reloads and branching. Subagents inherit it only when their selected model uses `openai-codex` or a numbered alias such as `openai-codex-2`; other subagent providers do not receive the setting. Priority processing may use paid API capacity or plan credits faster.
 
 ### `minimal-tools`
 
@@ -60,7 +60,7 @@ Adds a `py_explore` tool for running read-only/exploratory Python scripts.
 
 Adds `/profile` to limit model use in the current session. Run `/profile` to choose a profile, or use `/profile <name>` directly. Each profile has an `allow` list of JavaScript regular expressions matched against the full `provider/model-id` string. It also has a `defaultModel`. Selecting a profile switches the main session to that model.
 
-The profile filters Pi's model picker and model cycling. It also filters every fallback list read through `shared/model-config.ts`, including subagents, summaries, web extraction, permission checks, and Python write checks. These background operations still use their own model-config entries; they do not use the profile's default model. Spawned subagents inherit the active filter while preserving the model selected for their capability tier. If the session already has a model scope, the profile is applied as an additional filter.
+The profile filters Pi's model picker and model cycling. It also filters every fallback list read through `shared/model-config.ts`, including subagents, summaries, web extraction, permission checks, and Python write checks. These background operations still use their own model-config entries; they do not use the profile's default model. Spawned subagents inherit the active filter while preserving the model selected for their capability tier. If the session already has a model scope, the profile is applied as an additional filter. When `/fast` is enabled in the caller, a subagent attempt inherits priority processing only if its selected provider is `openai-codex` or a numbered alias such as `openai-codex-2`.
 
 The selected profile is stored in the session and restored on resume. New sessions start with `home`. Profiles are configured under `profiles` in `model-config.json`. At startup, the extension checks every profile's regular expressions and default model. It also checks that every shared model category and each subagent capability tier has at least one allowed model in Pi's model catalog. Invalid profiles are reported and cannot be activated.
 

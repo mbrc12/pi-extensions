@@ -42,6 +42,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { subagentEnvironment } from "../shared/fast-mode.ts";
 import {
 	completeWithModelFallback,
 	getSubagentModelFallbacks,
@@ -677,6 +678,7 @@ async function runSingleAgentAttempt(
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
+				env: subagentEnvironment(model),
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
