@@ -24,6 +24,10 @@ Registers `openai-codex-2` as a second independent Codex OAuth provider. It reus
 
 Registers `/exit` as a shorthand alias for `/quit`.
 
+### `fast`
+
+Registers `/fast` to toggle OpenAI priority processing for the current session. Use `/fast on`, `/fast off`, or `/fast status` for an explicit action. The setting applies to direct OpenAI and OpenAI Codex providers, including numbered Codex account aliases, and survives session reloads and branching. Priority processing may use paid API capacity or plan credits faster.
+
 ### `minimal-tools`
 
 Compact TUI rendering for all built-in tools — truncated commands for bash, just the path for read/write/edit. Uses `renderShell: "self"` to minimize padding.
