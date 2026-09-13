@@ -36,6 +36,10 @@ Compact TUI rendering for all built-in tools — truncated commands for bash, ju
 
 Sends a desktop notification (via terminal bell + OSC sequences / Windows toast) when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. Works across tmux, Kitty, and Windows Terminal.
 
+### `odin-highlight`
+
+Adds Odin syntax highlighting for fenced code blocks tagged `odin` (assistant messages and `code-block-box`). Pi bundles a fixed highlight.js language set with no API to add grammars, so the extension locates the bundled chunk that owns the shared highlight.js core and registers a vendored `highlightjs-odinlang` grammar on that same instance. `.odin` file paths stay unhighlighted (pi’s path-to-language table is closed), as does exported HTML (it re-highlights in the browser from its own bundled highlight.js copy).
+
 ### `provider-status`
 
 Adds provider-specific limits to the statusline. Two adapters are available:
