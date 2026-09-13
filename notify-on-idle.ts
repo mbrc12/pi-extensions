@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export interface PromptWaitNotification {
@@ -36,12 +37,29 @@ function notifyOSC99(title: string, body: string): void {
 }
 
 function notifyWindows(title: string, body: string): void {
-	const { execFile } = require("child_process");
 	execFile("powershell.exe", ["-NoProfile", "-Command", windowsToastScript(title, body)]);
+}
+
+function notifyCmux(title: string, body: string): void {
+	const command = process.env.CMUX_BUNDLED_CLI_PATH || "cmux";
+	execFile(
+		command,
+		["notify", "--title", title, "--body", body],
+		{ timeout: 5_000 },
+		(error) => {
+			// Keep notifications working if the cmux socket or CLI is unavailable.
+			if (error) notifyOSC777(title, body);
+		},
+	);
 }
 
 function notify(title: string, body: string): void {
 	bell();
+
+	if (process.env.CMUX_SOCKET_PATH || process.env.CMUX_WORKSPACE_ID) {
+		notifyCmux(title, body);
+		return;
+	}
 
 	if (process.env.WT_SESSION) {
 		notifyWindows(title, body);

@@ -34,7 +34,7 @@ Compact TUI rendering for all built-in tools — truncated commands for bash, ju
 
 ### `notify-on-idle`
 
-Sends a desktop notification (via terminal bell + OSC sequences / Windows toast) when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. Works across tmux, Kitty, and Windows Terminal.
+Sends a desktop notification when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. It uses cmux’s native notification CLI inside cmux so unfocused tabs play the configured sound, with terminal bell, OSC sequences, and Windows toast fallbacks for other terminals.
 
 ### `odin-highlight`
 
