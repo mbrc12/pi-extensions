@@ -64,34 +64,75 @@ function formatTokens(count: number): string {
 	return `${(count / 1000000).toFixed(1)}M`;
 }
 
-function displayModel(result: Pick<SingleResult, "model" | "requestedModel">): string | undefined {
-	return result.model ?? (result.requestedModel ? `${result.requestedModel} (requested)` : undefined);
+function formatDuration(ms: number): string {
+	const totalSeconds = Math.max(0, ms) / 1000;
+	if (totalSeconds < 10) return `${totalSeconds.toFixed(1)}s`;
+	if (totalSeconds < 60) return `${Math.round(totalSeconds)}s`;
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = Math.round(totalSeconds % 60);
+	if (minutes < 60) return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+	return `${Math.floor(minutes / 60)}h${(minutes % 60).toString().padStart(2, "0")}m`;
 }
 
-function formatUsageStats(
-	usage: {
-		input: number;
-		output: number;
-		cacheRead: number;
-		cacheWrite: number;
-		cost: number;
-		contextTokens?: number;
-		turns?: number;
-	},
-	model?: string,
-): string {
-	const parts: string[] = [];
-	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-	if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-	if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-	if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-	if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-	if (usage.contextTokens && usage.contextTokens > 0) {
-		parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
+/**
+ * Shorten a provider/id reference to its model id. The compact rows have no
+ * space for provider prefixes; the expanded view lists the full references.
+ */
+function modelLabel(reference: string | undefined): string | undefined {
+	if (!reference) return undefined;
+	const parts = reference.split("/").filter(Boolean);
+	return parts.length > 0 ? parts[parts.length - 1] : reference;
+}
+
+/**
+ * What the TUI should show for a finished or running run. This is display only:
+ * `isFailedResult` still decides whether the tool call itself reports an error.
+ */
+type ResultState = "running" | "ok" | "empty" | "failed";
+
+function resultState(result: SingleResult): ResultState {
+	if (result.exitCode === -1) return "running";
+	if (
+		result.exitCode !== 0
+		|| result.stopReason === "error"
+		|| result.stopReason === "aborted"
+		|| Boolean(result.errorMessage)
+	) {
+		return "failed";
 	}
-	if (model) parts.push(model);
-	return parts.join(" ");
+	if (!getFinalOutput(result.messages).trim()) return "empty";
+	return "ok";
+}
+
+/**
+ * Plain-language replacement for pi's raw stop reasons. "toolUse" means the
+ * child ended its turn asking for a tool call, so a run that stops there simply
+ * never wrote a final answer; it is incomplete, not broken.
+ */
+function resultStateText(result: SingleResult): string | undefined {
+	switch (resultState(result)) {
+		case "ok":
+		case "running":
+			// The icon already says both of these.
+			return undefined;
+		case "failed":
+			if (result.stopReason === "aborted") return "aborted";
+			if (result.stopReason === "length") return "hit the output limit";
+			if (result.exitCode !== 0) return `exited with code ${result.exitCode}`;
+			return "error";
+		default:
+			if (result.stopReason === "toolUse") return "stopped on a tool call";
+			if (result.stopReason === "length") return "hit the output limit";
+			return "no final answer";
+	}
+}
+
+/** 1-based position of the model that produced the run, when fallback was needed. */
+function fallbackPosition(result: SingleResult): number | undefined {
+	const attempts = result.attempts;
+	if (!attempts || attempts.length < 2) return undefined;
+	const okIndex = attempts.findIndex((attempt) => attempt.ok);
+	return (okIndex >= 0 ? okIndex : attempts.length - 1) + 1;
 }
 
 function formatToolCall(
@@ -190,6 +231,18 @@ interface WiseCompactionDetails {
 	summaryChars: number;
 }
 
+/** One model the parent tried for a single agent run, in candidate order. */
+interface ModelAttempt {
+	/** Candidate reference chosen by the parent (provider/id). */
+	model: string;
+	/** Model the child reported; differs from `model` after provider-level failover. */
+	usedModel?: string;
+	durationMs: number;
+	ok: boolean;
+	/** Plain-language reason when this attempt failed. */
+	failure?: string;
+}
+
 interface SingleResult {
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
@@ -204,8 +257,14 @@ interface SingleResult {
 	usage: UsageStats;
 	/** Model reported by the child process in its response events. */
 	model?: string;
-	/** Model passed to the child process before provider-level failover. */
+	/** First candidate the parent chose, before any fallback. */
 	requestedModel?: string;
+	/** Candidate models tried, in order. More than one entry means the first choice failed. */
+	attempts?: ModelAttempt[];
+	/** When the run started, so a running agent can show elapsed time. */
+	startedAt?: number;
+	/** Wall-clock time for the run, including any failed model attempts. */
+	durationMs?: number;
 	stopReason?: string;
 	errorMessage?: string;
 	// Progress-summary storage is disabled; uncomment with the feature implementation.
@@ -627,6 +686,7 @@ async function runSingleAgentAttempt(
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		requestedModel: model,
+		startedAt: Date.now(),
 		step,
 	};
 
@@ -829,17 +889,32 @@ async function runSingleAgent(
 	const strength: SubagentCapability = strengthOverride ?? agent.capability;
 	const modelCandidates = getSubagentModelFallbacks(strength)
 		.map(([provider, id]) => `${provider}/${id}`);
+	const runStartedAt = Date.now();
+	const attempts: ModelAttempt[] = [];
 	let lastResult: SingleResult | undefined;
 
 	for (const model of modelCandidates) {
+		const attemptStartedAt = Date.now();
 		const result = await runSingleAgentAttempt(
 			defaultCwd, summaryCtx, agents, agentName, task, cwd, step, strength, model, wiseContext, signal, onUpdate, makeDetails,
 		);
 		lastResult = result;
-		if (!isFailedResult(result)) return result;
+		const ok = !isFailedResult(result);
+		attempts.push({
+			model,
+			usedModel: result.model,
+			durationMs: Date.now() - attemptStartedAt,
+			ok,
+			failure: ok ? undefined : resultStateText(result),
+		});
+		if (ok) break;
 	}
 
-	// If every configured model failed, return the final attempt so its error is visible.
+	// Keep the first candidate as `requestedModel` even when a later one ran, so
+	// the display can say which choice was asked for and which one answered.
+	lastResult!.requestedModel = modelCandidates[0];
+	lastResult!.attempts = attempts;
+	lastResult!.durationMs = Date.now() - runStartedAt;
 	return lastResult!;
 }
 
@@ -1073,6 +1148,7 @@ export default function (pi: ExtensionAPI) {
 						messages: [],
 						stderr: "",
 						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+						startedAt: Date.now(),
 					};
 				}
 
@@ -1119,7 +1195,7 @@ export default function (pi: ExtensionAPI) {
 				const summaries = results.map((r) => {
 					const output = truncateParallelOutput(getResultOutput(r));
 					const status = isFailedResult(r)
-						? `failed${r.stopReason && r.stopReason !== "end" ? ` (${r.stopReason})` : ""}`
+						? `failed: ${resultStateText(r) ?? "unknown"}`
 						: "completed";
 					return `### [${r.agent}] ${status}\n\n${output}`;
 				});
@@ -1154,7 +1230,7 @@ export default function (pi: ExtensionAPI) {
 				if (isError) {
 					const errorMsg = getResultOutput(result);
 					return {
-						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+						content: [{ type: "text", text: `Agent failed (${resultStateText(result) ?? "unknown"}): ${errorMsg}` }],
 						details: makeDetails("single")([result]),
 						usage: aggregateNestedUsage([result], wiseContext),
 						isError: true,
@@ -1177,15 +1253,17 @@ export default function (pi: ExtensionAPI) {
 		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "user";
 			const isSingle = !args.chain?.length && !args.tasks?.length;
-			const meta = [scope];
-			if (args.strength) meta.push(`strength: ${args.strength}`);
-			if (isSingle && args.wise) meta.push("wise");
-			const invocationMeta = ` [${meta.join(", ")}]`;
+			const sep = theme.fg("dim", " · ");
+			const meta: string[] = [theme.fg("dim", "scope") + " " + theme.fg("muted", scope)];
+			if (args.strength) meta.push(theme.fg("dim", "strength") + " " + theme.fg("muted", args.strength));
+			if (isSingle && args.wise) meta.push(theme.fg("dim", "wise"));
+			const invocationMeta = meta.join(sep);
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `chain (${args.chain.length} steps)`) +
-					theme.fg("muted", invocationMeta);
+					theme.fg("accent", "chain") + sep +
+					theme.fg("muted", `${args.chain.length} steps`) + sep +
+					invocationMeta;
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
 					// Clean up {previous} placeholder for display
@@ -1196,7 +1274,7 @@ export default function (pi: ExtensionAPI) {
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
 						theme.fg("accent", step.agent) +
-						(step.wise ? theme.fg("muted", " [wise]") : "") +
+						(step.wise ? theme.fg("dim", " wise") : "") +
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
@@ -1205,11 +1283,12 @@ export default function (pi: ExtensionAPI) {
 			if (args.tasks && args.tasks.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
-					theme.fg("muted", invocationMeta);
+					theme.fg("accent", "parallel") + sep +
+					theme.fg("muted", `${args.tasks.length} tasks`) + sep +
+					invocationMeta;
 				for (const t of args.tasks.slice(0, 3)) {
 					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					const wise = t.wise ? theme.fg("muted", " [wise]") : "";
+					const wise = t.wise ? theme.fg("dim", " wise") : "";
 					text += `\n  ${theme.fg("accent", t.agent)}${wise}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
@@ -1217,11 +1296,11 @@ export default function (pi: ExtensionAPI) {
 			}
 			const agentName = args.agent || "...";
 			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
-			let text =
+			const text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
-				theme.fg("accent", agentName) +
-				theme.fg("muted", invocationMeta);
-			text += `\n  ${theme.fg("dim", preview)}`;
+				theme.fg("accent", agentName) + sep +
+				invocationMeta +
+				`\n  ${theme.fg("dim", preview)}`;
 			return new Text(text, 0, 0);
 		},
 
@@ -1233,14 +1312,145 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mdTheme = getMarkdownTheme();
-			const strengthLabel = (strength?: SubagentCapability) =>
-				strength ? theme.fg("muted", ` [strength: ${strength}]`) : "";
-			const wiseLabel = (wise?: boolean) => wise ? theme.fg("muted", " [wise]") : "";
-			const wiseUsageStr = () => {
+			const sep = theme.fg("dim", " · ");
+
+			const stateIcon = (r: SingleResult): string => {
+				switch (resultState(r)) {
+					case "running":
+						return theme.fg("warning", "⏳");
+					case "ok":
+						return theme.fg("success", "✓");
+					case "empty":
+						return theme.fg("warning", "△");
+					default:
+						return theme.fg("error", "✗");
+				}
+			};
+
+			/** Model that answered, marked when a later candidate was needed. */
+			const modelSegment = (r: SingleResult): string | undefined => {
+				const position = fallbackPosition(r);
+				const note = position !== undefined ? ` (fallback ${position}/${r.attempts!.length})` : "";
+				const reported = modelLabel(r.model);
+				if (reported) return theme.fg("muted", `${reported}${note}`);
+				const requested = modelLabel(r.requestedModel);
+				return requested ? theme.fg("muted", `${requested}?`) : undefined;
+			};
+
+			const durationText = (r: SingleResult): string | undefined => {
+				if (r.exitCode === -1) {
+					return r.startedAt !== undefined ? formatDuration(Date.now() - r.startedAt) : undefined;
+				}
+				return r.durationMs !== undefined ? formatDuration(r.durationMs) : undefined;
+			};
+
+			/** `✓ reviewer (project) · gpt-5.6-luna (fallback 2/3) · 42s · stopped on a tool call` */
+			const agentHeader = (r: SingleResult): string => {
+				let name = theme.fg("toolTitle", theme.bold(r.agent));
+				if (r.agentSource === "project" || r.agentSource === "unknown") {
+					name += theme.fg("muted", ` (${r.agentSource})`);
+				}
+				const parts = [`${stateIcon(r)} ${name}`];
+				const model = modelSegment(r);
+				if (model) parts.push(model);
+				const duration = durationText(r);
+				if (duration) parts.push(theme.fg("muted", duration));
+				if (r.wise) parts.push(theme.fg("dim", "wise"));
+				const status = resultStateText(r);
+				if (status) {
+					parts.push(theme.fg(resultState(r) === "failed" ? "error" : "warning", status));
+				}
+				return parts.join(sep);
+			};
+
+			/** Expanded-only trace of the candidate models, so a fallback is visible. */
+			const modelAttemptsLine = (r: SingleResult): string | undefined => {
+				const attempts = r.attempts;
+				if (!attempts || attempts.length < 2) return undefined;
+				const items = attempts.map((attempt) => {
+					const icon = attempt.ok ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const reported = modelLabel(attempt.usedModel);
+					// The child can fail over to another model inside a single attempt.
+					const swapped =
+						reported && reported !== modelLabel(attempt.model)
+							? theme.fg("dim", ` (ran ${reported})`)
+							: "";
+					const detail = attempt.ok
+						? theme.fg("muted", formatDuration(attempt.durationMs))
+						: theme.fg("dim", attempt.failure ?? "failed");
+					return `${icon} ${theme.fg("muted", attempt.model)}${swapped} ${detail}`;
+				});
+				return theme.fg("dim", "models ") + items.join(theme.fg("dim", " → "));
+			};
+
+			/**
+			 * The capability tier. `overridden` distinguishes a caller-supplied
+			 * `strength` from the agent's own frontmatter `capability`; parallel and
+			 * chain items have no per-item strength, so the tier is often the agent's.
+			 */
+			type Tier = { value: SubagentCapability; overridden: boolean };
+
+			const tierOf = (r: SingleResult): Tier | undefined =>
+				r.strength ? { value: r.strength, overridden: details.strengthOverride !== undefined } : undefined;
+
+			/** Invocation-level override, shown once on a chain or parallel header. */
+			const overrideSegment = (): string | undefined =>
+				details.strengthOverride
+					? theme.fg("dim", "strength") + " " + theme.fg("muted", details.strengthOverride)
+					: undefined;
+
+			/** Per-row tier, omitted when the invocation-level override already covered it. */
+			const rowTier = (r: SingleResult): Tier | undefined =>
+				details.strengthOverride ? undefined : tierOf(r);
+
+			/**
+			 * Usage footer: labeled segments instead of one run-on line.
+			 */
+			const usageLine = (
+				usage: {
+					input: number;
+					output: number;
+					cacheRead: number;
+					cacheWrite: number;
+					cost: number;
+					contextTokens?: number;
+					turns?: number;
+				},
+				options: { tier?: Tier; prefix?: string } = {},
+			): string | undefined => {
+				const segments: string[] = [];
+				if (options.tier) {
+					const label = options.tier.overridden ? "strength" : "capability";
+					segments.push(theme.fg("dim", label) + " " + theme.fg("muted", options.tier.value));
+				}
+				if (usage.turns) segments.push(theme.fg("muted", `${usage.turns} turn${usage.turns > 1 ? "s" : ""}`));
+				const io = [
+					usage.input ? `↑${formatTokens(usage.input)}` : "",
+					usage.output ? `↓${formatTokens(usage.output)}` : "",
+				].filter(Boolean).join(" ");
+				if (io) segments.push(theme.fg("muted", io));
+				const cache = [
+					usage.cacheRead ? `R${formatTokens(usage.cacheRead)}` : "",
+					usage.cacheWrite ? `W${formatTokens(usage.cacheWrite)}` : "",
+				].filter(Boolean).join(" ");
+				if (cache) segments.push(theme.fg("dim", "cache") + " " + theme.fg("muted", cache));
+				if (usage.cost) segments.push(theme.fg("muted", `$${usage.cost.toFixed(4)}`));
+				if (usage.contextTokens && usage.contextTokens > 0) {
+					segments.push(theme.fg("dim", "ctx") + " " + theme.fg("muted", formatTokens(usage.contextTokens)));
+				}
+				if (segments.length === 0) return undefined;
+				const body = segments.join(sep);
+				return options.prefix ? theme.fg("dim", options.prefix) + " " + body : body;
+			};
+
+			const wiseUsageLine = (): string | undefined => {
 				const wise = details.wiseCompaction;
-				if (!wise) return "";
-				const bounded = wise.submittedChars < wise.sourceChars ? ", source bounded" : "";
-				const usage = formatUsageStats({
+				if (!wise) return undefined;
+				const bounded = wise.submittedChars < wise.sourceChars ? ", bounded" : "";
+				const head =
+					theme.fg("dim", "wise") + " " +
+					theme.fg("muted", `${wise.sourceMessages} messages → ${modelLabel(wise.model) ?? wise.model}${bounded}`);
+				const usage = usageLine({
 					input: wise.usage.input,
 					output: wise.usage.output,
 					cacheRead: wise.usage.cacheRead,
@@ -1248,9 +1458,26 @@ export default function (pi: ExtensionAPI) {
 					cost: wise.usage.cost.total,
 					contextTokens: wise.usage.totalTokens,
 					turns: 1,
-				}, wise.model);
-				return `Wise context: ${wise.sourceMessages} messages${bounded}${usage ? ` · ${usage}` : ""}`;
+				});
+				return usage ? head + sep + usage : head;
 			};
+
+			/** Group status for a chain or parallel run. */
+			const groupIcon = (group: SingleResult[]): string => {
+				const states = group.map(resultState);
+				if (states.includes("running")) return theme.fg("warning", "⏳");
+				if (states.includes("failed")) return theme.fg("error", "✗");
+				if (states.includes("empty")) return theme.fg("warning", "◐");
+				return theme.fg("success", "✓");
+			};
+
+			const okCount = (group: SingleResult[]): number => group.filter((r) => resultState(r) === "ok").length;
+
+			/** `✓ parallel · 3/3 tasks · strength high` — the override sits where it is decided. */
+			const groupHeader = (label: string, status: string, group: SingleResult[]): string =>
+				[`${groupIcon(group)} ${theme.fg("toolTitle", theme.bold(label))}`, theme.fg("accent", status), overrideSegment()]
+					.filter((part): part is string => Boolean(part))
+					.join(sep);
 
 			/* Progress-summary rendering is disabled.
 			const renderStatusLine = (summary?: string) => {
@@ -1286,18 +1513,17 @@ export default function (pi: ExtensionAPI) {
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const isError = isFailedResult(r);
-				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
+				const usageText = usageLine(r.usage, { tier: tierOf(r) });
+				const wiseText = wiseUsageLine();
 
 				if (expanded) {
 					const container = new Container();
-					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${strengthLabel(r.strength)}${wiseLabel(r.wise)}`;
-					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
-					container.addChild(new Text(header, 0, 0));
-					// if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
-					if (isError && r.errorMessage)
+					container.addChild(new Text(agentHeader(r), 0, 0));
+					const attempts = modelAttemptsLine(r);
+					if (attempts) container.addChild(new Text("  " + attempts, 0, 0));
+					if (r.errorMessage)
 						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
@@ -1322,28 +1548,23 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 					}
-					const usageStr = formatUsageStats(r.usage, displayModel(r));
-					if (usageStr) {
+					if (usageText) {
 						container.addChild(new Spacer(1));
-						container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
+						container.addChild(new Text(usageText, 0, 0));
 					}
-					const wiseUsage = wiseUsageStr();
-					if (wiseUsage) container.addChild(new Text(theme.fg("dim", wiseUsage), 0, 0));
+					if (wiseText) container.addChild(new Text(wiseText, 0, 0));
 					return container;
 				}
 
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${strengthLabel(r.strength)}${wiseLabel(r.wise)}`;
-				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
-				// if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
-				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
-				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
-				else {
+				let text = agentHeader(r);
+				if (r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+				else if (displayItems.length === 0) {
+					text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
+				} else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 				}
-				const usageStr = formatUsageStats(r.usage, displayModel(r));
-				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
-				const wiseUsage = wiseUsageStr();
-				if (wiseUsage) text += `\n${theme.fg("dim", wiseUsage)}`;
+				if (usageText) text += `\n${usageText}`;
+				if (wiseText) text += `\n${wiseText}`;
 				return new Text(text, 0, 0);
 			}
 
@@ -1370,37 +1591,26 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
-				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
+				const doneCount = okCount(details.results);
+				const status = `${doneCount}/${details.results.length} steps`;
 
 				if (expanded) {
 					const container = new Container();
-					container.addChild(
-						new Text(
-							icon +
-								" " +
-								theme.fg("toolTitle", theme.bold("chain ")) +
-								theme.fg("accent", `${successCount}/${details.results.length} steps`),
-							0,
-							0,
-						),
-					);
+					container.addChild(new Text(groupHeader("chain", status, details.results), 0, 0));
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
 						container.addChild(new Spacer(1));
 						container.addChild(
-							new Text(
-								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)}${strengthLabel(r.strength)}${wiseLabel(r.wise)} ${rIcon}`,
-								0,
-								0,
-							),
+							new Text(theme.fg("muted", `─── Step ${r.step} ─── `) + agentHeader(r), 0, 0),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
-						// if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
+						const attempts = modelAttemptsLine(r);
+						if (attempts) container.addChild(new Text("  " + attempts, 0, 0));
+						if (r.errorMessage)
+							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1421,72 +1631,59 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
-						const stepUsage = formatUsageStats(r.usage, displayModel(r));
-						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
+						const stepUsage = usageLine(r.usage, { tier: rowTier(r) });
+						if (stepUsage) container.addChild(new Text(stepUsage, 0, 0));
 					}
 
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
+					const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });
 					if (usageStr) {
 						container.addChild(new Spacer(1));
-						container.addChild(new Text(theme.fg("dim", `Total: ${usageStr}`), 0, 0));
+						container.addChild(new Text(usageStr, 0, 0));
 					}
+					const wiseText = wiseUsageLine();
+					if (wiseText) container.addChild(new Text(wiseText, 0, 0));
 					return container;
 				}
 
 				// Collapsed view
-				let text =
-					icon +
-					" " +
-					theme.fg("toolTitle", theme.bold("chain ")) +
-					theme.fg("accent", `${successCount}/${details.results.length} steps`);
+				let text = groupHeader("chain", status, details.results);
 				for (const r of details.results) {
-					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
-					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)}${strengthLabel(r.strength)}${wiseLabel(r.wise)} ${rIcon}`;
-					// if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
-					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
-					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					text += `\n\n${theme.fg("muted", `─── Step ${r.step} ─── `)}${agentHeader(r)}`;
+					if (displayItems.length === 0) {
+						text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
+					} else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
-				const usageStr = formatUsageStats(aggregateUsage(details.results));
-				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
+				const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });
+				if (usageStr) text += `\n\n${usageStr}`;
+				const wiseText = wiseUsageLine();
+				if (wiseText) text += `\n${wiseText}`;
 				return new Text(text, 0, 0);
 			}
 
 			if (details.mode === "parallel") {
-				const running = details.results.filter((r) => r.exitCode === -1).length;
-				const successCount = details.results.filter((r) => r.exitCode !== -1 && !isFailedResult(r)).length;
-				const failCount = details.results.filter((r) => r.exitCode !== -1 && isFailedResult(r)).length;
+				const running = details.results.filter((r) => resultState(r) === "running").length;
+				const settled = details.results.length - running;
 				const isRunning = running > 0;
-				const icon = isRunning
-					? theme.fg("warning", "⏳")
-					: failCount > 0
-						? theme.fg("warning", "◐")
-						: theme.fg("success", "✓");
 				const status = isRunning
-					? `${successCount + failCount}/${details.results.length} done, ${running} running`
-					: `${successCount}/${details.results.length} tasks`;
+					? `${settled}/${details.results.length} settled, ${running} running`
+					: `${okCount(details.results)}/${details.results.length} tasks`;
 
 				if (expanded && !isRunning) {
 					const container = new Container();
-					container.addChild(
-						new Text(
-							`${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`,
-							0,
-							0,
-						),
-					);
+					container.addChild(new Text(groupHeader("parallel", status, details.results), 0, 0));
 
 					for (const r of details.results) {
-						const rIcon = isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
 						container.addChild(new Spacer(1));
-						container.addChild(
-							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)}${strengthLabel(r.strength)}${wiseLabel(r.wise)} ${rIcon}`, 0, 0),
-						);
+						container.addChild(new Text(theme.fg("muted", "─── ") + agentHeader(r), 0, 0));
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
-						// if (r.statusSummary) container.addChild(new Text(renderStatusLine(r.statusSummary), 0, 0));
+						const attempts = modelAttemptsLine(r);
+						if (attempts) container.addChild(new Text("  " + attempts, 0, 0));
+						if (r.errorMessage)
+							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1507,38 +1704,35 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
-						const taskUsage = formatUsageStats(r.usage, displayModel(r));
-						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
+						const taskUsage = usageLine(r.usage, { tier: rowTier(r) });
+						if (taskUsage) container.addChild(new Text(taskUsage, 0, 0));
 					}
 
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
+					const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });
 					if (usageStr) {
 						container.addChild(new Spacer(1));
-						container.addChild(new Text(theme.fg("dim", `Total: ${usageStr}`), 0, 0));
+						container.addChild(new Text(usageStr, 0, 0));
 					}
+					const wiseText = wiseUsageLine();
+					if (wiseText) container.addChild(new Text(wiseText, 0, 0));
 					return container;
 				}
 
 				// Collapsed view (or still running)
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
+				let text = groupHeader("parallel", status, details.results);
 				for (const r of details.results) {
-					const rIcon =
-						r.exitCode === -1
-							? theme.fg("warning", "⏳")
-							: isFailedResult(r)
-								? theme.fg("error", "✗")
-								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
-					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)}${strengthLabel(r.strength)}${wiseLabel(r.wise)} ${rIcon}`;
-					// if (r.statusSummary) text += `\n${renderStatusLine(r.statusSummary)}`;
+					text += `\n\n${theme.fg("muted", "─── ")}${agentHeader(r)}`;
 					if (displayItems.length === 0)
-						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
+						text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
 				if (!isRunning) {
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
-					if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
+					const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });
+					if (usageStr) text += `\n\n${usageStr}`;
 				}
+				const wiseText = wiseUsageLine();
+				if (wiseText) text += `\n${wiseText}`;
 				return new Text(text, 0, 0);
 			}
 

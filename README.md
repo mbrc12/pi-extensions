@@ -116,7 +116,45 @@ Supports three modes:
 | `parallel` | `tasks` array | Run multiple agents concurrently (up to 16 concurrency, 16 max tasks) |
 | `chain` | `chain` array | Run agents sequentially, each sees the previous agent's output via `{previous}` placeholder |
 
-Each agent frontmatter sets `capability: low`, `medium`, `high`, or `image`. The caller can set one invocation-level `strength` override (`low`, `medium`, or `high`) for every selected agent. The tool description tells callers to use the lowest strength that can reliably complete the task. The subagent UI shows the requested override and each agent's effective strength.
+Each agent frontmatter sets `capability: low`, `medium`, `high`, or `image`. The caller can set one invocation-level `strength` override (`low`, `medium`, or `high`) for every selected agent. The tool description tells callers to use the lowest strength that can reliably complete the task.
+
+Each finished agent renders as one header, its activity, then a usage footer:
+
+```text
+✓ reviewer · gpt-5.6-luna · 42s
+→ read ~/src/parser.ts
+strength high · 3 turns · ↑12k ↓2.1k · cache R98k W12k · $0.0421 · ctx 24k
+```
+
+The header carries the agent's identity and outcome, the model that answered, and the elapsed time. The footer carries the usage numbers. Icons distinguish four states: `✓` finished with an answer, `△` ran but wrote no final answer, `✗` failed, `⏳` still running. A `toolUse` stop reason renders as "stopped on a tool call" because it means the child ended its turn asking for a tool call, not that it broke.
+
+**The tier is shown where it is decided.** A caller override is one decision for the whole call, so it appears once on a `parallel` or `chain` header. It never appears on the individual rows, because `tasks` and `chain` items have no per-item strength and every row would repeat the same value. When the caller sets no override, each row reports the agent's own frontmatter value, labeled `capability`:
+
+```text
+✓ parallel · 2/2 tasks · strength high        ← caller override, shown once
+
+─── ✓ scout · gpt-5.6-terra · 12s
+Found the call sites.
+
+─── ✓ reviewer · gpt-5.6-terra · 20s
+Reviewed.
+```
+
+```text
+✓ parallel · 2/2 tasks                        ← no override
+
+─── ✓ scout · gpt-5.6-luna · 12s
+Found the call sites.
+capability medium · 2 turns · ↑4k ↓1k · $0.0130
+
+─── ✓ reviewer · gpt-5.6-terra · 20s
+Reviewed.
+capability high · 3 turns · ↑12k ↓2.1k · $0.0421
+```
+
+The row footers, including the tier, appear in the expanded view; collapsed parallel and chain rows show a single combined total instead.
+
+When the first configured model does not answer and a later candidate does, the header marks it, for example `gpt-5.6-luna (fallback 2/3)`, and the expanded view lists every candidate tried with its own duration and failure reason.
 
 A caller can also set `wise: true` for any subagent. Use top-level `wise` in single mode, or set it on an individual item in `tasks` or `chain`. Wise mode sends the caller's active, compaction-aware conversation context to the cheap `wiseCompacter` model, then passes its compact Markdown packet to that subagent as untrusted background beside the normal delegated task. It omits assistant thinking and bounds unusually large source text before compaction. Parallel and chain calls generate the packet once and share it only with items that set `wise: true`. `wise` is a caller option, not agent frontmatter.
 
@@ -148,7 +186,7 @@ The `agentScope` param controls where agents are loaded from:
 | `project` | `.pi/agents/` in the nearest project parent |
 | `both` | Both, project agents shadowing user agents of the same name |
 
-Project-local agents require user confirmation by default (`confirmProjectAgents`). Subagent tool-result details include per-task usage stats (tokens, cost, turns), and the statusline aggregates subagent cost into the total.
+Project-local agents require user confirmation by default (`confirmProjectAgents`). Subagent tool-result details include per-task usage stats (tokens, cost, turns), the first-chosen and reported model, the models tried, and the run duration. The statusline aggregates subagent cost into the total.
 
 Subagent progress summaries are disabled. Their generation, activation, and rendering code remains commented in `subagent/index.ts` so it can be restored later.
 
