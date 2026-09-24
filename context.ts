@@ -1,11 +1,14 @@
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { keyHint } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const PAGE_SIZE = 8;
 const MAX_QUERY_LENGTH = 200;
 const MAX_READ_CHARS = 8_000;
 const SNIPPET_CHARS = 240;
+const MAX_SUMMARY_CHARS = 120;
 
 type HistoryEntry = Extract<SessionEntry, { type: "message" }>;
 
@@ -100,8 +103,40 @@ export default function (pi: ExtensionAPI) {
 			page: Type.Optional(Type.Integer({ minimum: 1, description: "Search results page (8 entries per page, newest first)." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset for reading long entries (max 8,000 characters per call)." })),
 		}),
+		renderCall(args, theme) {
+			const action = args.action === "read" ? "read" : "search";
+			const subject = action === "read" ? args.entryId : args.query;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("context_recall ")) +
+					theme.fg("accent", action) +
+					(subject ? theme.fg("muted", ` ${String(subject)}`) : ""),
+				0,
+				0,
+			);
+		},
+		renderResult(result, { expanded, isPartial }, theme) {
+			const text = result.content.find((item) => item.type === "text")?.text ?? "";
+			if (isPartial) return new Text(theme.fg("warning", "Searching history…"), 0, 0);
+			if (expanded) return new Text(theme.fg("toolOutput", text), 0, 0);
+
+			const details = result.details as { summary?: string } | undefined;
+			const fullSummary = details?.summary ?? text.split("\n", 1)[0] ?? "Recall complete";
+			const summary = fullSummary.length > MAX_SUMMARY_CHARS
+				? `${fullSummary.slice(0, MAX_SUMMARY_CHARS - 1)}…`
+				: fullSummary;
+			const hint = keyHint("app.tools.expand", "to expand");
+			return new Text(
+				theme.fg("muted", ` → ${summary}`) + theme.fg("dim", ` (${hint})`),
+				0,
+				0,
+			);
+		},
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			return { content: [{ type: "text", text: recall(ctx.sessionManager.getBranch(), params) }], details: {} };
+			const text = recall(ctx.sessionManager.getBranch(), params);
+			return {
+				content: [{ type: "text", text }],
+				details: { summary: text.split("\n", 1)[0] ?? "Recall complete" },
+			};
 		},
 	});
 }

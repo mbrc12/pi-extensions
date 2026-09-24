@@ -6,7 +6,7 @@ Custom extensions for [pi](https://pi.dev/).
 
 ### `context`
 
-Adds `context_recall` for searching and reading original messages on the active session branch, including messages no longer sent to the model after compaction. Search is case-insensitive literal text and returns eight short results per page; reads are limited to 8,000 characters per call with an offset for the rest. It excludes system messages, private assistant thinking, and image data. It does not change Pi's built-in compaction or store another copy of the session.
+Adds `context_recall` for searching and reading original messages on the active session branch, including messages no longer sent to the model after compaction. Its result display is compact by default; use `Ctrl+O` to expand or collapse the full result. Search is case-insensitive literal text and returns eight short results per page; reads are limited to 8,000 characters per call with an offset for the rest. It excludes system messages, private assistant thinking, and image data. It does not change Pi's built-in compaction or store another copy of the session.
 
 ### `cleanup`
 

@@ -3,6 +3,8 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
 // Pi resolves these packages when it loads extensions. Mock them for a standalone Bun test.
 mock.module("@earendil-works/pi-ai", () => ({ StringEnum: () => ({}) }));
+mock.module("@earendil-works/pi-coding-agent", () => ({ keyHint: (_action: string, label: string) => `ctrl+o ${label}` }));
+mock.module("@earendil-works/pi-tui", () => ({ Text: class Text { constructor(public text: string) {} } }));
 mock.module("typebox", () => ({ Type: { Object: () => ({}), String: () => ({}), Integer: () => ({}), Optional: () => ({}) } }));
 const { recall, default: registerContext } = await import("../context.ts");
 
@@ -31,11 +33,18 @@ describe("context recall", () => {
 		let tool: any;
 		registerContext({ registerTool: (definition: any) => { tool = definition; } } as any);
 		expect(tool.name).toBe("context_recall");
+		expect(tool.renderCall({ action: "search", query: "phrase" }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }).text).toContain("context_recall");
 		const ctx = { sessionManager: { getBranch: () => [user("active", "active phrase")],
 			getEntries: () => [user("other", "secret other branch")] } };
 		const result = await tool.execute("call", { action: "search", query: "other branch" }, undefined, undefined, ctx);
 		expect(result.content[0].text).toContain("No exact text matches");
-		expect(result.details).toEqual({});
+		expect(result.details.summary).toContain("No exact text matches");
+		const theme = { fg: (_color: string, text: string) => text };
+		const compact = tool.renderResult(result, { expanded: false, isPartial: false }, theme);
+		expect(compact.text).toContain("ctrl+o");
+		expect(compact.text).not.toContain("active phrase");
+		const expanded = tool.renderResult(result, { expanded: true, isPartial: false }, theme);
+		expect(expanded.text).toContain("No exact text matches");
 	});
 
 	test("finds old entries even across a compaction; does not search its summary", () => {
