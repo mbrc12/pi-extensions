@@ -3,23 +3,17 @@
  *
  * A persistent todo list with optional per-turn model-context injection.
  *
- * The extension layers four reinforcement mechanisms:
+ * The extension provides:
  *
- *  1. promptGuidelines on the `todo` tool: tells the model to create todos only
- *     for multi-step work, mark jobs complete as it finishes them, and clear the
- *     list once every job is done.
+ *  1. promptGuidelines on the `todo` tool: one instruction to update the list as
+ *     appropriate when one exists. It does not tell the model when to start or
+ *     stop working.
  *  2. Optional before_agent_start system-prompt injection: when enabled with
- *     `/todo-inject on`, the per-turn system prompt re-states remaining and
- *     completed todos (or reminds the model to clear the list when all are
- *     complete) without adding a transcript message. Injection is off by
+ *     `/todo-inject on`, the per-turn system prompt re-states the remaining and
+ *     completed todos without adding a transcript message. Injection is off by
  *     default and can be disabled with `/todo-inject off`.
- *  3. Optional agent_end watchdog: while injection is enabled, if todos remain
- *     incomplete and the last turn made no progress, automatically send a hidden
- *     custom follow-up (triggerTurn: true) that tells the model to continue.
- *     Capped at MAX_NUDGES consecutive no-progress turns to avoid loops.
- *  4. Optional agent_end clear-nudge: while injection is enabled, if the model
- *     stops after all todos are marked complete but the list itself is not empty,
- *     send one hidden follow-up telling it to clear the stale completed list.
+ *
+ * The extension never nudges the model or re-prompts it.
  *
  * Tool actions persist state in tool-result details. User commands persist
  * state in custom session entries because commands do not produce tool
@@ -65,8 +59,6 @@ const TodoParams = Type.Object({
 });
 export type TodoInput = Static<typeof TodoParams>;
 
-// Stop auto-continuing after this many consecutive no-progress turns.
-const MAX_NUDGES = 3;
 const COMPLETED_DISPLAY_MS = 10_000;
 const WIDGET_REFRESH_MS = 100;
 const MAX_WIDGET_ITEMS = 5;
@@ -75,13 +67,8 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	let nextId = 1;
 	let injectEnabled = false;
 
-	// Watchdog state
-	let lastIncompleteCount = 0;
-	let nudgeCount = 0;
-	let cleanupNudgeSent = false;
 	let widgetRefreshTimer: ReturnType<typeof setInterval> | undefined;
 	let widgetContext: ExtensionContext | undefined;
-	let cleanupNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const remaining = (): Todo[] => todos.filter((t) => !t.done);
 	const completed = (): Todo[] => todos.filter((t) => t.done);
@@ -102,58 +89,10 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		const completedList = done.length
 			? done.map((t) => `- 🟢 #${t.id}: ${t.text}`).join("\n")
 			: "- (none)";
-		const instructions = rem.length === 0
-			? 'All todos are complete. The user request appears fully addressed. You may call todo with action "clear" to tidy up the list; otherwise it will stay visible. Only add todos if the user has given you a new multi-step task.'
-			: 'Incomplete todos remain. Work on the next remaining job and mark it complete with todo action "complete" when finished. Do not stop while jobs remain unless the user explicitly asked you to stop, wait, pause, or obtain approval before further work.';
+		const instructions =
+			"If a todo list exists, call todo to update it as appropriate as you work.";
 
 		return `<todo_state>\n[TODO STATE — ${rem.length} remaining, ${done.length} completed, ${todos.length} total]\n\nRemaining:\n${remainingList}\n\nCompleted:\n${completedList}\n\n${instructions}\n</todo_state>`;
-	}
-
-	function getMessageText(message: { content?: unknown }): string {
-		const content = message.content;
-		if (typeof content === "string") return content;
-		if (!Array.isArray(content)) return "";
-		return content
-			.map((part) => {
-				if (part && typeof part === "object" && "text" in part) {
-					const text = (part as { text?: unknown }).text;
-					return typeof text === "string" ? text : "";
-				}
-				return "";
-			})
-			.join("");
-	}
-
-	function latestUserText(ctx: ExtensionContext): string {
-		const branch = ctx.sessionManager.getBranch();
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry?.type !== "message") continue;
-			const msg = (entry as { message: { role?: string; content?: unknown } }).message;
-			if (msg.role === "user") return getMessageText(msg);
-		}
-		return "";
-	}
-
-	function latestUserAskedToWaitOrApprove(ctx: ExtensionContext): boolean {
-		const text = latestUserText(ctx);
-		if (!text.trim()) return false;
-		const sentenceStart = String.raw`(?:^|[.!?\n]\s*)(?:please\s+)?`;
-		const patterns = [
-			new RegExp(`${sentenceStart}(?:wait|pause|hold off|hold on|stop)\\b`, "i"),
-			new RegExp(`${sentenceStart}(?:do not|don't|dont)\\s+(?:continue|proceed|work|start|make|edit|change|run)\\b`, "i"),
-			new RegExp(`${sentenceStart}(?:ask|get|obtain|request)\\s+(?:(?:my|the user's|user(?:'s)?)\\s+)?(?:approval|permission|confirmation|sign-?off)\\b[\\s\\S]{0,120}\\b(?:before|prior to|ahead of|until)\\b`, "i"),
-			new RegExp(`${sentenceStart}(?:wait|pause|hold off|hold on|stop)[\\s\\S]{0,120}\\b(?:approval|permission|confirmation|confirm|approve|go ahead|say so)\\b`, "i"),
-		];
-		return patterns.some((pattern) => pattern.test(text));
-	}
-
-	function isAbortedAgentEnd(messages: unknown[]): boolean {
-		return messages.some((message) => {
-			if (!message || typeof message !== "object") return false;
-			const msg = message as { role?: string; stopReason?: string };
-			return msg.role === "assistant" && msg.stopReason === "aborted";
-		});
 	}
 
 	function stopWidgetRefresh(): void {
@@ -162,13 +101,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			widgetRefreshTimer = undefined;
 		}
 		widgetContext = undefined;
-	}
-
-	function stopCleanupNudgeTimer(): void {
-		if (cleanupNudgeTimer) {
-			clearTimeout(cleanupNudgeTimer);
-			cleanupNudgeTimer = undefined;
-		}
 	}
 
 	function hasFadingCompletedTodos(now = Date.now()): boolean {
@@ -261,10 +193,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 				nextId = state.nextId ?? nextId;
 			}
 		}
-		lastIncompleteCount = remaining().length;
-		nudgeCount = 0;
-		cleanupNudgeSent = false;
-		stopCleanupNudgeTimer();
 		refreshWidget(ctx);
 	}
 
@@ -272,7 +200,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
 	pi.on("session_shutdown", () => {
 		stopWidgetRefresh();
-		stopCleanupNudgeTimer();
 	});
 
 	// --- The todo tool -------------------------------------------------------
@@ -286,11 +213,7 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 		// Bullets appended to the Guidelines section while the tool is active.
 		// Each bullet must name the tool explicitly.
 		promptGuidelines: [
-			"Call todo with action \"list\" when you need to inspect or re-verify the current todo state; automatic per-turn todo injection may be disabled.",
-			"When you finish a job, immediately call todo with action \"complete\" and that job's id to mark it done.",
-			"Do not end your turn while incomplete todos remain. Pick the next remaining job and continue working on it. You may use the ask_question tool to clarify something if needed, but do not stop or hand back to the user while jobs remain unless the user explicitly asked you to stop, wait, pause, or obtain approval before further work.",
-			"Do not create todos for single-task requests. If the list is empty and the user gives you a multi-step task, call todo with action \"add\" for each step first, then work through them.",
-			"Do NOT call todo with action \"clear\" while incomplete todos remain — it is blocked. You may call clear once all todos are complete to tidy up; otherwise the list simply stays visible.",
+			"If a todo list exists, call todo to update it as appropriate as you work.",
 		],
 		parameters: TodoParams,
 		// Todo mutations are bookkeeping. Keep their tool rows out of the transcript;
@@ -328,8 +251,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 					}
 					const t: Todo = { id: nextId++, text: params.text.trim(), done: false };
 					todos.push(t);
-					cleanupNudgeSent = false;
-					stopCleanupNudgeTimer();
 					refreshWidget(ctx);
 					return {
 						content: [{ type: "text", text: `Added #${t.id}: ${t.text}` }],
@@ -363,10 +284,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 					}
 					t.done = true;
 					t.completedAt = Date.now();
-					if (remaining().length === 0) {
-						cleanupNudgeSent = false;
-						stopCleanupNudgeTimer();
-					}
 					refreshWidget(ctx);
 					return {
 						content: [{ type: "text", text: `Completed #${t.id}: ${t.text}` }],
@@ -378,10 +295,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 					const count = todos.length;
 					todos = [];
 					nextId = 1;
-					lastIncompleteCount = 0;
-					nudgeCount = 0;
-					cleanupNudgeSent = false;
-					stopCleanupNudgeTimer();
 					stopWidgetRefresh();
 					refreshWidget(ctx);
 					return {
@@ -416,108 +329,17 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			return {
 				block: true,
 				reason:
-					"todo 'clear' is blocked while incomplete todos remain. Finish them first, or ask the user to run /todo-clear.",
+					"todo 'clear' is blocked while incomplete todos remain. To wipe the list, ask the user to run /todo-clear.",
 			};
 		}
 	});
 
 	// --- Per-turn system-prompt injection -------------------------------------
 	// - List empty (cleared): inject nothing.
-	// - All complete but not cleared: include completed state and suggest clearing.
-	// - Incomplete todos remain: include remaining/completed state and instruct to continue.
+	// - List non-empty: inject the current list and a neutral update instruction.
 	pi.on("before_agent_start", async (event) => {
 		if (!injectEnabled || todos.length === 0) return;
 		return { systemPrompt: `${event.systemPrompt}\n\n${renderTodoSystemPrompt()}` };
-	});
-
-	// --- Watchdog: auto-continue when the model stops early ------------------
-	pi.on("agent_end", async (_event, ctx) => {
-		const rem = remaining();
-		if (!injectEnabled) {
-			lastIncompleteCount = rem.length;
-			nudgeCount = 0;
-			cleanupNudgeSent = false;
-			return;
-		}
-		if (isAbortedAgentEnd(_event.messages)) {
-			lastIncompleteCount = rem.length;
-			nudgeCount = 0;
-			return;
-		}
-
-		if (rem.length === 0) {
-			lastIncompleteCount = 0;
-			nudgeCount = 0;
-			// All jobs are done but the model left completed todos in the list.
-			// Wait until the widget's 10-second completion display has finished,
-			// then nudge it once to clear the stale state.
-			if (todos.length > 0 && !cleanupNudgeSent) {
-				cleanupNudgeSent = true;
-				const latestCompletion = Math.max(
-					...todos.map((todo) => todo.completedAt ?? 0),
-				);
-				const delay = Math.max(0, latestCompletion + COMPLETED_DISPLAY_MS - Date.now());
-				cleanupNudgeTimer = setTimeout(() => {
-					cleanupNudgeTimer = undefined;
-					if (todos.length === 0 || remaining().length > 0) {
-						cleanupNudgeSent = false;
-						return;
-					}
-					pi.sendMessage(
-						{
-							customType: "todo-list-cleanup-nudge",
-							content:
-								"All todos are complete, but the list has not been cleared yet. " +
-								'Call todo with action "clear" now to empty the list. Do not reply to the user until the todo list is empty.',
-							display: false,
-						},
-						{ deliverAs: "followUp", triggerTurn: true },
-					);
-				}, delay);
-			}
-			return;
-		}
-
-		// Made progress this turn? Reset the nudge counter.
-		if (rem.length < lastIncompleteCount) {
-			nudgeCount = 0;
-		} else {
-			nudgeCount += 1;
-		}
-		lastIncompleteCount = rem.length;
-
-		// Loop guard: after MAX_NUDGES consecutive no-progress turns, hand
-		// back to the user instead of burning more tokens.
-		if (nudgeCount >= MAX_NUDGES) {
-			ctx.ui.notify(
-				`Todo list has ${rem.length} incomplete job(s) and the agent stalled for ${nudgeCount} turns. Resuming requires your input.`,
-				"warning",
-			);
-			return;
-		}
-
-		if (latestUserAskedToWaitOrApprove(ctx)) {
-			nudgeCount = 0;
-			return;
-		}
-
-		const next = rem[0];
-		const list = rem.map((t) => `- #${t.id}: ${t.text}`).join("\n");
-		// Send a hidden custom follow-up so it triggers a new turn without
-		// appearing as a user-authored transcript message. followUp ensures it's
-		// delivered only once the agent is idle.
-		pi.sendMessage(
-			{
-				customType: "todo-list-continuation-nudge",
-				content:
-					`You still have ${rem.length} incomplete todo(s):\n${list}\n\n` +
-					`Continue now by working on #${next.id}: "${next.text}". ` +
-					`Do not stop until all todos are complete or you need user input. ` +
-					`If the user's latest instructions explicitly told you to wait, pause, stop, or obtain approval before further work, honor that instruction instead of continuing work.`,
-				display: false,
-			},
-			{ deliverAs: "followUp", triggerTurn: true },
-		);
 	});
 
 	// --- User-facing commands ------------------------------------------------
@@ -533,10 +355,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 			const count = todos.length;
 			todos = [];
 			nextId = 1;
-			lastIncompleteCount = 0;
-			nudgeCount = 0;
-			cleanupNudgeSent = false;
-			stopCleanupNudgeTimer();
 			stopWidgetRefresh();
 			refreshWidget(ctx);
 			pi.appendEntry<TodoStateEntryData>(TODO_STATE_ENTRY_TYPE, { todos: [], nextId: 1 });
@@ -561,10 +379,6 @@ export default function todoListExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			injectEnabled = value === "on";
-			lastIncompleteCount = remaining().length;
-			nudgeCount = 0;
-			cleanupNudgeSent = false;
-			stopCleanupNudgeTimer();
 			refreshWidget(ctx);
 			pi.appendEntry<TodoInjectStateEntryData>(TODO_INJECT_STATE_ENTRY_TYPE, {
 				enabled: injectEnabled,

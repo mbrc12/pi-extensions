@@ -618,6 +618,11 @@ export default function (pi: ExtensionAPI) {
           let subagentCost = 0;
 
           for (const entry of ctx.sessionManager.getEntries()) {
+            if (entry.type === "custom" && entry.customType === "background-subagent-state") {
+              const data = entry.data as { action?: string; job?: { cost?: number } } | undefined;
+              if (data?.action === "finish") subagentCost += finiteNumber(data.job?.cost);
+              continue;
+            }
             if (entry.type !== "message") continue;
             if (entry.message.role === "assistant") {
               const m = entry.message as AssistantMessage;

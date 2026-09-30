@@ -10,97 +10,99 @@
       "allow": [
         "^openai-codex-2/.*$"
       ],
-      "defaultModel": "openai-codex-2/gpt-5.6-sol"
+      "defaultModel": "openai-codex-2/gpt-6-sol"
     }
   },
   "subagentModels": {
     "low": [
       "opencode-go/deepseek-v4.1-flash",
-      "openai-codex/gpt-5.6-luna",
-      "openai-codex-2/gpt-5.6-luna"
+      "opencode-go/mimo-v2.6-flash",
+      "openai-codex/gpt-6-luna",
+      "openai-codex-2/gpt-6-luna"
     ],
     "medium": [
-      "openai-codex/gpt-5.6-luna",
-      "openai-codex-2/gpt-5.6-luna",
+      "openai-codex/gpt-6-luna",
+      "openai-codex-2/gpt-6-luna",
       "opencode-go/deepseek-v4-pro",
       "opencode-go/kimi-k2.6"
     ],
     "high": [
-      "openai-codex/gpt-5.6-terra",
-      "openai-codex/gpt-5.6-sol",
-      "openai-codex-2/gpt-5.6-terra",
-      "openai-codex-2/gpt-5.6-sol"
+      "openai-codex/gpt-6-luna",
+      "openai-codex/gpt-6-sol",
+      "openai-codex-2/gpt-6-luna",
+      "openai-codex-2/gpt-6-sol"
     ],
     "image": [
-      "openai-codex/gpt-5.6-luna",
-      "openai-codex-2/gpt-5.6-luna"
+      "openai-codex/gpt-6-luna",
+      "openai-codex-2/gpt-6-luna"
     ]
   },
   "wiseCompacter": [
     "opencode-go/deepseek-v4.1-flash",
-    "openai-codex-2/gpt-5.6-luna",
-    "openai-codex/gpt-5.6-luna"
+    "openai-codex-2/gpt-6-luna",
+    "openai-codex/gpt-6-luna"
   ],
   "recapGeneration": [
-    "opencode-go/mimo-v2.5",
-    "openai-codex/gpt-5.6-luna",
+    "opencode-go/mimo-v2.6-flash",
+    "openai-codex/gpt-6-luna",
     "opencode-go/deepseek-v4-flash",
     "azure-foundry/Deepseek-V4-Flash-0731",
-    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-luna",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
     "opencode-go/deepseek-v4-pro",
-    "openai-codex-2/gpt-5.6-luna"
+    "openai-codex-2/gpt-6-luna"
   ],
   "toolSummaryGeneration": [
-    "opencode-go/mimo-v2.5",
-    "openai-codex/gpt-5.6-luna",
-    "openai-codex-2/gpt-5.6-luna"
+    "opencode-go/mimo-v2.6-flash",
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna"
   ],
   "subagentProgressSummary": [
     "opencode-go/deepseek-v4.1-flash",
-    "openai-codex/gpt-5.6-luna",
-    "openai-codex-2/gpt-5.6-luna"
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna"
   ],
   "webSummarization": [
     "opencode-go/deepseek-v4.1-flash",
-    "openai-codex/gpt-5.6-luna",
+    "opencode-go/mimo-v2.6-flash",
+    "openai-codex/gpt-6-luna",
     "opencode-go/deepseek-v4-flash",
     "azure-foundry/Deepseek-V4-Flash-0731",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
-    "openai-codex/gpt-5.6-luna",
-    "openai-codex-2/gpt-5.6-luna"
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna"
   ],
   "permissionClassification": [
     "opencode-go/deepseek-v4.1-flash",
-    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-luna",
     "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
-    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-luna",
     "azure-foundry/Deepseek-V4-Flash-0731",
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
     "google/gemini-2.0-flash",
-    "openai-codex-2/gpt-5.6-luna"
+    "openai-codex-2/gpt-6-luna"
   ],
   "pythonWriteClassification": [
     "opencode-go/deepseek-v4.1-flash",
-    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-luna",
     "opencode-go/deepseek-v4-flash",
     "opencode-go/mimo-v2.5",
     "opencode-go/minimax-m2.7",
     "opencode-go/kimi-k2.6",
-    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-luna",
     "azure-foundry/Deepseek-V4-Flash-0731",
     "openai/gpt-4o-mini",
     "openai/gpt-4.1-mini",
     "anthropic/claude-haiku-3-5",
     "google/gemini-2.0-flash",
-    "openai-codex-2/gpt-5.6-luna"
+    "openai-codex-2/gpt-6-luna"
   ]
 }

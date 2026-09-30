@@ -35,6 +35,7 @@ import {
 	CONFIG_DIR_NAME,
 	convertToLlm,
 	type ExtensionAPI,
+	type ToolDefinition,
 	getAgentDir,
 	getMarkdownTheme,
 	serializeConversation,
@@ -743,6 +744,8 @@ async function runSingleAgentAttempt(
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			let buffer = "";
+			let closed = false;
+			let killTimer: ReturnType<typeof setTimeout> | undefined;
 			// Progress summaries are disabled:
 			// progressSummaryTimer = setInterval(() => void refreshProgressSummary(), PROGRESS_SUMMARY_INTERVAL_MS);
 
@@ -817,7 +820,11 @@ async function runSingleAgentAttempt(
 				currentResult.stderr += data.toString();
 			});
 
+			let killProc: (() => void) | undefined;
 			proc.on("close", (code) => {
+				closed = true;
+				if (killTimer) clearTimeout(killTimer);
+				if (signal && killProc) signal.removeEventListener("abort", killProc);
 				// childFinished = true;
 				// if (progressSummaryTimer) clearInterval(progressSummaryTimer);
 				if (buffer.trim()) processLine(buffer);
@@ -831,11 +838,12 @@ async function runSingleAgentAttempt(
 			});
 
 			if (signal) {
-				const killProc = () => {
+				killProc = () => {
+					if (closed) return;
 					wasAborted = true;
 					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
+					killTimer = setTimeout(() => {
+						if (!closed) proc.kill("SIGKILL");
 					}, 5000);
 				};
 				if (signal.aborted) killProc();
@@ -961,8 +969,8 @@ const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
-export default function (pi: ExtensionAPI) {
-	pi.registerTool({
+export function createSubagentTool(pi: ExtensionAPI) {
+	return {
 		name: "subagent",
 		label: "Subagent",
 		description: [
@@ -1739,5 +1747,9 @@ export default function (pi: ExtensionAPI) {
 			const text = result.content[0];
 			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 		},
-	});
+	} satisfies ToolDefinition<typeof SubagentParams, SubagentDetails>;
+}
+
+export default function (pi: ExtensionAPI) {
+	pi.registerTool(createSubagentTool(pi));
 }

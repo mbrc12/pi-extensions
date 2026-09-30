@@ -4,6 +4,14 @@ Custom extensions for [pi](https://pi.dev/).
 
 ## Extensions
 
+### `background-subagent`
+
+Adds `background_subagent` to start one specialized agent without blocking the caller. It uses the same agent discovery, model fallbacks, strength, and wise-context behavior as `subagent`. The result (or failure) is stored in the session and delivered as a visible message; a hidden follow-up wakes the main agent.
+
+`background_subagent_status` lists tracked jobs when called without a name. With a name, it shows a live snapshot: elapsed time, phase, model, turns, cost, recent tool calls and results, and the latest assistant text (not private thinking). Use `/background-subagent-status [name]` to inspect a job directly in the TUI; omit the name to choose from a list. The statusline's third line shows `⏳ sub <running count> · <latest elapsed time>` while jobs run and removes it when they finish. Progress is not injected into the main conversation; only the final result is. Completion messages show a compact status line by default; press `Ctrl+O` to expand the full answer and press it again to collapse. This changes only the display—the model still receives the full result. Use `background_subagent_stop` to cancel a running job.
+
+Project-local agents require confirmation by default. A Pi reload or session switch interrupts in-process agents; the next session start reports the interruption. Unlike `task_start`, background subagents do not survive a Pi restart.
+
 ### `context`
 
 Adds `context_recall` for searching and reading original messages on the active session branch, including messages no longer sent to the model after compaction. Its result display is compact by default; use `Ctrl+O` to expand or collapse the full result. Search is case-insensitive literal text and returns eight short results per page; reads are limited to 8,000 characters per call with an offset for the rest. It excludes system messages, private assistant thinking, and image data. It does not change Pi's built-in compaction or store another copy of the session.
@@ -218,11 +226,9 @@ Summary generation asks OpenCode models to answer without reasoning. `mimo-v2.5`
 
 A simplified plan-mode todo list. Registers a `todo` tool (list/add/complete/clear), a `/todo-clear` command, and a `/todo-inject on|off` toggle.
 
-The model is kept on-task by layering three reinforcement mechanisms:
+The extension does not manage or push the model. One `promptGuidelines` line tells it to update the list as appropriate when one exists. There is no watchdog, no auto-continue, and no `agent_end` nudge; the model decides when to yield.
 
-- `promptGuidelines` tell the model when to create todos, inspect their state, and mark jobs complete.
-- Optional `before_agent_start` injection adds the remaining todos to the model context each turn. It is off by default. Use `/todo-inject on` to enable it and `/todo-inject off` to disable it for the current session. When injection is on, the existing todo status shows `📌`; when it is off, the status has no injection marker.
-- While injection is enabled, the `agent_end` watchdog auto-continues (via a follow-up user message) when the model stops with incomplete todos, capped at 3 consecutive no-progress turns. It also nudges the model once if it stops with all todos marked complete but the list not yet cleared. `/todo-inject off` disables both watchdog behaviours.
+Optional `before_agent_start` injection adds the current todos to the model context each turn. It is off by default. Use `/todo-inject on` to enable it and `/todo-inject off` to disable it for the current session. When injection is on, the existing todo status shows `📌`; when it is off, the status has no injection marker.
 
 `clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. Tool actions store state in tool-result details. User commands store state as custom session entries. State is reconstructed from the session branch, so settings survive resume and branching keeps the correct state.
 
