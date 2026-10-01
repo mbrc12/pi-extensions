@@ -1,5 +1,8 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { Model as PiModel } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_MODEL_PROFILE,
   getActiveModelProfile,
@@ -31,6 +34,46 @@ interface ProfileState {
 
 const STATE_ENTRY_TYPE = "model-profile-state";
 const STATUS_ID = "model-profile";
+
+// Remember the last profile chosen in a working directory, so a new session in
+// that directory starts with the same profile. State lives outside the session
+// files because it must outlive any single session.
+const DIRECTORY_PROFILES_PATH = path.join(getAgentDir(), "profile-directories.json");
+
+function loadDirectoryProfiles(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DIRECTORY_PROFILES_PATH, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const map: Record<string, string> = {};
+    for (const [directory, profile] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof profile === "string" && profile.length > 0) map[directory] = profile;
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+function directoryProfile(directory: string): string | undefined {
+  if (!directory) return undefined;
+  const profile = loadDirectoryProfiles()[directory];
+  // Ignore entries whose profile was removed or renamed in the configuration.
+  return profile && getModelProfiles()[profile] ? profile : undefined;
+}
+
+function rememberDirectoryProfile(directory: string, profile: string): void {
+  if (!directory) return;
+  try {
+    const map = loadDirectoryProfiles();
+    map[directory] = profile;
+    fs.mkdirSync(path.dirname(DIRECTORY_PROFILES_PATH), { recursive: true });
+    fs.writeFileSync(DIRECTORY_PROFILES_PATH, `${JSON.stringify(map, null, 2)}\n`);
+  } catch (error) {
+    console.error(
+      `[profile] could not remember profile for ${directory}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
 
 function modelKey(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
@@ -279,6 +322,7 @@ export default function profileExtension(pi: ExtensionAPI): void {
         assertValidProfile(name);
         const usable = await applyProfile(name, ctx, true);
         persistProfile();
+        rememberDirectoryProfile(ctx.cwd, name);
         ctx.ui.notify(
           usable
             ? `Model profile "${name}" is active`
@@ -310,7 +354,7 @@ export default function profileExtension(pi: ExtensionAPI): void {
     const inheritedProfile = ctx.sessionManager.getSessionFile() === undefined
       ? getActiveModelProfile()
       : DEFAULT_MODEL_PROFILE;
-    const requestedProfile = stored?.name ?? inheritedProfile;
+    const requestedProfile = stored?.name ?? directoryProfile(ctx.cwd) ?? inheritedProfile;
 
     try {
       assertValidProfile(requestedProfile);
