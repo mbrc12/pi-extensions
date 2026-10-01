@@ -1091,10 +1091,8 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 			"Start a long-running shell command in a detached tmux session. Pi automatically notifies the agent once when the task succeeds, fails, is stopped, or is lost; earlier status/output is available through task_status.",
 		promptSnippet: "Start a shell command in the background via tmux",
 		promptGuidelines: [
-			"Use task_start when the user asks you to run a long-running command that would block the agent.",
-			"task_start creates a background tmux session; choose a descriptive task name or let it auto-generate one.",
-			"After task_start, continue any independent work. Do not use sleep or repeatedly poll task_status while waiting; let the automatic completion notification wake you when the process finishes.",
-			"Use task_status only when the user asks for an update or when you need intermediate output before the task finishes.",
+			"Prefer task_start over bash for commands expected to outlast a normal foreground timeout.",
+			"After starting a task, do independent work or end your turn. Never sleep or poll task_status while waiting; the completion notification wakes you.",
 		],
 		parameters: TaskStartParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1110,10 +1108,8 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 			"Show the current status and output tail for one background task. If no name is supplied and multiple tasks exist, prompts the user to choose.",
 		promptSnippet: "Show one background task's status and output tail",
 		promptGuidelines: [
-			"Use task_status when the user asks to see the output/status of a background task, or when you need the output to continue.",
-			"task_status returns one task transcript as a normal tool result. Terminal-state notifications are injected separately and automatically.",
-			"The default output is 10 nonblank lines. If the user asks for more output, use a larger tail_lines value.",
-			"If task_status shows the task has exited or errored, consider whether you still need the output. If not, call task_clear to delete temporary files.",
+			"Pull status only when the user asks or a decision needs intermediate output. Pass a larger tail_lines for more than the 10 nonblank lines shown by default.",
+			"After reading a finished task's output, call task_clear to delete its /tmp log and script files when they are no longer needed.",
 		],
 		parameters: TaskStatusParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1168,9 +1164,6 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 		label: "Task Stop",
 		description: "Stop a background task by task name. By default it remains tracked for output inspection and cleanup.",
 		promptSnippet: "Stop a background task by name",
-		promptGuidelines: [
-			"Use task_stop when the user asks to stop or kill a background task.",
-		],
 		parameters: TaskStopParams,
 		async execute(_toolCallId, params) {
 			const result = await stopAndNotify(params.name, params.delete_files ?? false);
@@ -1186,8 +1179,7 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 			"Clear tracked background task transcripts and output files. By default skips running tasks.",
 		promptSnippet: "Clear tracked background task transcripts/output files",
 		promptGuidelines: [
-			"Use task_clear when the user asks to clear old background-task state or transcripts.",
-			"task_clear skips running tasks unless include_running:true is explicitly requested; that option stops the tasks before clearing them.",
+			"include_running:true stops running tasks before clearing them.",
 		],
 		parameters: TaskClearParams,
 		// Cleanup is internal bookkeeping. Keep its tool row out of the transcript.
