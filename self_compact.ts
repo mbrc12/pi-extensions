@@ -1,7 +1,7 @@
 /**
  * Self-compaction at natural boundaries.
  *
- * The `self-compact` tool lets the model decide that the current turn is a good
+ * The `self_compact` tool lets the model decide that the current turn is a good
  * place to compact the context. The model passes a note to its future self. Pi
  * compacts at the end of that turn, then delivers the note as the first thing
  * the model reads in the new context.
@@ -15,7 +15,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-const CUSTOM_TYPE = "self-compact";
+const TOOL_NAME = "self_compact";
+const CUSTOM_TYPE = "self_compact";
 const MAX_NOTE_CHARS = 20_000;
 const MAX_INSTRUCTIONS_CHARS = 2_000;
 
@@ -75,10 +76,21 @@ export default function (pi: ExtensionAPI) {
 		pending = undefined;
 	});
 
+	// Pi restores a resumed session's tool loadout from that session's transcript,
+	// so a tool registered after the session was created is missing from the tool
+	// list the model sees. Re-assert it on the next prompt. `getAllTools()` leaves
+	// out tools that CLI flags disabled, so an explicit opt-out still wins.
+	pi.on("before_agent_start", () => {
+		const active = pi.getActiveTools();
+		if (active.includes(TOOL_NAME)) return;
+		if (!pi.getAllTools().some((tool) => tool.name === TOOL_NAME)) return;
+		pi.setActiveTools([...active, TOOL_NAME]);
+	});
+
 	pi.registerMessageRenderer(CUSTOM_TYPE, (message, { outputPad }, theme) => {
 		const details = message.details as NoteDetails | undefined;
 		const skipped = details?.status === "skipped";
-		const heading = skipped ? "self-compact skipped" : "self-compact note";
+		const heading = skipped ? "self_compact skipped" : "self_compact note";
 		const headingLine = theme.fg(skipped ? "warning" : "accent", theme.bold(heading));
 		const body = stringContent(message.content);
 		const box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
@@ -87,7 +99,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "self-compact",
+		name: TOOL_NAME,
 		label: "Self compact",
 		description:
 			"Compact the conversation context at the end of this turn and receive a note you write to yourself. " +
@@ -99,8 +111,8 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet:
 			"Compact the context at a natural boundary and receive a note you write to yourself afterwards.",
 		promptGuidelines: [
-			"Call self-compact only at a natural boundary, after finishing a step of work and before starting the next one.",
-			"The note you pass to self-compact is your only context after compaction; include the goal, decisions, and next steps.",
+			"Call self_compact only at a natural boundary, after finishing a step of work and before starting the next one.",
+			"The note you pass to self_compact is your only context after compaction; include the goal, decisions, and next steps.",
 			"The full history stays available through the context_recall tool even after compaction.",
 		],
 		parameters: Type.Object({

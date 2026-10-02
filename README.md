@@ -88,9 +88,9 @@ Adds a `»` prefix before the editor prompt to visually distinguish it from assi
 
 Shows a small recap widget after 30 seconds without user input, then hides it as soon as the user types again. The recap gives a brief "Now" summary and "Next" suggestion. Toggle/show with `/recap`, `/recap on`, or `/recap off`.
 
-### `self-compact`
+### `self_compact`
 
-Adds a `self-compact` tool that lets the model compact the context at a natural boundary it chooses. The model passes a note to its future self; Pi compacts at the end of that turn using its normal summarization, then delivers the note as the first message of the new context. Because the summary can drop details, the note is the model's only carry-over, so it should hold the goal, decisions, and next steps. The full history stays stored and searchable with the `context_recall` tool. A user interrupt during the turn or the compaction cancels the note, so interrupted work never silently starts a new turn.
+Adds a `self_compact` tool that lets the model compact the context at a natural boundary it chooses. The model passes a note to its future self; Pi compacts at the end of that turn using its normal summarization, then delivers the note as the first message of the new context. Because the summary can drop details, the note is the model's only carry-over, so it should hold the goal, decisions, and next steps. The full history stays stored and searchable with the `context_recall` tool. A user interrupt during the turn or the compaction cancels the note, so interrupted work never silently starts a new turn. If a resumed session's transcript predates the extension, the tool re-activates itself on the next prompt so older sessions gain it too.
 
 ### `permissions`
 
