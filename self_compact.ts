@@ -9,6 +9,13 @@
  * Compaction itself is Pi's normal manual compaction, so the usual summary
  * format and the `session_before_compact` hook still apply. The note is a
  * custom message, which Pi sends to the model as a user-role message.
+ *
+ * Two extras keep the model informed:
+ * - `status: true` on the tool reports the current context usage and schedules
+ *   nothing, so the model can check the room it has left before it decides.
+ * - After a turn, usage at or above {@link AUTO_NOTIFY_PERCENT} sends the model
+ *   an alert with a turn trigger, so it can write a note instead of letting
+ *   Pi's silent automatic compaction drop details.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -20,6 +27,11 @@ const CUSTOM_TYPE = "self_compact";
 const MAX_NOTE_CHARS = 20_000;
 const MAX_INSTRUCTIONS_CHARS = 2_000;
 
+/** Context usage that triggers the automatic alert to the model. */
+export const AUTO_NOTIFY_PERCENT = 90;
+/** Usage must fall back below this before another alert is allowed. */
+export const AUTO_NOTIFY_CLEAR_PERCENT = 80;
+
 interface PendingRequest {
 	id: string;
 	message: string;
@@ -28,8 +40,16 @@ interface PendingRequest {
 
 interface NoteDetails {
 	id: string;
-	status: "compacted" | "skipped";
+	status: "compacted" | "skipped" | "alert" | "status";
 	error?: string;
+	usage?: Usage;
+}
+
+/** Context usage as reported by Pi. */
+export interface Usage {
+	tokens: number | null;
+	contextWindow: number;
+	percent: number | null;
 }
 
 function stringContent(content: unknown): string {
@@ -69,11 +89,61 @@ export function isCancellation(error: string): boolean {
 	return /\b(abort|cancel)/i.test(error);
 }
 
+/** Compact token counts, for example `188k` or `1.2M`. */
+export function formatTokens(value: number): string {
+	if (value < 1_000) return `${Math.round(value)}`;
+	if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
+	return `${(value / 1_000_000).toFixed(1)}M`;
+}
+
+/** One-line usage summary, for example `94% of 200k tokens (188k used)`. */
+export function describeUsage(usage: Usage | undefined): string {
+	if (!usage || usage.percent === null || usage.tokens === null) {
+		return "unknown (no assistant response since the last compaction)";
+	}
+	return `${usage.percent.toFixed(0)}% of ${formatTokens(usage.contextWindow)} tokens (${formatTokens(usage.tokens)} used)`;
+}
+
+/** Answer to a `status: true` call. It never compacts. */
+export function buildStatusReport(usage: Usage | undefined, scheduled: boolean): string {
+	const lines = [`**Context usage: ${describeUsage(usage)}.**`, ""];
+	if (scheduled) {
+		lines.push("A compaction is already scheduled for the end of this turn.", "");
+	}
+	lines.push(
+		usage && usage.percent !== null && usage.percent >= AUTO_NOTIFY_PERCENT
+			? "The context is nearly full. Compact at your next natural boundary, while still giving a note to your future self."
+			: "Give a `message` note to compact at the end of this turn, or keep working if there is room.",
+	);
+	return lines.join("\n");
+}
+
+/** Alert the model reads when usage crosses {@link AUTO_NOTIFY_PERCENT}. */
+export function buildUsageAlert(usage: Usage): string {
+	return [
+		`**Context is nearly full: ${describeUsage(usage)}.**`,
+		"",
+		"Once the context passes Pi's threshold, Pi compacts by itself before the next request. That automatic compaction has no note from you, so details you still need can be summarized away.",
+		"",
+		"If you are at a natural boundary, call self_compact now with a note holding the goal, decisions, and next steps. If you are mid-step, finish it and compact at the next boundary. Check the room left with `self_compact { status: true }`.",
+	].join("\n");
+}
+
+/** True when usage is high enough to alert, and no alert is outstanding. */
+export function shouldAlertUsage(usage: Usage | undefined, alreadyAlerted: boolean): boolean {
+	if (alreadyAlerted) return false;
+	if (!usage || usage.percent === null) return false;
+	return usage.percent >= AUTO_NOTIFY_PERCENT;
+}
+
 export default function (pi: ExtensionAPI) {
 	let pending: PendingRequest | undefined;
+	// Set while usage stays above the alert threshold, so one crossing alerts once.
+	let usageAlerted = false;
 
 	pi.on("session_start", () => {
 		pending = undefined;
+		usageAlerted = false;
 	});
 
 	// Pi restores a resumed session's tool loadout from that session's transcript,
@@ -89,9 +159,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerMessageRenderer(CUSTOM_TYPE, (message, { outputPad }, theme) => {
 		const details = message.details as NoteDetails | undefined;
-		const skipped = details?.status === "skipped";
-		const heading = skipped ? "self_compact skipped" : "self_compact note";
-		const headingLine = theme.fg(skipped ? "warning" : "accent", theme.bold(heading));
+		const status = details?.status;
+		const heading =
+			status === "skipped" ? "self_compact skipped"
+			: status === "alert" ? "context nearly full"
+			: status === "status" ? "context usage"
+			: "self_compact note";
+		const warn = status === "skipped" || status === "alert";
+		const headingLine = theme.fg(warn ? "warning" : "accent", theme.bold(heading));
 		const body = stringContent(message.content);
 		const box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
 		box.addChild(new Text(`${headingLine}\n${body}`, 1, 0));
@@ -102,26 +177,31 @@ export default function (pi: ExtensionAPI) {
 		name: TOOL_NAME,
 		label: "Self compact",
 		description:
-			"Compact the conversation context at the end of this turn and receive a note you write to yourself. " +
-			"Call this when you reach a natural boundary: a unit of work is finished, the context is large, and you want to " +
-			"continue with more room. The conversation is summarized by Pi's normal compaction, and your note is delivered as " +
-			"the first message of the new context. Everything summarized away stays stored in the session and remains " +
-			"searchable with the context_recall tool, so the note only needs the goal, decisions, and next steps you need to " +
-			"keep acting. Do not call this in the middle of a step you cannot describe in the note.",
+			"Compact the conversation context at the end of this turn and receive a note you write to yourself, or report the " +
+			"current context usage with `status: true`. Call this when you reach a natural boundary: a unit of work is finished, " +
+			"the context is large, and you want to continue with more room. The conversation is summarized by Pi's normal " +
+			"compaction, and your note is delivered as the first message of the new context. Everything summarized away stays " +
+			"stored in the session and remains searchable with the context_recall tool, so the note only needs the goal, " +
+			"decisions, and next steps you need to keep acting. Use `status: true` to check how full the context is before you " +
+			"decide. Do not compact in the middle of a step you cannot describe in the note.",
 		promptSnippet:
-			"Compact the context at a natural boundary and receive a note you write to yourself afterwards.",
+			"Compact the context at a natural boundary and receive a note you write to yourself, or report the current context usage.",
 		promptGuidelines: [
 			"Call self_compact only at a natural boundary, after finishing a step of work and before starting the next one.",
 			"The note you pass to self_compact is your only context after compaction; include the goal, decisions, and next steps.",
 			"The full history stays available through the context_recall tool even after compaction.",
+			"Pass `status: true` to read the current context usage percentage without compacting.",
+			"When a message warns that the context is nearly full, write your note and compact at your next natural boundary.",
 		],
 		parameters: Type.Object({
-			message: Type.String({
-				minLength: 1,
-				maxLength: MAX_NOTE_CHARS,
-				description:
-					"Note to your future self. It is delivered as the first message after compaction, so include the current goal, decisions, and next steps.",
-			}),
+			message: Type.Optional(
+				Type.String({
+					minLength: 1,
+					maxLength: MAX_NOTE_CHARS,
+					description:
+						"Note to your future self. It is delivered as the first message after compaction, so include the current goal, decisions, and next steps. Required unless `status` is true.",
+				}),
+			),
 			instructions: Type.Optional(
 				Type.String({
 					maxLength: MAX_INSTRUCTIONS_CHARS,
@@ -129,8 +209,33 @@ export default function (pi: ExtensionAPI) {
 						"Optional extra focus for the summarizer, for example which files, constraints, or open questions matter most.",
 				}),
 			),
+			status: Type.Optional(
+				Type.Boolean({
+					description:
+						"Report the current context usage and this turn's plan, without compacting. Use it to decide whether compaction is needed.",
+				}),
+			),
 		}),
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const usage: Usage | undefined = ctx?.getContextUsage?.();
+			if (params.status) {
+				return {
+					content: [{ type: "text", text: buildStatusReport(usage, pending !== undefined) }],
+					details: { id: "status", status: "status", usage },
+				};
+			}
+			if (!params.message) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Pass a `message` note to schedule compaction, or `status: true` to read the context usage alone.",
+						},
+					],
+					details: { id: "invalid", status: "skipped", error: "missing message" },
+					isError: true,
+				};
+			}
 			const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 			const request: PendingRequest = { id, message: params.message, instructions: params.instructions };
 			if (pending) {
@@ -151,12 +256,32 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_end", (event, ctx) => {
+		// A queued request never carries into a later turn, and a user interrupt
+		// must not silently start a new turn after compaction.
 		const request = pending;
-		if (!request) return;
 		pending = undefined;
-		// A user interrupt must not silently start a new turn after compaction.
 		if (event.outcome !== "completed") return;
-		startCompaction(pi, ctx, request);
+		if (request) {
+			startCompaction(pi, ctx, request);
+			return;
+		}
+
+		// Warn the model once per high-usage episode, so it can write a note
+		// before Pi's own automatic compaction runs without one.
+		const usage: Usage | undefined = ctx.getContextUsage?.();
+		const percent = usage?.percent;
+		if (typeof percent === "number" && percent < AUTO_NOTIFY_CLEAR_PERCENT) usageAlerted = false;
+		if (!shouldAlertUsage(usage, usageAlerted)) return;
+		usageAlerted = true;
+		pi.sendMessage(
+			{
+				customType: CUSTOM_TYPE,
+				content: buildUsageAlert(usage as Usage),
+				display: true,
+				details: { id: "usage-alert", status: "alert", usage },
+			},
+			{ triggerTurn: true },
+		);
 	});
 }
 

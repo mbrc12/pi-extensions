@@ -92,6 +92,16 @@ Shows a small recap widget after 30 seconds without user input, then hides it as
 
 Adds a `self_compact` tool that lets the model compact the context at a natural boundary it chooses. The model passes a note to its future self; Pi compacts at the end of that turn using its normal summarization, then delivers the note as the first message of the new context. Because the summary can drop details, the note is the model's only carry-over, so it should hold the goal, decisions, and next steps. The full history stays stored and searchable with the `context_recall` tool. A user interrupt during the turn or the compaction cancels the note, so interrupted work never silently starts a new turn. If a resumed session's transcript predates the extension, the tool re-activates itself on the next prompt so older sessions gain it too.
 
+Two extras keep the model informed about its budget:
+
+- `status: true` reports the current context usage (for example `92% of 200k tokens (184k used)`) and whether a compaction is already queued. It schedules nothing, so the model can check the room left before it decides.
+- When a turn ends with usage at or above 90% and no compaction queued, the extension sends the model an alert with a turn trigger, so the model can write a note before Pi's own silent automatic compaction drops details. On a 200k-token window Pi's own threshold is about 91.8%, so the alert lands just before it. The alert fires once per high-usage episode and re-arms only after usage falls below 80%, which prevents a notification loop.
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `AUTO_NOTIFY_PERCENT` | 90 | Usage that triggers the alert |
+| `AUTO_NOTIFY_CLEAR_PERCENT` | 80 | Usage must fall below this before the alert can fire again |
+
 ### `permissions`
 
 Intercepts tool calls and classifies them before execution. Emits `prompt_wait` before approval dialogs. Three modes:
