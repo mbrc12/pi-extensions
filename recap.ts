@@ -1,5 +1,5 @@
 import { CustomEditor, getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { completeWithModelFallback } from "./shared/model-config.ts";
 
 const WIDGET_ID = "recap";
@@ -34,13 +34,31 @@ function oneParagraphRecap(text: string, fallback: string): string {
 	return flattenNewlines(stripRecapPrefix(text)) || fallback;
 }
 
+/**
+ * Markdown theme for the recap. The widget styles the whole line italic itself, so
+ * the model's own bold and strikethrough must not punch through it: they render as
+ * plain text and inherit the italic default. Emphasis already matches the widget's
+ * styling, so it keeps the theme's own rendering.
+ */
+function recapMarkdownTheme(): MarkdownTheme {
+	const base = getMarkdownTheme();
+	return { ...base, bold: (text: string) => text, strikethrough: (text: string) => text };
+}
+
 function renderRecap(recap: string, theme: any): Container {
 	const container = new Container();
 
 	container.addChild(new Text(theme.fg("accent", "Recap:"), 0, 0));
 	// Use Pi's Markdown component so paths, commands, symbols, and other inline
-	// Markdown in the generated recap render the same way as assistant output.
-	container.addChild(new Markdown(`*${recap}*`, 0, 0, getMarkdownTheme()));
+	// Markdown in the generated recap render the same way as assistant output. The
+	// italic default style keeps the column italic whatever the model emitted.
+	container.addChild(new Markdown(
+		recap,
+		0,
+		0,
+		recapMarkdownTheme(),
+		{ italic: true },
+	));
 	return container;
 }
 
@@ -113,6 +131,7 @@ async function generateRecap(ctx: any): Promise<string> {
 		"Incomplete sentences, fragments, and telegraphic style are fine; complete sentences are not required.",
 		"Include important files, decisions, or results when they provide needed context; omit routine commands and implementation detail.",
 		"Preserve Markdown formatting for file paths, symbols, commands, and names.",
+		"Do not add emphasis markers such as ** or *; the widget styles the whole line for you.",
 		"Do not use Now:/Next: labels, and flatten any internal newlines into spaces.",
 		"Ignore tool outputs, todo bookkeeping, meta instructions, and final status chatter.",
 		"Focus on the main user/assistant work thread.",
