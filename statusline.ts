@@ -2,8 +2,8 @@
  * Custom Statusline Extension
  *
  * Replaces the default footer with a clean, three-line statusline:
- *   Line 1: cwd (git branch) · ctx · generation rate · provider limits · subagent time
- *   Line 2: provider/model think:level · cost
+ *   Line 1: cwd (git branch) · ctx · provider limits · subagent time
+ *   Line 2: provider/model think:level · cost · generation rate
  *   Line 3: extension statuses such as permissions, todo, and thinking-tail.
  *
  * Toggle with /statusline
@@ -695,7 +695,8 @@ export default function (pi: ExtensionAPI) {
             const rateText = emaTokPerSec.toFixed(emaTokPerSec >= 100 ? 0 : 1);
             rateSeg =
               theme.fg(streamStartedAt !== undefined ? "accent" : "muted", rateText) +
-              theme.fg("dim", "/s");
+              " " +
+              theme.fg("dim", "tok/s");
           }
 
           let subagentTimeSeg = "";
@@ -739,13 +740,13 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: cwd · ctx · generation rate · provider limits · current/last subagent time
-          const line1 = [dirSeg, ctxSeg, rateSeg, limitsSeg, subagentTimeSeg]
+          // Line 1: cwd · ctx · provider limits · current/last subagent time
+          const line1 = [dirSeg, ctxSeg, limitsSeg, subagentTimeSeg]
             .filter(Boolean)
             .join(sep);
 
-          // Line 2: provider/model spec · cost
-          const line2 = [modelSeg, costSeg]
+          // Line 2: provider/model spec · cost · generation rate
+          const line2 = [modelSeg, costSeg, rateSeg]
             .filter(Boolean)
             .join(sep);
 

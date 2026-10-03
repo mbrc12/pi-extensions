@@ -277,7 +277,7 @@ function durationColorToken(theme: CompactTheme): ThemeColor {
 
 function formatCompactUsage(snapshot: ProviderUsageSnapshot, theme: CompactTheme, now = Date.now()): string {
   const durationToken = durationColorToken(theme);
-  const separator = theme.fg(durationToken, "·");
+  const separator = theme.fg(durationToken, " · ");
   return snapshot.windows
     .map((window) => {
       const remaining = Math.max(0, Math.round(100 - window.usedPercent));
