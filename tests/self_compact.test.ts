@@ -1,7 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 // Pi resolves these packages when it loads extensions. Mock them for a standalone Bun test.
 mock.module("@earendil-works/pi-coding-agent", () => ({}));
@@ -26,33 +23,23 @@ const {
 	buildStatusReport,
 	buildUsageAlert,
 	clearPercentFor,
-	CONFIG_PATH_ENV,
 	default: register,
 	DEFAULT_NOTIFY_PERCENT,
-	describeConfig,
+	describeThreshold,
 	describeUsage,
 	formatTokens,
+	getNotifyPercent,
 	isCancellation,
-	parseConfig,
 	parseThresholdArgument,
-	readConfig,
-	serializeConfig,
+	setNotifyPercent,
 	shouldAlertUsage,
-	writeConfig,
 } = await import("../self_compact.ts");
-
-// Keep every read and write off the real preference file.
-const scratch = mkdtempSync(join(tmpdir(), "self-compact-test-"));
-let configCounter = 0;
-function freshConfigPath(): string {
-	return join(scratch, `config-${++configCounter}.json`);
-}
 
 function harness(options: {
 	active?: string[];
 	registered?: string[];
 	usage?: { tokens: number | null; contextWindow: number; percent: number | null };
-	configPath?: string;
+	notifyPercent?: number | null;
 } = {}) {
 	const tools = new Map<string, any>();
 	const renderers = new Map<string, any>();
@@ -64,8 +51,8 @@ function harness(options: {
 	let active = options.active ?? [];
 	let usage = options.usage;
 	const registered = options.registered ?? ["self_compact"];
-	const configPath = options.configPath ?? freshConfigPath();
-	process.env[CONFIG_PATH_ENV] = configPath;
+	// The threshold lives in module state, so each harness starts from the default.
+	setNotifyPercent(options.notifyPercent === undefined ? DEFAULT_NOTIFY_PERCENT : options.notifyPercent);
 	const pi: any = {
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		registerMessageRenderer: (name: string, render: any) => renderers.set(name, render),
@@ -93,8 +80,6 @@ function harness(options: {
 		compactions,
 		notifications,
 		ctx,
-		configPath,
-		configure: (value: unknown) => writeFileSync(configPath, JSON.stringify(value)),
 		setUsage: (value: typeof usage) => {
 			usage = value;
 		},
@@ -349,61 +334,47 @@ describe("self_compact usage helpers", () => {
 });
 
 describe("self_compact threshold setting", () => {
-	test("parses the preference file with a 90% default", () => {
-		expect(parseConfig(undefined).notifyPercent).toBe(90);
-		expect(parseConfig("nonsense").notifyPercent).toBe(90);
-		expect(parseConfig({}).notifyPercent).toBe(90);
-		expect(parseConfig({ notifyPercent: "85" }).notifyPercent).toBe(85);
-		expect(parseConfig({ notifyPercent: 85.4 }).notifyPercent).toBe(85);
-		expect(parseConfig({ notifyPercent: 500 }).notifyPercent).toBe(100);
-		expect(parseConfig({ notifyPercent: -3 }).notifyPercent).toBe(1);
-		expect(parseConfig({ notifyPercent: null }).notifyPercent).toBeNull();
-		expect(parseConfig({ notifyPercent: "off" }).notifyPercent).toBeNull();
-	});
-
 	test("parses the command argument", () => {
 		expect(parseThresholdArgument("")).toEqual({ kind: "show" });
 		expect(parseThresholdArgument(" 85 ")).toEqual({ kind: "set", percent: 85 });
 		expect(parseThresholdArgument("85.6")).toEqual({ kind: "set", percent: 86 });
 		expect(parseThresholdArgument("off")).toEqual({ kind: "off" });
-		expect(parseThresholdArgument("off")).toEqual({ kind: "off" });
+		expect(parseThresholdArgument("none")).toEqual({ kind: "off" });
 		expect(parseThresholdArgument("on")).toEqual({ kind: "default" });
 		expect(parseThresholdArgument("abc").kind).toBe("invalid");
 		expect(parseThresholdArgument("0").kind).toBe("invalid");
 		expect(parseThresholdArgument("101").kind).toBe("invalid");
 	});
 
-	test("round-trips the preference file", () => {
-		const filePath = freshConfigPath();
-		expect(readConfig(filePath)).toEqual({ notifyPercent: 90 });
-		writeConfig(filePath, { notifyPercent: 88 });
-		expect(readConfig(filePath)).toEqual({ notifyPercent: 88 });
-		expect(readFileSync(filePath, "utf8")).toBe(serializeConfig({ notifyPercent: 88 }));
-		writeConfig(filePath, { notifyPercent: null });
-		expect(readConfig(filePath)).toEqual({ notifyPercent: null });
-	});
-
-	test("writes the threshold through the command", () => {
+	test("keeps the threshold in memory through the command", () => {
 		const h = harness();
 		const command = h.commands.get("self_compact");
+		expect(getNotifyPercent()).toBe(90);
+
 		command.handler("", h.ctx);
 		expect(h.notifications.at(-1).message).toContain("at 90% usage");
 
 		command.handler("85", h.ctx);
 		expect(h.notifications.at(-1).kind).toBe("info");
 		expect(h.notifications.at(-1).message).toContain("at 85% usage");
-		expect(existsSync(h.configPath)).toBe(true);
-		expect(JSON.parse(readFileSync(h.configPath, "utf8"))).toEqual({ notifyPercent: 85 });
+		expect(getNotifyPercent()).toBe(85);
 
 		command.handler("off", h.ctx);
 		expect(h.notifications.at(-1).message).toContain("off");
-		expect(JSON.parse(readFileSync(h.configPath, "utf8"))).toEqual({ notifyPercent: null });
+		expect(getNotifyPercent()).toBeNull();
 
 		command.handler("on", h.ctx);
-		expect(JSON.parse(readFileSync(h.configPath, "utf8"))).toEqual({ notifyPercent: 90 });
+		expect(getNotifyPercent()).toBe(90);
 	});
 
-	test("rejects a bad argument without touching the file", () => {
+	test("keeps the threshold across a new session in the same process", () => {
+		const h = harness();
+		h.commands.get("self_compact").handler("85", h.ctx);
+		h.handlers.get("session_start")({}, h.ctx);
+		expect(getNotifyPercent()).toBe(85);
+	});
+
+	test("rejects a bad argument without changing the value", () => {
 		const h = harness();
 		const command = h.commands.get("self_compact");
 		command.handler("abc", h.ctx);
@@ -411,33 +382,20 @@ describe("self_compact threshold setting", () => {
 		expect(h.notifications.at(-1).message).toContain("not a percentage");
 		command.handler("0", h.ctx);
 		expect(h.notifications.at(-1).message).toContain("1 to 100");
-		expect(existsSync(h.configPath)).toBe(false);
-	});
-
-	test("reports a failed write instead of crashing", () => {
-		// A directory where the file should be makes the write fail.
-		const dirPath = join(scratch, `a-directory-${++configCounter}`);
-		mkdirSync(dirPath, { recursive: true });
-		const h = harness({ configPath: dirPath });
-		h.commands.get("self_compact").handler("85", h.ctx);
-		expect(h.notifications.at(-1).kind).toBe("error");
-		expect(h.notifications.at(-1).message).toContain("Could not save");
+		expect(getNotifyPercent()).toBe(90);
 	});
 
 	test("uses the configured threshold when it decides to alert", () => {
-		const late = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 } });
-		late.configure({ notifyPercent: 95 });
+		const late = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 }, notifyPercent: 95 });
 		late.handlers.get("turn_end")({ outcome: "completed" }, late.ctx);
 		expect(late.sent).toHaveLength(0);
 
-		const early = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 } });
-		early.configure({ notifyPercent: 85 });
+		const early = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 }, notifyPercent: 85 });
 		early.handlers.get("turn_end")({ outcome: "completed" }, early.ctx);
 		expect(early.sent).toHaveLength(1);
 		expect(early.sent[0].message.content).toContain("at 85%");
 
-		const disabled = harness({ usage: { tokens: 190_000, contextWindow: 200_000, percent: 99 } });
-		disabled.configure({ notifyPercent: null });
+		const disabled = harness({ usage: { tokens: 190_000, contextWindow: 200_000, percent: 99 }, notifyPercent: null });
 		disabled.handlers.get("turn_end")({ outcome: "completed" }, disabled.ctx);
 		expect(disabled.sent).toHaveLength(0);
 	});
@@ -451,19 +409,8 @@ describe("self_compact threshold setting", () => {
 		expect(h.sent).toHaveLength(2);
 	});
 
-	test("re-reads the preference file on a new session", () => {
-		const h = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 } });
-		h.configure({ notifyPercent: 95 });
-		h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
-		expect(h.sent).toHaveLength(0);
-		h.configure({ notifyPercent: 85 });
-		h.handlers.get("session_start")({}, h.ctx);
-		h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
-		expect(h.sent).toHaveLength(1);
-	});
-
 	test("describes the setting for the user", () => {
-		expect(describeConfig({ notifyPercent: 90 })).toContain("at 90% usage");
-		expect(describeConfig({ notifyPercent: null })).toContain("off");
+		expect(describeThreshold(90)).toContain("at 90% usage");
+		expect(describeThreshold(null)).toContain("off");
 	});
 });

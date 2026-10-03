@@ -99,7 +99,7 @@ Two extras keep the model informed about its budget:
 
 ### Setting the threshold
 
-The alert threshold defaults to 90%.
+The alert threshold defaults to 90% and is held in memory for the running Pi process.
 
 | Command | Effect |
 |---|---|
@@ -108,15 +108,7 @@ The alert threshold defaults to 90%.
 | `/self_compact off` | Disable the alert |
 | `/self_compact on` | Restore the 90% default |
 
-The choice is stored in `~/.pi/agent/extensions/self-compact.json`:
-
-```json
-{
-  "notifyPercent": 90
-}
-```
-
-Set `notifyPercent` to `null` to disable the alert, or edit the file directly; a new session reads it again. The environment variable `PI_SELF_COMPACT_CONFIG` overrides the file path, which is how the tests stay off your real settings.
+The value survives new sessions in the same Pi process and reverts to 90% when Pi restarts or the extensions reload. There is no settings file, because Pi gives extensions no way to write settings and a single preference does not justify a file of its own. Edit the `notifyPercent` variable in `self_compact.ts` to change the built-in default.
 
 ### `permissions`
 
