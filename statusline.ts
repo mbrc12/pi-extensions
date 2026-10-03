@@ -2,8 +2,8 @@
  * Custom Statusline Extension
  *
  * Replaces the default footer with a clean, three-line statusline:
- *   Line 1: cwd (git branch) · ctx · cumulative token I/O · tok/s · subagent time
- *   Line 2: provider/model think:level · cost · provider limits
+ *   Line 1: cwd (git branch) · ctx · tok/s · provider limits · subagent time
+ *   Line 2: provider/model think:level · cost
  *   Line 3: extension statuses such as permissions, todo, and thinking-tail.
  *
  * Toggle with /statusline
@@ -610,9 +610,7 @@ export default function (pi: ExtensionAPI) {
         render(width: number): string[] {
           if (rupeesEnabled) refreshInrRate(() => tui.requestRender());
 
-          // ----- cumulative token and cost stats -----
-          let totalInput = 0;
-          let totalOutput = 0;
+          // ----- cumulative cost stats -----
           let baseCost = 0;
           let estimatedModelCost = 0;
           let subagentCost = 0;
@@ -626,8 +624,6 @@ export default function (pi: ExtensionAPI) {
             if (entry.type !== "message") continue;
             if (entry.message.role === "assistant") {
               const m = entry.message as AssistantMessage;
-              totalInput += finiteNumber(m.usage.input);
-              totalOutput += finiteNumber(m.usage.output);
               const recordedCost = finiteNumber(m.usage.cost?.total);
               baseCost += recordedCost;
               // Only estimate a price when the response did not record one;
@@ -694,12 +690,6 @@ export default function (pi: ExtensionAPI) {
 
           const ctxSeg = theme.fg("dim", "ctx") + " " + ctxColored;
 
-          let tokSeg = "";
-          if (totalInput > 0 || totalOutput > 0) {
-            const io = `↑${fmt(totalInput)} ↓${fmt(totalOutput)}`;
-            tokSeg = theme.fg("dim", "tok") + " " + theme.fg("muted", io);
-          }
-
           let rateSeg = "";
           if (emaTokPerSec !== undefined && emaTokPerSec > 0) {
             const rateText = emaTokPerSec.toFixed(emaTokPerSec >= 100 ? 0 : 1);
@@ -750,13 +740,13 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
-          // Line 1: cwd · ctx · cumulative token I/O · tok/s · current/last subagent time
-          const line1 = [dirSeg, ctxSeg, tokSeg, rateSeg, subagentTimeSeg]
+          // Line 1: cwd · ctx · tok/s · provider limits · current/last subagent time
+          const line1 = [dirSeg, ctxSeg, rateSeg, limitsSeg, subagentTimeSeg]
             .filter(Boolean)
             .join(sep);
 
-          // Line 2: provider/model spec · cost · provider limits
-          const line2 = [modelSeg, costSeg, limitsSeg]
+          // Line 2: provider/model spec · cost
+          const line2 = [modelSeg, costSeg]
             .filter(Boolean)
             .join(sep);
 

@@ -1,4 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { colorToOklch, type Color } from "@earendil-works/pi-tui";
 
 const STATUS_KEY = "provider-status";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -242,21 +243,56 @@ export function formatProviderUsage(snapshot: ProviderUsageSnapshot, now = Date.
   return [snapshot.plan, ...windows].filter(Boolean).join(" · ");
 }
 
-function formatCompactUsage(snapshot: ProviderUsageSnapshot, now = Date.now()): string {
+/** Neutral tokens the statusline paints with; the darkest of them marks the durations. */
+const STATUSLINE_NEUTRAL_TOKENS: readonly ThemeColor[] = ["text", "dim", "muted", "borderMuted"];
+
+/** Theme surface used for the compact status text; kept structural so tests can pass a stub. */
+type CompactTheme = {
+  fg(color: ThemeColor, text: string): string;
+  colors?: Partial<Record<ThemeColor, Color>>;
+};
+
+/**
+ * Pick the darkest neutral the statusline uses, measured as Oklch lightness. On a
+ * light theme that is the body ink; on a dark theme it is the faint token, so the
+ * durations stay readable while the percentages keep the usage colours.
+ */
+function durationColorToken(theme: CompactTheme): ThemeColor {
+  const colors = theme.colors;
+  if (!colors) return "dim";
+
+  let darkest: ThemeColor = "dim";
+  let lowest = Number.POSITIVE_INFINITY;
+  for (const token of STATUSLINE_NEUTRAL_TOKENS) {
+    const color = colors[token];
+    if (!color) continue;
+    const lightness = colorToOklch(color).l;
+    if (Number.isFinite(lightness) && lightness < lowest) {
+      lowest = lightness;
+      darkest = token;
+    }
+  }
+  return darkest;
+}
+
+function formatCompactUsage(snapshot: ProviderUsageSnapshot, theme: CompactTheme, now = Date.now()): string {
+  const durationToken = durationColorToken(theme);
+  const separator = theme.fg(durationToken, "·");
   return snapshot.windows
     .map((window) => {
       const remaining = Math.max(0, Math.round(100 - window.usedPercent));
       const reset = window.resetAt === undefined ? "" : `/${formatDuration(window.resetAt, now)}`;
-      return `${window.label} ${remaining}%${reset}`;
+      // Percent first, then time to reset, then the window label. Only the
+      // percentage carries a usage colour; the rest stays neutral.
+      const percent = theme.fg(usageColorForRemaining(remaining), `${remaining}%`);
+      return percent + theme.fg(durationToken, `${reset}/${window.label}`);
     })
-    .join(" · ");
+    .join(separator);
 }
 
-function usageColor(snapshot: ProviderUsageSnapshot): "success" | "warning" | "error" {
-  const remaining = snapshot.windows.map((window) => 100 - window.usedPercent);
-  const lowest = remaining.length ? Math.min(...remaining) : 100;
-  if (lowest <= 10) return "error";
-  if (lowest <= 30) return "warning";
+function usageColorForRemaining(remaining: number): "success" | "warning" | "error" {
+  if (remaining <= 10) return "error";
+  if (remaining <= 30) return "warning";
   return "success";
 }
 
@@ -290,7 +326,7 @@ export default function (pi: ExtensionAPI) {
     const snapshot = snapshots.get(currentProvider);
     if (!snapshot) return;
 
-    const details = ctx.ui.theme.fg(usageColor(snapshot), formatCompactUsage(snapshot));
+    const details = formatCompactUsage(snapshot, ctx.ui.theme);
     ctx.ui.setStatus(STATUS_KEY, details);
   }
 

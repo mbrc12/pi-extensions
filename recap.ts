@@ -4,8 +4,6 @@ import { completeWithModelFallback } from "./shared/model-config.ts";
 
 const WIDGET_ID = "recap";
 const IDLE_MS = 30_000;
-// Leave room for the objective and completed work, not only the latest action.
-const MAX_RECAP_LINE = 240;
 const RECAP_CONTEXT_MESSAGES = 24;
 
 function textFromContent(content: unknown): string {
@@ -27,64 +25,34 @@ function flattenNewlines(text: string): string {
 		.trim();
 }
 
-function conciseLine(text: string, max = Number.POSITIVE_INFINITY): string {
-	const flattened = flattenNewlines(text);
-	if (!flattened) return "";
-	return Number.isFinite(max) && flattened.length > max
-		? `${flattened.slice(0, max - 1).trimEnd()}…`
-		: flattened;
-}
-
 function stripRecapPrefix(text: string): string {
 	return text.replace(/^(?:now|next)\s*:\s*/i, "").trim();
 }
 
-function twoLineRecap(now: string, next: string, maxLineLength = MAX_RECAP_LINE): string {
-	return `Now: ${conciseLine(stripRecapPrefix(now), maxLineLength) || "No active task yet."}\nNext: ${conciseLine(stripRecapPrefix(next), maxLineLength) || "Wait for the next user request."}`;
+function oneParagraphRecap(text: string, fallback: string): string {
+	// Never truncate: a clipped recap loses the part that says what comes next.
+	return flattenNewlines(stripRecapPrefix(text)) || fallback;
 }
 
 function renderRecap(recap: string, theme: any): Container {
-	const [nowLine, nextLine] = recap.split("\n").slice(0, 2);
-	const nowBody = nowLine ? nowLine.replace(/^Now:\s*/, "") : "";
-	const nextBody = nextLine ? nextLine.replace(/^Next:\s*/, "") : "";
 	const container = new Container();
 
 	container.addChild(new Text(theme.fg("accent", "Recap:"), 0, 0));
 	// Use Pi's Markdown component so paths, commands, symbols, and other inline
 	// Markdown in the generated recap render the same way as assistant output.
-	container.addChild(new Markdown(
-		`**Now:** ${nowBody}\n**Next:** ${nextBody}`,
-		0,
-		0,
-		getMarkdownTheme(),
-	));
+	container.addChild(new Markdown(`*${recap}*`, 0, 0, getMarkdownTheme()));
 	return container;
 }
 
 function normalizeRecap(text: string, fallback: string): string {
-	const rawLines = text
+	// Tolerate any Now/Next labels the model returns: fold them into one paragraph.
+	const body = text
 		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter(Boolean);
-	if (rawLines.length === 0) return fallback;
+		.map((line) => stripRecapPrefix(line.trim()))
+		.filter(Boolean)
+		.join(" ");
 
-	const nowIndex = rawLines.findIndex((line) => /^now\s*:/i.test(line));
-	const nextIndex = rawLines.findIndex((line) => /^next\s*:/i.test(line));
-	if (nowIndex !== -1 && nextIndex !== -1) {
-		const now = rawLines[nowIndex];
-		const extraAfterNext = rawLines
-			.slice(nextIndex + 1)
-			.filter((line) => !/^now\s*:/i.test(line))
-			.join(" ");
-		const next = [rawLines[nextIndex], extraAfterNext].filter(Boolean).join(" ");
-		return twoLineRecap(now, next);
-	}
-
-	if (rawLines.length >= 2) {
-		return twoLineRecap(rawLines[0], rawLines.slice(1).join(" "));
-	}
-
-	return twoLineRecap(rawLines[0], "Continue from there.");
+	return oneParagraphRecap(body, fallback);
 }
 
 function isHousekeepingUser(text: string): boolean {
@@ -129,8 +97,8 @@ function buildConversationText(ctx: any): string {
 function fallbackRecap(ctx: any): string {
 	const conversation = buildConversationText(ctx);
 	const lastUser = conversation.split("\n\n").reverse().find((line) => line.startsWith("User:"));
-	if (!lastUser) return twoLineRecap("No active task yet.", "Wait for the next user request.", MAX_RECAP_LINE);
-	return twoLineRecap(`Working on ${lastUser.replace(/^User:\s*/, "")}.`, "Continue from there.", MAX_RECAP_LINE);
+	if (!lastUser) return oneParagraphRecap("No active task yet.", "No active task yet.");
+	return oneParagraphRecap(`Working on ${lastUser.replace(/^User:\s*/, "")}.`, "Continue from there.");
 }
 
 async function generateRecap(ctx: any): Promise<string> {
@@ -138,15 +106,14 @@ async function generateRecap(ctx: any): Promise<string> {
 	if (!conversation.trim()) return fallbackRecap(ctx);
 
 	const prompt = [
-		"Write a concise but self-contained idle recap for a coding-agent terminal UI.",
-		"Return exactly two lines and nothing else:",
-		"Now: <the task goal, meaningful work completed, and current state>",
-		"Next: <the immediate next action>",
-		"Make Now useful to a person returning after a break: state the broader objective first, then the key completed result or current blocker. Do not describe only the most recent action.",
+		"Write a short idle recap for a coding-agent terminal UI.",
+		"Return only the recap text, nothing else.",
+		"Give the broader objective, the key completed result or current blocker, and what happens next, in that order.",
+		"Write 1.5 to 2.5 terminal lines: about 120 to 200 characters, one paragraph.",
+		"Incomplete sentences, fragments, and telegraphic style are fine; complete sentences are not required.",
 		"Include important files, decisions, or results when they provide needed context; omit routine commands and implementation detail.",
-		"Keep each line to one readable sentence, at most 240 characters.",
 		"Preserve Markdown formatting for file paths, symbols, commands, and names.",
-		"Flatten any internal newlines in the Now/Next content into spaces.",
+		"Do not use Now:/Next: labels, and flatten any internal newlines into spaces.",
 		"Ignore tool outputs, todo bookkeeping, meta instructions, and final status chatter.",
 		"Focus on the main user/assistant work thread.",
 		"Do not mention that you are summarizing.",
