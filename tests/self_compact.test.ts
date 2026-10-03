@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Pi resolves these packages when it loads extensions. Mock them for a standalone Bun test.
 mock.module("@earendil-works/pi-coding-agent", () => ({}));
@@ -22,26 +25,51 @@ const {
 	buildNote,
 	buildStatusReport,
 	buildUsageAlert,
+	clearPercentFor,
+	CONFIG_PATH_ENV,
 	default: register,
+	DEFAULT_NOTIFY_PERCENT,
+	describeConfig,
 	describeUsage,
 	formatTokens,
 	isCancellation,
+	parseConfig,
+	parseThresholdArgument,
+	readConfig,
+	serializeConfig,
 	shouldAlertUsage,
-	AUTO_NOTIFY_PERCENT,
+	writeConfig,
 } = await import("../self_compact.ts");
 
-function harness(options: { active?: string[]; registered?: string[]; usage?: { tokens: number | null; contextWindow: number; percent: number | null } } = {}) {
+// Keep every read and write off the real preference file.
+const scratch = mkdtempSync(join(tmpdir(), "self-compact-test-"));
+let configCounter = 0;
+function freshConfigPath(): string {
+	return join(scratch, `config-${++configCounter}.json`);
+}
+
+function harness(options: {
+	active?: string[];
+	registered?: string[];
+	usage?: { tokens: number | null; contextWindow: number; percent: number | null };
+	configPath?: string;
+} = {}) {
 	const tools = new Map<string, any>();
 	const renderers = new Map<string, any>();
 	const handlers = new Map<string, any>();
+	const commands = new Map<string, any>();
 	const sent: any[] = [];
 	const compactions: any[] = [];
+	const notifications: any[] = [];
 	let active = options.active ?? [];
 	let usage = options.usage;
 	const registered = options.registered ?? ["self_compact"];
+	const configPath = options.configPath ?? freshConfigPath();
+	process.env[CONFIG_PATH_ENV] = configPath;
 	const pi: any = {
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		registerMessageRenderer: (name: string, render: any) => renderers.set(name, render),
+		registerCommand: (name: string, command: any) => commands.set(name, command),
 		on: (event: string, handler: any) => handlers.set(event, handler),
 		sendMessage: (message: any, options: any) => sent.push({ message, options }),
 		getActiveTools: () => [...active],
@@ -50,15 +78,23 @@ function harness(options: { active?: string[]; registered?: string[]; usage?: { 
 			active = [...names];
 		},
 	};
-	const ctx: any = { compact: (options: any) => compactions.push(options), getContextUsage: () => usage };
+	const ctx: any = {
+		compact: (options: any) => compactions.push(options),
+		getContextUsage: () => usage,
+		ui: { notify: (message: string, kind: string) => notifications.push({ message, kind }) },
+	};
 	register(pi);
 	return {
 		tools,
 		renderers,
 		handlers,
+		commands,
 		sent,
 		compactions,
+		notifications,
 		ctx,
+		configPath,
+		configure: (value: unknown) => writeFileSync(configPath, JSON.stringify(value)),
 		setUsage: (value: typeof usage) => {
 			usage = value;
 		},
@@ -67,9 +103,10 @@ function harness(options: { active?: string[]; registered?: string[]; usage?: { 
 }
 
 describe("self_compact tool", () => {
-	test("registers one tool and a message renderer", () => {
+	test("registers one tool, one command, and a message renderer", () => {
 		const h = harness();
 		expect([...h.tools.keys()]).toEqual(["self_compact"]);
+		expect([...h.commands.keys()]).toEqual(["self_compact"]);
 		expect([...h.renderers.keys()]).toEqual(["self_compact"]);
 		const box = h.renderers.get("self_compact")({ content: "keep going" }, { outputPad: 0 }, { bold: (t: string) => t, fg: (_c: string, t: string) => t, bg: (_c: string, t: string) => t });
 		expect(box.children[0].text).toContain("self_compact note");
@@ -278,8 +315,8 @@ describe("self_compact usage helpers", () => {
 	});
 
 	test("alerts only at or above the threshold and only once per episode", () => {
-		expect(AUTO_NOTIFY_PERCENT).toBe(90);
-		const high = { tokens: 190_000, contextWindow: 200_000, percent: AUTO_NOTIFY_PERCENT };
+		expect(DEFAULT_NOTIFY_PERCENT).toBe(90);
+		const high = { tokens: 190_000, contextWindow: 200_000, percent: DEFAULT_NOTIFY_PERCENT };
 		const low = { tokens: 100_000, contextWindow: 200_000, percent: 50 };
 		expect(shouldAlertUsage(high, false)).toBe(true);
 		expect(shouldAlertUsage(high, true)).toBe(false);
@@ -287,11 +324,146 @@ describe("self_compact usage helpers", () => {
 		expect(shouldAlertUsage(undefined, false)).toBe(false);
 	});
 
+	test("honours a configured threshold, including off", () => {
+		const at92 = { tokens: 184_000, contextWindow: 200_000, percent: 92 };
+		expect(shouldAlertUsage(at92, false, 95)).toBe(false);
+		expect(shouldAlertUsage(at92, false, 85)).toBe(true);
+		expect(shouldAlertUsage(at92, false, null)).toBe(false);
+		expect(clearPercentFor(90)).toBe(80);
+		expect(clearPercentFor(55)).toBe(45);
+	});
+
 	test("builds a status report and an alert body", () => {
 		const usage = { tokens: 184_000, contextWindow: 200_000, percent: 92 };
 		expect(buildStatusReport(usage, false)).toContain("Context usage: 92% of 200k tokens (184k used)");
 		expect(buildStatusReport(usage, true)).toContain("already scheduled");
-		expect(buildUsageAlert(usage)).toContain("nearly full");
-		expect(buildUsageAlert(usage)).toContain("status: true");
+		expect(buildStatusReport(usage, false)).toContain("The automatic alert fires at 90% usage.");
+		expect(buildStatusReport(usage, false)).toContain("nearly full");
+		expect(buildStatusReport(usage, false, 95)).toContain("fires at 95% usage");
+		expect(buildStatusReport(usage, false, 95)).not.toContain("nearly full");
+		expect(buildStatusReport(usage, false, null)).toContain("alert is off");
+		expect(buildUsageAlert(usage, 90)).toContain("nearly full");
+		expect(buildUsageAlert(usage, 90)).toContain("at 90%");
+		expect(buildUsageAlert(usage, 90)).toContain("status: true");
+	});
+});
+
+describe("self_compact threshold setting", () => {
+	test("parses the preference file with a 90% default", () => {
+		expect(parseConfig(undefined).notifyPercent).toBe(90);
+		expect(parseConfig("nonsense").notifyPercent).toBe(90);
+		expect(parseConfig({}).notifyPercent).toBe(90);
+		expect(parseConfig({ notifyPercent: "85" }).notifyPercent).toBe(85);
+		expect(parseConfig({ notifyPercent: 85.4 }).notifyPercent).toBe(85);
+		expect(parseConfig({ notifyPercent: 500 }).notifyPercent).toBe(100);
+		expect(parseConfig({ notifyPercent: -3 }).notifyPercent).toBe(1);
+		expect(parseConfig({ notifyPercent: null }).notifyPercent).toBeNull();
+		expect(parseConfig({ notifyPercent: "off" }).notifyPercent).toBeNull();
+	});
+
+	test("parses the command argument", () => {
+		expect(parseThresholdArgument("")).toEqual({ kind: "show" });
+		expect(parseThresholdArgument(" 85 ")).toEqual({ kind: "set", percent: 85 });
+		expect(parseThresholdArgument("85.6")).toEqual({ kind: "set", percent: 86 });
+		expect(parseThresholdArgument("off")).toEqual({ kind: "off" });
+		expect(parseThresholdArgument("off")).toEqual({ kind: "off" });
+		expect(parseThresholdArgument("on")).toEqual({ kind: "default" });
+		expect(parseThresholdArgument("abc").kind).toBe("invalid");
+		expect(parseThresholdArgument("0").kind).toBe("invalid");
+		expect(parseThresholdArgument("101").kind).toBe("invalid");
+	});
+
+	test("round-trips the preference file", () => {
+		const filePath = freshConfigPath();
+		expect(readConfig(filePath)).toEqual({ notifyPercent: 90 });
+		writeConfig(filePath, { notifyPercent: 88 });
+		expect(readConfig(filePath)).toEqual({ notifyPercent: 88 });
+		expect(readFileSync(filePath, "utf8")).toBe(serializeConfig({ notifyPercent: 88 }));
+		writeConfig(filePath, { notifyPercent: null });
+		expect(readConfig(filePath)).toEqual({ notifyPercent: null });
+	});
+
+	test("writes the threshold through the command", () => {
+		const h = harness();
+		const command = h.commands.get("self_compact");
+		command.handler("", h.ctx);
+		expect(h.notifications.at(-1).message).toContain("at 90% usage");
+
+		command.handler("85", h.ctx);
+		expect(h.notifications.at(-1).kind).toBe("info");
+		expect(h.notifications.at(-1).message).toContain("at 85% usage");
+		expect(existsSync(h.configPath)).toBe(true);
+		expect(JSON.parse(readFileSync(h.configPath, "utf8"))).toEqual({ notifyPercent: 85 });
+
+		command.handler("off", h.ctx);
+		expect(h.notifications.at(-1).message).toContain("off");
+		expect(JSON.parse(readFileSync(h.configPath, "utf8"))).toEqual({ notifyPercent: null });
+
+		command.handler("on", h.ctx);
+		expect(JSON.parse(readFileSync(h.configPath, "utf8"))).toEqual({ notifyPercent: 90 });
+	});
+
+	test("rejects a bad argument without touching the file", () => {
+		const h = harness();
+		const command = h.commands.get("self_compact");
+		command.handler("abc", h.ctx);
+		expect(h.notifications.at(-1).kind).toBe("warning");
+		expect(h.notifications.at(-1).message).toContain("not a percentage");
+		command.handler("0", h.ctx);
+		expect(h.notifications.at(-1).message).toContain("1 to 100");
+		expect(existsSync(h.configPath)).toBe(false);
+	});
+
+	test("reports a failed write instead of crashing", () => {
+		// A directory where the file should be makes the write fail.
+		const dirPath = join(scratch, `a-directory-${++configCounter}`);
+		mkdirSync(dirPath, { recursive: true });
+		const h = harness({ configPath: dirPath });
+		h.commands.get("self_compact").handler("85", h.ctx);
+		expect(h.notifications.at(-1).kind).toBe("error");
+		expect(h.notifications.at(-1).message).toContain("Could not save");
+	});
+
+	test("uses the configured threshold when it decides to alert", () => {
+		const late = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 } });
+		late.configure({ notifyPercent: 95 });
+		late.handlers.get("turn_end")({ outcome: "completed" }, late.ctx);
+		expect(late.sent).toHaveLength(0);
+
+		const early = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 } });
+		early.configure({ notifyPercent: 85 });
+		early.handlers.get("turn_end")({ outcome: "completed" }, early.ctx);
+		expect(early.sent).toHaveLength(1);
+		expect(early.sent[0].message.content).toContain("at 85%");
+
+		const disabled = harness({ usage: { tokens: 190_000, contextWindow: 200_000, percent: 99 } });
+		disabled.configure({ notifyPercent: null });
+		disabled.handlers.get("turn_end")({ outcome: "completed" }, disabled.ctx);
+		expect(disabled.sent).toHaveLength(0);
+	});
+
+	test("re-arms the alert when the threshold changes", () => {
+		const h = harness({ usage: { tokens: 190_000, contextWindow: 200_000, percent: 95 } });
+		h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
+		expect(h.sent).toHaveLength(1);
+		h.commands.get("self_compact").handler("85", h.ctx);
+		h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
+		expect(h.sent).toHaveLength(2);
+	});
+
+	test("re-reads the preference file on a new session", () => {
+		const h = harness({ usage: { tokens: 184_000, contextWindow: 200_000, percent: 92 } });
+		h.configure({ notifyPercent: 95 });
+		h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
+		expect(h.sent).toHaveLength(0);
+		h.configure({ notifyPercent: 85 });
+		h.handlers.get("session_start")({}, h.ctx);
+		h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
+		expect(h.sent).toHaveLength(1);
+	});
+
+	test("describes the setting for the user", () => {
+		expect(describeConfig({ notifyPercent: 90 })).toContain("at 90% usage");
+		expect(describeConfig({ notifyPercent: null })).toContain("off");
 	});
 });

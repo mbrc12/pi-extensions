@@ -13,24 +13,99 @@
  * Two extras keep the model informed:
  * - `status: true` on the tool reports the current context usage and schedules
  *   nothing, so the model can check the room it has left before it decides.
- * - After a turn, usage at or above {@link AUTO_NOTIFY_PERCENT} sends the model
- *   an alert with a turn trigger, so it can write a note instead of letting
- *   Pi's silent automatic compaction drop details.
+ * - After a turn, usage at or above the configured threshold (90% by default,
+ *   set with `/self_compact <percent>`) sends the model an alert with a turn
+ *   trigger, so it can write a note instead of letting Pi's silent automatic
+ *   compaction drop details.
  */
 
+import * as fs from "node:fs";
+import { homedir } from "node:os";
+import * as path from "node:path";
+import * as piPackage from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const TOOL_NAME = "self_compact";
+const COMMAND_NAME = "self_compact";
 const CUSTOM_TYPE = "self_compact";
 const MAX_NOTE_CHARS = 20_000;
 const MAX_INSTRUCTIONS_CHARS = 2_000;
 
-/** Context usage that triggers the automatic alert to the model. */
-export const AUTO_NOTIFY_PERCENT = 90;
-/** Usage must fall back below this before another alert is allowed. */
-export const AUTO_NOTIFY_CLEAR_PERCENT = 80;
+/** Alert threshold used when the user configures nothing. */
+export const DEFAULT_NOTIFY_PERCENT = 90;
+/** The alert re-arms this many percentage points below the threshold. */
+export const NOTIFY_HYSTERESIS = 10;
+/** Overrides the preference file path, which keeps tests off the real file. */
+export const CONFIG_PATH_ENV = "PI_SELF_COMPACT_CONFIG";
+
+export interface SelfCompactConfig {
+	/** Alert threshold as a percentage, or null to disable the alert. */
+	notifyPercent: number | null;
+}
+
+export const DEFAULT_CONFIG: SelfCompactConfig = { notifyPercent: DEFAULT_NOTIFY_PERCENT };
+
+/** Usage must fall below this before the alert can fire again. */
+export function clearPercentFor(notifyPercent: number): number {
+	return Math.max(0, notifyPercent - NOTIFY_HYSTERESIS);
+}
+
+/** Parse the preference file contents, falling back to the default on anything unusable. */
+export function parseConfig(value: unknown): SelfCompactConfig {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return { ...DEFAULT_CONFIG };
+	const raw = (value as { notifyPercent?: unknown }).notifyPercent;
+	if (raw === null || raw === "off" || raw === false) return { notifyPercent: null };
+	const percent = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+	if (typeof percent !== "number" || !Number.isFinite(percent)) return { ...DEFAULT_CONFIG };
+	return { notifyPercent: Math.min(100, Math.max(1, Math.round(percent))) };
+}
+
+/** Read the preference file. A missing or unreadable file means the default. */
+export function readConfig(filePath: string): SelfCompactConfig {
+	try {
+		return parseConfig(JSON.parse(fs.readFileSync(filePath, "utf8")));
+	} catch {
+		return { ...DEFAULT_CONFIG };
+	}
+}
+
+export function serializeConfig(config: SelfCompactConfig): string {
+	return `${JSON.stringify({ notifyPercent: config.notifyPercent }, null, 2)}\n`;
+}
+
+export function writeConfig(filePath: string, config: SelfCompactConfig): void {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, serializeConfig(config));
+}
+
+/** One-line description of a preference, used by the command's notifications. */
+export function describeConfig(config: SelfCompactConfig): string {
+	return config.notifyPercent === null
+		? "Context alert off. Turn it on with /self_compact on, or pick a percentage from 1 to 100."
+		: `Context alert at ${config.notifyPercent}% usage. Run /self_compact off to disable it.`;
+}
+
+export type ThresholdCommand =
+	| { kind: "show" }
+	| { kind: "off" }
+	| { kind: "default" }
+	| { kind: "set"; percent: number }
+	| { kind: "invalid"; reason: string };
+
+/** Parse a `/self_compact` argument. */
+export function parseThresholdArgument(argument: string): ThresholdCommand {
+	const text = argument.trim();
+	if (text === "") return { kind: "show" };
+	const lower = text.toLowerCase();
+	if (lower === "off" || lower === "none" || lower === "disable") return { kind: "off" };
+	if (lower === "on" || lower === "default" || lower === "reset") return { kind: "default" };
+	const percent = Number(text);
+	if (!Number.isFinite(percent)) return { kind: "invalid", reason: `\"${text}\" is not a percentage` };
+	if (percent < 1 || percent > 100) return { kind: "invalid", reason: "use a percentage from 1 to 100" };
+	return { kind: "set", percent: Math.round(percent) };
+}
 
 interface PendingRequest {
 	id: string;
@@ -105,45 +180,76 @@ export function describeUsage(usage: Usage | undefined): string {
 }
 
 /** Answer to a `status: true` call. It never compacts. */
-export function buildStatusReport(usage: Usage | undefined, scheduled: boolean): string {
+export function buildStatusReport(
+	usage: Usage | undefined,
+	scheduled: boolean,
+	notifyPercent: number | null = DEFAULT_NOTIFY_PERCENT,
+): string {
 	const lines = [`**Context usage: ${describeUsage(usage)}.**`, ""];
 	if (scheduled) {
 		lines.push("A compaction is already scheduled for the end of this turn.", "");
 	}
 	lines.push(
-		usage && usage.percent !== null && usage.percent >= AUTO_NOTIFY_PERCENT
+		notifyPercent === null
+			? "The automatic high-usage alert is off."
+			: `The automatic alert fires at ${notifyPercent}% usage.`,
+		"",
+	);
+	const nearlyFull = notifyPercent !== null && usage?.percent !== null && usage?.percent !== undefined && usage.percent >= notifyPercent;
+	lines.push(
+		nearlyFull
 			? "The context is nearly full. Compact at your next natural boundary, while still giving a note to your future self."
 			: "Give a `message` note to compact at the end of this turn, or keep working if there is room.",
 	);
 	return lines.join("\n");
 }
 
-/** Alert the model reads when usage crosses {@link AUTO_NOTIFY_PERCENT}. */
-export function buildUsageAlert(usage: Usage): string {
+/** Alert the model reads when usage crosses the configured threshold. */
+export function buildUsageAlert(usage: Usage, notifyPercent: number): string {
 	return [
 		`**Context is nearly full: ${describeUsage(usage)}.**`,
 		"",
-		"Once the context passes Pi's threshold, Pi compacts by itself before the next request. That automatic compaction has no note from you, so details you still need can be summarized away.",
+		`Once the context passes Pi's threshold, Pi compacts by itself before the next request. That automatic compaction has no note from you, so details you still need can be summarized away. The alert fires once per crossing, at ${notifyPercent}%.`,
 		"",
 		"If you are at a natural boundary, call self_compact now with a note holding the goal, decisions, and next steps. If you are mid-step, finish it and compact at the next boundary. Check the room left with `self_compact { status: true }`.",
 	].join("\n");
 }
 
 /** True when usage is high enough to alert, and no alert is outstanding. */
-export function shouldAlertUsage(usage: Usage | undefined, alreadyAlerted: boolean): boolean {
+export function shouldAlertUsage(
+	usage: Usage | undefined,
+	alreadyAlerted: boolean,
+	notifyPercent: number | null = DEFAULT_NOTIFY_PERCENT,
+): boolean {
 	if (alreadyAlerted) return false;
+	if (notifyPercent === null) return false;
 	if (!usage || usage.percent === null) return false;
-	return usage.percent >= AUTO_NOTIFY_PERCENT;
+	return usage.percent >= notifyPercent;
 }
 
 export default function (pi: ExtensionAPI) {
 	let pending: PendingRequest | undefined;
 	// Set while usage stays above the alert threshold, so one crossing alerts once.
 	let usageAlerted = false;
+	// Loaded once per session; the command keeps it in step with the file.
+	let config: SelfCompactConfig | undefined;
+
+	function configPath(): string {
+		// Read Pi's agent directory through the namespace so the extension still
+		// loads under a test mock that does not export `getAgentDir`.
+		const agentDir = piPackage.getAgentDir?.() ?? path.join(homedir(), ".pi", "agent");
+		return process.env[CONFIG_PATH_ENV] || path.join(agentDir, "extensions", "self-compact.json");
+	}
+
+	function activeConfig(): SelfCompactConfig {
+		config ??= readConfig(configPath());
+		return config;
+	}
 
 	pi.on("session_start", () => {
 		pending = undefined;
 		usageAlerted = false;
+		config = undefined;
 	});
 
 	// Pi restores a resumed session's tool loadout from that session's transcript,
@@ -171,6 +277,45 @@ export default function (pi: ExtensionAPI) {
 		const box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
 		box.addChild(new Text(`${headingLine}\n${body}`, 1, 0));
 		return box;
+	});
+
+	pi.registerCommand(COMMAND_NAME, {
+		description: `Set the context-alert threshold: /${COMMAND_NAME} 85, /${COMMAND_NAME} off, or /${COMMAND_NAME} to show it`,
+		getArgumentCompletions: (prefix) => {
+			const options = [
+				{ value: String(DEFAULT_NOTIFY_PERCENT), label: String(DEFAULT_NOTIFY_PERCENT), description: "Alert at this usage (default)" },
+				{ value: "80", label: "80", description: "Alert earlier" },
+				{ value: "95", label: "95", description: "Alert later, after Pi's own compaction starts" },
+				{ value: "off", label: "off", description: "Disable the automatic alert" },
+				{ value: "on", label: "on", description: "Restore the default alert" },
+			];
+			const normalized = prefix.trim().toLowerCase();
+			return options.filter((option) => option.value.startsWith(normalized));
+		},
+		handler: (args, ctx) => {
+			const command = parseThresholdArgument(args);
+			if (command.kind === "show") {
+				ctx.ui.notify(describeConfig(activeConfig()), "info");
+				return;
+			}
+			if (command.kind === "invalid") {
+				ctx.ui.notify(`/self_compact: ${command.reason}.`, "warning");
+				return;
+			}
+			const next: SelfCompactConfig =
+				command.kind === "off" ? { notifyPercent: null }
+				: command.kind === "default" ? { ...DEFAULT_CONFIG }
+				: { notifyPercent: command.percent };
+			try {
+				writeConfig(configPath(), next);
+			} catch (error) {
+				ctx.ui.notify(`Could not save the setting: ${error instanceof Error ? error.message : String(error)}`, "error");
+				return;
+			}
+			config = next;
+			usageAlerted = false;
+			ctx.ui.notify(describeConfig(next), "info");
+		},
 	});
 
 	pi.registerTool({
@@ -220,7 +365,7 @@ export default function (pi: ExtensionAPI) {
 			const usage: Usage | undefined = ctx?.getContextUsage?.();
 			if (params.status) {
 				return {
-					content: [{ type: "text", text: buildStatusReport(usage, pending !== undefined) }],
+					content: [{ type: "text", text: buildStatusReport(usage, pending !== undefined, activeConfig().notifyPercent) }],
 					details: { id: "status", status: "status", usage },
 				};
 			}
@@ -268,15 +413,18 @@ export default function (pi: ExtensionAPI) {
 
 		// Warn the model once per high-usage episode, so it can write a note
 		// before Pi's own automatic compaction runs without one.
+		const { notifyPercent } = activeConfig();
 		const usage: Usage | undefined = ctx.getContextUsage?.();
 		const percent = usage?.percent;
-		if (typeof percent === "number" && percent < AUTO_NOTIFY_CLEAR_PERCENT) usageAlerted = false;
-		if (!shouldAlertUsage(usage, usageAlerted)) return;
+		if (notifyPercent !== null && typeof percent === "number" && percent < clearPercentFor(notifyPercent)) {
+			usageAlerted = false;
+		}
+		if (!shouldAlertUsage(usage, usageAlerted, notifyPercent)) return;
 		usageAlerted = true;
 		pi.sendMessage(
 			{
 				customType: CUSTOM_TYPE,
-				content: buildUsageAlert(usage as Usage),
+				content: buildUsageAlert(usage as Usage, notifyPercent),
 				display: true,
 				details: { id: "usage-alert", status: "alert", usage },
 			},

@@ -94,13 +94,29 @@ Adds a `self_compact` tool that lets the model compact the context at a natural 
 
 Two extras keep the model informed about its budget:
 
-- `status: true` reports the current context usage (for example `92% of 200k tokens (184k used)`) and whether a compaction is already queued. It schedules nothing, so the model can check the room left before it decides.
-- When a turn ends with usage at or above 90% and no compaction queued, the extension sends the model an alert with a turn trigger, so the model can write a note before Pi's own silent automatic compaction drops details. On a 200k-token window Pi's own threshold is about 91.8%, so the alert lands just before it. The alert fires once per high-usage episode and re-arms only after usage falls below 80%, which prevents a notification loop.
+- `status: true` reports the current context usage (for example `92% of 200k tokens (184k used)`), the alert threshold, and whether a compaction is already queued. It schedules nothing, so the model can check the room left before it decides.
+- When a turn ends with usage at or above the threshold and no compaction queued, the extension sends the model an alert with a turn trigger, so the model can write a note before Pi's own silent automatic compaction drops details. On a 200k-token window Pi's own threshold is about 91.8%, so the default 90% alert lands just before it. The alert fires once per high-usage episode and re-arms only after usage falls 10 points below the threshold, which prevents a notification loop.
 
-| Constant | Value | Meaning |
-|---|---|---|
-| `AUTO_NOTIFY_PERCENT` | 90 | Usage that triggers the alert |
-| `AUTO_NOTIFY_CLEAR_PERCENT` | 80 | Usage must fall below this before the alert can fire again |
+### Setting the threshold
+
+The alert threshold defaults to 90%.
+
+| Command | Effect |
+|---|---|
+| `/self_compact` | Show the current threshold |
+| `/self_compact 85` | Alert at 85% usage (any whole number from 1 to 100) |
+| `/self_compact off` | Disable the alert |
+| `/self_compact on` | Restore the 90% default |
+
+The choice is stored in `~/.pi/agent/extensions/self-compact.json`:
+
+```json
+{
+  "notifyPercent": 90
+}
+```
+
+Set `notifyPercent` to `null` to disable the alert, or edit the file directly; a new session reads it again. The environment variable `PI_SELF_COMPACT_CONFIG` overrides the file path, which is how the tests stay off your real settings.
 
 ### `permissions`
 
