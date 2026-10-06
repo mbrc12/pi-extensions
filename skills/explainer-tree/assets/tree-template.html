@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DOCUMENT_TITLE</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: #222; background: #f7f3e8; font: 16px/1.55 system-ui, sans-serif; }
+    .toolbar { display: flex; gap: 1rem; width: min(1120px, calc(100% - 2rem)); margin: 1.5rem auto 0; }
+    button { padding: 0; border: 0; color: #555; background: none; font: inherit; font-size: .85rem; text-decoration: underline; cursor: pointer; }
+    main { width: min(1120px, calc(100% - 2rem)); margin: 2rem auto 6rem; }
+    .legend { margin: 0 0 2rem; color: #666; font-size: .9rem; }
+    .claim-tree, .children { list-style: none; margin: 0; padding: 0; }
+    .children { margin: .25rem 0 .75rem 1.2rem; padding-left: 1rem; border-left: 1px solid #d1c5ae; }
+    .claim { margin: .35rem 0; }
+    details.node { padding: 0 .45rem 0 1.25rem; border: 1px solid rgba(90,75,45,.13); background: var(--node-bg, #f7f3e8); }
+    details.node.branch { position: relative; }
+    details.node.branch::before { content: ""; position: absolute; z-index: 1; top: -1px; bottom: -1px; left: -1px; width: 16px; border-left: 4px solid rgba(105,88,55,.42); cursor: pointer; }
+    summary { display: flex; align-items: baseline; gap: .5rem; padding: .3rem 0; list-style: none; cursor: pointer; }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: "+"; display: inline-grid; flex: 0 0 13px; width: 13px; height: 13px; place-items: center; border: 1px solid #777; color: #222; background: rgba(255,255,255,.25); font: 12px/11px monospace; }
+    details[open] > summary::before { content: "−"; }
+    details.node > summary:only-child { cursor: default; }
+    details.node > summary:only-child::before { visibility: hidden; }
+    .num { flex: 0 0 auto; min-width: 2.4rem; color: #777; font-size: .8rem; font-variant-numeric: tabular-nums; }
+    .claim-text { min-width: 0; }
+    .major { margin-top: 1.5rem; }
+    .major > details.node > summary { padding-bottom: .5rem; border-bottom: 1px solid #cfc3ac; font-weight: 650; }
+    a { color: inherit; }
+    code { font-size: .9em; }
+    .katex-display { overflow-x: auto; overflow-y: hidden; padding: .2rem 0; }
+    footer { width: min(1120px, calc(100% - 2rem)); margin: -4rem auto 2rem; color: #777; font-size: .85rem; }
+    @media (max-width: 650px) { .children { margin-left: .25rem; padding-left: .65rem; } .toolbar { overflow-x: auto; } }
+    @media print { .toolbar { display: none; } details.node:not([open]) > * { display: block; } .claim { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+<div class="toolbar" aria-label="Tree controls">
+  <button type="button" onclick="setAll(true)">Expand all</button>
+  <button type="button" onclick="setAll(false)">Collapse all</button>
+  <button type="button" onclick="expandLevel(1)">Main branches</button>
+</div>
+<main>
+  <p class="legend">DOCUMENT_SCOPE_NOTE</p>
+  <ol class="claim-tree">
+    <!-- Replace this example and all placeholders with sourced claims. -->
+    <li class="claim major" id="claim-1"><details class="node" open><summary><span class="num">1</span><span class="claim-text">TOP_LEVEL_CLAIM</span></summary>
+      <ol class="children">
+        <li class="claim" id="claim-1-1"><details class="node"><summary><span class="num">1.1</span><span class="claim-text">CHILD_CLAIM_WITH_OPTIONAL_MATH \(x\).</span></summary></details></li>
+      </ol>
+    </details></li>
+  </ol>
+</main>
+<footer>Based on <a href="SOURCE_URL">SOURCE_CITATION</a>. Claim handles use the form <code>#claim-1-1</code>.</footer>
+<script>
+  const treeStateKey = `explainer-tree:${location.pathname}`;
+  function saveTreeState() {
+    const ids = [...document.querySelectorAll('details.node[open]')].map(d => d.closest('li[id]')?.id).filter(Boolean);
+    try { localStorage.setItem(treeStateKey, JSON.stringify(ids)); } catch (_) {}
+  }
+  function restoreTreeState() {
+    try {
+      const saved = localStorage.getItem(treeStateKey);
+      if (saved === null) return;
+      const ids = new Set(JSON.parse(saved));
+      document.querySelectorAll('details.node').forEach(d => d.open = ids.has(d.closest('li[id]')?.id));
+    } catch (_) {}
+  }
+  function setAll(open) { document.querySelectorAll('details.node').forEach(d => d.open = open); saveTreeState(); }
+  function expandLevel(level) {
+    document.querySelectorAll('details.node').forEach(d => d.open = false);
+    if (level === 1) document.querySelectorAll('.claim-tree > .claim > details.node').forEach(d => d.open = true);
+    saveTreeState();
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('details.node').forEach(d => {
+      let depth = 0;
+      for (let a = d.parentElement; a; a = a.parentElement) if (a.classList?.contains('children')) depth += 1;
+      d.style.setProperty('--node-bg', `hsl(43 42% ${Math.max(72, 94 - depth * 3)}%)`);
+      const hasChildren = [...d.children].some(el => el.classList.contains('children'));
+      if (!hasChildren) return;
+      d.classList.add('branch');
+      d.addEventListener('click', event => {
+        const rect = d.getBoundingClientRect();
+        if (event.clientX < rect.left - 1 || event.clientX > rect.left + 16) return;
+        event.preventDefault(); event.stopPropagation(); d.open = !d.open; saveTreeState();
+      }, true);
+    });
+    restoreTreeState();
+    if (window.renderMathInElement) renderMathInElement(document.body, { delimiters: [{left: '$$', right: '$$', display: true}, {left: '\\(', right: '\\)', display: false}], throwOnError: false });
+    if (location.hash) {
+      const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+      if (target) {
+        for (let p = target; p; p = p.parentElement) if (p.tagName === 'DETAILS') p.open = true;
+        target.scrollIntoView({block: 'center'}); saveTreeState();
+      }
+    }
+    document.querySelectorAll('details.node').forEach(d => d.addEventListener('toggle', saveTreeState));
+  });
+</script>
+</body>
+</html>
