@@ -2,7 +2,8 @@
  * Thinking Tail Extension
  *
  * Shows the final five non-empty lines of each thinking run in Pi's native
- * gray/italic thinking style on a light-gray background. Ctrl+O expands the full thinking; Ctrl+O again
+ * gray/italic thinking style on a colored background: light purple inside the
+ * editor's integrated terminal, light gray everywhere else. Ctrl+O expands the full thinking; Ctrl+O again
  * returns to the tail. The tail updates as thinking streams and is applied to
  * restored historical messages too.
  */
@@ -46,22 +47,32 @@ type ThinkingMarkdownLike = {
   invalidate?: () => void;
 };
 
-// A light gray that keeps the existing theme-controlled thinking text unchanged.
-const LIGHT_GRAY_THINKING_BACKGROUND = "\x1b[48;2;224;224;224m";
+/**
+ * Editors set TERM_PROGRAM=vscode in their integrated terminal (VS Code, VSCodium
+ * and forks); vscode-theme.ts keys its theme switch off the same variable.
+ */
+const IN_EDITOR_TERMINAL = process.env.TERM_PROGRAM === "vscode";
+
+// Backgrounds only; Pi's theme-controlled thinking text color stays unchanged.
+const EDITOR_THINKING_BACKGROUND = "\x1b[48;2;221;215;229m"; // #ddd7e5 lavender on the #d6d8df terminal background
+const DEFAULT_THINKING_BACKGROUND = "\x1b[48;2;224;224;224m"; // #e0e0e0 light gray
+const THINKING_BACKGROUND = IN_EDITOR_TERMINAL
+  ? EDITOR_THINKING_BACKGROUND
+  : DEFAULT_THINKING_BACKGROUND;
 const RESET_BACKGROUND = "\x1b[49m";
 
-function lightGrayThinkingBackground(text: string): string {
-  return `${LIGHT_GRAY_THINKING_BACKGROUND}${text}${RESET_BACKGROUND}`;
+function thinkingBackground(text: string): string {
+  return `${THINKING_BACKGROUND}${text}${RESET_BACKGROUND}`;
 }
 
-/** Add a full-width light-gray background to the native thinking Markdown. */
+/** Add a full-width colored background to the native thinking Markdown. */
 function applyThinkingBackground(component: ComponentLike): void {
   for (const child of component.contentContainer?.children ?? []) {
     const markdown = child as ThinkingMarkdownLike;
     const style = markdown.defaultTextStyle;
     // Native thinking Markdown is the only assistant child with both styles.
     if (!style?.italic || !style.color) continue;
-    style.bgColor = lightGrayThinkingBackground;
+    style.bgColor = thinkingBackground;
     markdown.invalidate?.();
   }
 }
