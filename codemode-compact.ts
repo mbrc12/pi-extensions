@@ -73,22 +73,39 @@ function argumentFields(raw: string): Record<string, unknown> {
 	return fields;
 }
 
-function callArgument(call: Call, cwd: string): string {
+function callArgumentParts(call: Call, cwd: string): string[] {
 	const fields = argumentFields(call.args || "");
 	const path = shortPath(plain(fields.path), cwd);
 	const query = plain(fields.pattern) || plain(fields.query);
-	if (query) return `“${query}”${path ? ` · ${path}` : ""}`;
-	if (path) return path;
-	if (plain(fields.command)) return plain(fields.command);
-	if (plain(fields.url)) return plain(fields.url);
-	if (plain(fields.name)) return `${plain(fields.name)}${plain(fields.agent) ? ` · ${plain(fields.agent)}` : ""}`;
+	if (query) return path ? [`“${query}”`, path] : [`“${query}”`];
+	if (path) return [path];
+	if (plain(fields.command)) return [plain(fields.command)];
+	if (plain(fields.url)) return [plain(fields.url)];
+	if (plain(fields.name)) return plain(fields.agent) ? [plain(fields.name), plain(fields.agent)] : [plain(fields.name)];
 	for (const key of ["action", "mode", "agent", "id"]) {
-		if (plain(fields[key])) return plain(fields[key]);
+		if (plain(fields[key])) return [plain(fields[key])];
 	}
 	// Model calls carry provider/model text rather than argument JSON.
-	if (call.name.startsWith("models.")) return plain(call.args);
+	if (call.name.startsWith("models.")) return [plain(call.args)];
 	// Never show source, written content, prompts, or arbitrary JSON in the compact view.
-	return "";
+	return [];
+}
+
+// A short fragment such as "r…" says nothing, so a secondary part must keep at
+// least this many visible columns or it is dropped from the row.
+const MIN_ARGUMENT_PART = 6;
+
+/** Fit argument parts into the row, keeping each shown part readable. */
+function fitArgument(parts: string[], width: number): string {
+	if (width < 2 || parts.length === 0) return "";
+	if (parts.length === 1) return truncateToWidth(parts[0], width, "…");
+	const separator = " · ";
+	const primaryWidth = width - Math.max(MIN_ARGUMENT_PART, Math.floor(width * 0.35)) - visibleWidth(separator);
+	if (primaryWidth < MIN_ARGUMENT_PART) return truncateToWidth(parts[0], width, "…");
+	const primary = truncateToWidth(parts[0], primaryWidth, "…");
+	const remaining = width - visibleWidth(primary) - visibleWidth(separator);
+	if (remaining < MIN_ARGUMENT_PART) return primary;
+	return `${primary}${separator}${truncateToWidth(parts[1], remaining, "…")}`;
 }
 
 function scriptFailure(result: Result): string | undefined {
@@ -159,7 +176,7 @@ function callLine(call: Call, theme: Theme, width: number, cwd: string): string 
 	const suffix = error ? ` · ${truncateToWidth(error, Math.max(12, Math.floor(width / 2)), "…")}`
 		: duration(call.durationMs) ? ` · ${duration(call.durationMs)}` : "";
 	const argumentWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(suffix) - 1);
-	const argument = argumentWidth > 2 ? truncateToWidth(callArgument(call, cwd), argumentWidth, "…") : "";
+	const argument = argumentWidth > 2 ? fitArgument(callArgumentParts(call, cwd), argumentWidth) : "";
 	if (argument) prefix += ` ${theme.fg("muted", argument)}`;
 	return prefix + theme.fg(error ? "error" : "dim", suffix);
 }

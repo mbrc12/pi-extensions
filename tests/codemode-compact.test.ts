@@ -165,6 +165,23 @@ describe("compact codemode presentation", () => {
 		}
 	});
 
+	test("keeps a path readable beside a long pattern, or drops it instead of showing a fragment", () => {
+		const h = harness();
+		const calls = [call("grep", { pattern: "class PrecisionPlan|def __init__|def control_transaction", path: "/work/rlq27b/remote/" })];
+		for (const width of [80, 60, 40, 30, 20]) {
+			const row = tui.stripTerminalSequences(h.render(calls, { width }).lines[1]);
+			expect(row).not.toMatch(/·\s*…/);
+			const parts = row.split(" · ");
+			// The duration is the only trailing part; every argument part stays readable.
+			for (const part of parts.slice(0, -1)) expect(tui.visibleWidth(part)).toBeGreaterThanOrEqual(6);
+		}
+		expect(tui.stripTerminalSequences(h.render(calls, { width: 80 }).lines[1])).toContain("rlq27b/remote/");
+		expect(tui.stripTerminalSequences(h.render(calls, { width: 40 }).lines[1])).toContain("rlq27b/");
+		// With too little room for both, the pattern keeps the row and the path is dropped.
+		expect(tui.stripTerminalSequences(h.render(calls, { width: 30 }).lines[1])).not.toContain("rlq27b");
+		expect(tui.stripTerminalSequences(h.render(calls, { width: 30 }).lines[1])).toContain("“class Precis…");
+	});
+
 	test("fits narrow widths, long commands, Unicode, and terminal control characters", () => {
 		const h = harness();
 		const calls = [call("read", { path: "/work/文件😀.ts\nINJECTED\u001b[31m" }), call("bash", { command: "x".repeat(1000) }, "error", { error: "Failure\u001b]0;hostile\u0007" })];
