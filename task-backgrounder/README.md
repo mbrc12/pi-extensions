@@ -47,9 +47,11 @@ Pi injects a visible `task-completion` message for every terminal outcome:
 
 The message includes the exit code when available. The agent can call `task_status` to inspect process output; raw process output is not injected automatically.
 
-- The status message is persisted immediately.
-- If the agent is idle, a hidden wake message starts a new turn.
-- If the agent is busy, Pi delivers the wake message as a follow-up after the current work.
+- Pending completions are persisted immediately.
+- Completion messages and wake messages wait until Pi is idle, including when compaction is running.
+- After compaction succeeds, fails, or is cancelled, delivery waits until Pi has finished cleanup.
+- With `self_compact`, its completion or failure note comes before queued task notifications. Cancellation releases the queue without a note.
+- A hidden wake message then starts a new turn.
 - Completions that occur close together are batched into one message.
 - Reloading or resuming catches up on pending completions without sending duplicates.
 

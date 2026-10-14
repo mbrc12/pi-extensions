@@ -5,6 +5,7 @@ import { getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext } f
 import { Box, Container, Key, Markdown, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
 import { createSubagentTool } from "../subagent/index.ts";
 import { discoverAgents } from "../subagent/agents.ts";
+import { createNotificationGate } from "../shared/notification-gate.ts";
 
 const STATE = "background-subagent-state";
 const COMPLETION = "background-subagent-completion";
@@ -129,6 +130,11 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 	let generation = 0;
 	let currentCtx: ExtensionContext | undefined;
 	let ticker: ReturnType<typeof setInterval> | undefined;
+	const notifications = createNotificationGate(pi, () => {
+		for (const job of jobs.values()) {
+			if (job.status !== "running") notify(job);
+		}
+	});
 
 	function updateIndicator(): void {
 		const running = [...jobs.values()].filter((job) => job.status === "running");
@@ -151,6 +157,10 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 
 	function notify(job: Job): void {
 		if (delivered.has(job.id)) return;
+		if (!notifications.canSend()) {
+			notifications.request();
+			return;
+		}
 		pi.sendMessage({
 			customType: COMPLETION,
 			content: `Background subagent ${job.name} (${job.agent}) ${job.status}.\n\n${job.output || "(no output)"}`,
@@ -181,6 +191,7 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 	}
 
 	function restore(ctx: ExtensionContext): void {
+		notifications.reset(ctx);
 		generation++;
 		for (const controller of controllers.values()) controller.abort();
 		controllers.clear();
@@ -242,6 +253,7 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => restore(ctx));
 	pi.on("session_tree", (_event, ctx) => restore(ctx));
 	pi.on("session_shutdown", () => {
+		notifications.dispose();
 		generation++;
 		for (const controller of controllers.values()) controller.abort();
 		controllers.clear();

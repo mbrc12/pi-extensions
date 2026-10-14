@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { createNotificationGate } from "../shared/notification-gate.ts";
 import { access, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { Type, type Static } from "typebox";
 import { Container, Key, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
@@ -864,6 +865,7 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 	let monitorScanning = false;
 	let disposed = false;
 	let currentCtx: ExtensionContext | undefined;
+	const notifications = createNotificationGate(pi, () => flushCompletions());
 
 	const updateTaskStatus = (ctx = currentCtx): void => {
 		if (!ctx) return;
@@ -897,11 +899,15 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 	const flushCompletions = (): void => {
 		completionTimer = undefined;
 		if (disposed || queuedCompletions.size === 0) return;
+		if (!notifications.canSend()) {
+			notifications.request();
+			return;
+		}
 		const completions = Array.from(queuedCompletions.values());
 		queuedCompletions.clear();
 		try {
 			// Persist the visible status message before requesting a new model turn.
-			// This path appends synchronously even if the agent is currently busy.
+			// The notification gate has confirmed that Pi is idle.
 			pi.sendMessage(
 				{
 					customType: TASK_COMPLETION_MESSAGE_TYPE,
@@ -1050,6 +1056,7 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 	};
 
 	const resetSessionState = (ctx: ExtensionContext): void => {
+		notifications.reset(ctx);
 		disposed = false;
 		currentCtx = ctx;
 		clearMonitorTimer();
@@ -1073,6 +1080,7 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 	pi.on("session_tree", async (_event, ctx) => resetSessionState(ctx));
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		notifications.dispose();
 		disposed = true;
 		ctx.ui.setStatus(TASK_STATUS_KEY, undefined);
 		currentCtx = undefined;

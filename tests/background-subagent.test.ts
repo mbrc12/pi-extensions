@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { testEventBus } from "./event-bus.ts";
 
 const execute = mock(async () => ({
 	content: [{ type: "text", text: "Found the answer." }],
@@ -26,6 +27,7 @@ mock.module("typebox", () => ({ Type: {
 	Object: wrap, String: wrap, Optional: wrap, Boolean: wrap, Union: wrap, Literal: wrap,
 } }));
 const { default: register } = await import("../background-subagent/index.ts");
+const { default: registerSelfCompact } = await import("../self_compact.ts");
 
 function harness() {
 	const tools = new Map<string, any>();
@@ -37,24 +39,28 @@ function harness() {
 	const statuses = new Map<string, string>();
 	const notifications: string[] = [];
 	const pi: any = {
+		events: testEventBus(),
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		registerMessageRenderer: (name: string, render: any) => renderers.set(name, render),
 		registerCommand: (name: string, options: any) => commands.set(name, options),
-		on: (event: string, handler: any) => handlers.set(event, handler),
+		on: (event: string, handler: any) => {
+			const previous = handlers.get(event);
+			handlers.set(event, previous ? (...args: any[]) => { previous(...args); return handler(...args); } : handler);
+		},
 		appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
 		sendMessage: (message: any, options: any) => {
 			sent.push({ message, options });
 			entries.push({ type: "custom_message", customType: message.customType, details: message.details });
 		},
 	};
-	const ctx: any = { cwd: "/tmp", model: { id: "test" }, hasUI: false,
+	const ctx: any = { cwd: "/tmp", model: { id: "test" }, hasUI: false, isIdle: () => true,
 		ui: { theme: { fg: (_color: string, text: string) => text }, notify: (text: string) => notifications.push(text), setStatus: (key: string, value?: string) => {
 			if (value) statuses.set(key, value);
 			else statuses.delete(key);
 		} },
 		sessionManager: { getEntries: () => entries } };
 	register(pi);
-	return { tools, renderers, commands, handlers, entries, sent, statuses, notifications, ctx };
+	return { pi, tools, renderers, commands, handlers, entries, sent, statuses, notifications, ctx };
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -86,6 +92,89 @@ describe("background subagents", () => {
 		expect(h.statuses.has("background-subagent")).toBe(false);
 		h.handlers.get("session_start")(undefined, h.ctx);
 		expect(h.sent).toHaveLength(2);
+	});
+
+	for (const terminal of ["session_compact", "session_compact_failed"]) {
+		test(`persists completion but holds both messages through ${terminal}`, async () => {
+			let resolve!: (result: any) => void;
+			execute.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+			const h = harness();
+			let idle = true;
+			h.ctx.isIdle = () => idle;
+			h.handlers.get("session_start")(undefined, h.ctx);
+			await h.tools.get("background_subagent").execute("id", { name: "deferred", agent: "scout", task: "Explore" }, undefined, undefined, h.ctx);
+			idle = false;
+			h.handlers.get("session_before_compact")({}, h.ctx);
+			resolve({ content: [{ type: "text", text: "Saved answer" }], isError: false });
+			await tick();
+			expect(h.sent).toHaveLength(0);
+			expect(h.entries.some((entry) => entry.data?.action === "finish" && entry.data.job.output === "Saved answer")).toBe(true);
+			h.handlers.get(terminal)({ aborted: terminal === "session_compact_failed" }, h.ctx);
+			await tick();
+			expect(h.sent).toHaveLength(0);
+			idle = true;
+			await new Promise((done) => setTimeout(done, 120));
+			expect(h.sent.map((item) => item.message.customType)).toEqual(["background-subagent-completion", "background-subagent-wake"]);
+			h.handlers.get("session_start")(undefined, h.ctx);
+			expect(h.sent).toHaveLength(2);
+			h.handlers.get("session_shutdown")();
+		});
+	}
+
+	for (const outcome of ["success", "failure", "cancelled"]) {
+		test(`self_compact notice precedes multiple queued completions after ${outcome}`, async () => {
+			const resolvers: Array<(result: any) => void> = [];
+			execute.mockImplementationOnce(() => new Promise((done) => { resolvers.push(done); }));
+			execute.mockImplementationOnce(() => new Promise((done) => { resolvers.push(done); }));
+			const h = harness();
+			registerSelfCompact(h.pi);
+			let idle = true;
+			let compaction: any;
+			h.ctx.isIdle = () => idle;
+			h.ctx.compact = (options: any) => {
+				compaction = options;
+				idle = false;
+				h.handlers.get("session_before_compact")({}, h.ctx);
+			};
+			h.handlers.get("session_start")({}, h.ctx);
+			for (const name of ["first", "second"]) {
+				await h.tools.get("background_subagent").execute("id", { name, agent: "scout", task: "Explore" }, undefined, undefined, h.ctx);
+			}
+			await h.tools.get("self_compact").execute("id", { message: "Keep this note first" }, undefined, undefined, h.ctx);
+			h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
+			resolvers.forEach((resolve) => resolve({ content: [{ type: "text", text: "Queued answer" }], isError: false }));
+			await tick();
+			expect(h.sent).toHaveLength(0);
+			h.handlers.get(outcome === "success" ? "session_compact" : "session_compact_failed")({}, h.ctx);
+			// Simulate Pi becoming idle before invoking self_compact's callback.
+			idle = true;
+			await new Promise((done) => setTimeout(done, 120));
+			expect(h.sent).toHaveLength(0);
+			if (outcome === "success") compaction.onComplete({});
+			else compaction.onError(new Error(outcome === "cancelled" ? "Compaction cancelled" : "Provider failed"));
+			await tick();
+			const types = h.sent.map((item) => item.message.customType);
+			const completions = ["background-subagent-completion", "background-subagent-wake", "background-subagent-completion", "background-subagent-wake"];
+			expect(types).toEqual(outcome === "cancelled" ? completions : ["self_compact", ...completions]);
+			if (outcome !== "cancelled") expect(h.sent[0].message.content).toContain("Keep this note first");
+			h.handlers.get("session_shutdown")({}, h.ctx);
+		});
+	}
+
+	test("restores a completion held during compaction after shutdown", async () => {
+		const h = harness();
+		h.handlers.get("session_start")(undefined, h.ctx);
+		h.ctx.isIdle = () => false;
+		h.handlers.get("session_before_compact")({}, h.ctx);
+		await h.tools.get("background_subagent").execute("id", { name: "saved", agent: "scout", task: "Explore" }, undefined, undefined, h.ctx);
+		await tick();
+		expect(h.sent).toHaveLength(0);
+		h.handlers.get("session_shutdown")();
+		h.ctx.isIdle = () => true;
+		h.handlers.get("session_start")(undefined, h.ctx);
+		expect(h.sent).toHaveLength(2);
+		expect(h.sent[0].message.content).toContain("Found the answer");
+		h.handlers.get("session_shutdown")();
 	});
 
 	test("restored unfinished jobs are reported as interrupted", async () => {

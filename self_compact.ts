@@ -21,6 +21,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { SELF_COMPACT_NOTICE_PENDING, SELF_COMPACT_NOTICE_SENT } from "./shared/notification-gate.ts";
 
 const TOOL_NAME = "self_compact";
 const COMMAND_NAME = "self_compact";
@@ -288,7 +289,9 @@ export default function (pi: ExtensionAPI) {
 			"Compact the context at a natural boundary and receive a note you write to yourself, or report the current context usage.",
 		promptGuidelines: [
 			"Call self_compact only at a natural boundary, after finishing a step of work and before starting the next one.",
-			"The note you pass to self_compact is your only context after compaction; include the goal, decisions, and next steps.",
+			"Your note supplements Pi's conversation summary and retained recent messages; it is not your only context after compaction.",
+			"Keep the note focused on the current goal, decisions, unresolved risks, and next steps. Do not duplicate the full history.",
+			"Use readable bullets and normal word spacing. Shorten the content to fit the limit; do not join ordinary words together to save characters.",
 			"The full history stays available through the context_recall tool even after compaction.",
 			"Pass `status: true` to read the current context usage percentage without compacting.",
 			"When a message warns that the context is nearly full, write your note and compact at your next natural boundary.",
@@ -390,19 +393,36 @@ export default function (pi: ExtensionAPI) {
 
 function startCompaction(pi: ExtensionAPI, ctx: ExtensionContext, request: PendingRequest): void {
 	const details: NoteDetails = { id: request.id, status: "compacted" };
-	ctx.compact({
-		customInstructions: request.instructions,
-		onComplete: () => {
-			pi.sendMessage({ customType: CUSTOM_TYPE, content: buildNote(request), display: true, details }, { triggerTurn: true });
-		},
-		onError: (error) => {
-			const message = error.message || String(error);
-			// Cancellation means the user stopped the run; do not start a new turn.
-			if (isCancellation(message)) return;
-			pi.sendMessage(
-				{ customType: CUSTOM_TYPE, content: buildFailureNote(request, message), display: true, details: { ...details, status: "skipped", error: message } },
-				{ triggerTurn: true },
-			);
-		},
-	});
+	const releaseNotice = () => pi.events.emit(SELF_COMPACT_NOTICE_SENT, { id: request.id });
+	// Hold background notifications before Pi starts compaction, through delivery
+	// of our note. The compaction terminal event alone must not release them.
+	pi.events.emit(SELF_COMPACT_NOTICE_PENDING, { id: request.id });
+	try {
+		ctx.compact({
+			customInstructions: request.instructions,
+			onComplete: () => {
+				try {
+					pi.sendMessage({ customType: CUSTOM_TYPE, content: buildNote(request), display: true, details }, { triggerTurn: true });
+				} finally {
+					releaseNotice();
+				}
+			},
+			onError: (error) => {
+				try {
+					const message = error.message || String(error);
+					// Cancellation means the user stopped the run; do not start a new turn.
+					if (isCancellation(message)) return;
+					pi.sendMessage(
+						{ customType: CUSTOM_TYPE, content: buildFailureNote(request, message), display: true, details: { ...details, status: "skipped", error: message } },
+						{ triggerTurn: true },
+					);
+				} finally {
+					releaseNotice();
+				}
+			},
+		});
+	} catch (error) {
+		releaseNotice();
+		throw error;
+	}
 }

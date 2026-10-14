@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { testEventBus } from "./event-bus.ts";
 
 // Pi resolves these packages when it loads extensions. Mock them for a standalone Bun test.
 mock.module("@earendil-works/pi-coding-agent", () => ({}));
@@ -54,6 +55,7 @@ function harness(options: {
 	// The threshold lives in module state, so each harness starts from the default.
 	setNotifyPercent(options.notifyPercent === undefined ? DEFAULT_NOTIFY_PERCENT : options.notifyPercent);
 	const pi: any = {
+		events: testEventBus(),
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		registerMessageRenderer: (name: string, render: any) => renderers.set(name, render),
 		registerCommand: (name: string, command: any) => commands.set(name, command),
@@ -96,6 +98,15 @@ describe("self_compact tool", () => {
 		const box = h.renderers.get("self_compact")({ content: "keep going" }, { outputPad: 0 }, { bold: (t: string) => t, fg: (_c: string, t: string) => t, bg: (_c: string, t: string) => t });
 		expect(box.children[0].text).toContain("self_compact note");
 		expect(box.children[0].text).toContain("keep going");
+	});
+
+	test("asks for a readable supplement rather than a replacement for all context", () => {
+		const guidelines = harness().tools.get("self_compact").promptGuidelines.join("\n");
+		expect(guidelines).toContain("supplements Pi's conversation summary and retained recent messages");
+		expect(guidelines).not.toContain("is your only context after compaction");
+		expect(guidelines).toContain("Do not duplicate the full history");
+		expect(guidelines).toContain("normal word spacing");
+		expect(guidelines).toContain("do not join ordinary words together");
 	});
 
 	test("returns a scheduling result and stores the note", async () => {
