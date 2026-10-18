@@ -101,17 +101,24 @@ function stageLabel(
   return `${stage}:${classificationEmoji(classification)}`;
 }
 
+// Hidden from the status bar on request: the per-stage readout (`r:✅->l:✅`) is
+// noise. The permission mode indicator itself (ask / classify / allow) still
+// shows. The original body is kept, commented out, so it is easy to restore.
 function showClassification(
   ctx: ExtensionContext,
   label: string,
   classification: Classification | "unavailable",
 ): void {
-  if (ctx.hasUI) {
-    const text = ctx.ui.theme?.fg
-      ? ctx.ui.theme.fg(classificationColor(classification), label)
-      : label;
-    ctx.ui.setStatus("permissions-classification", text);
-  }
+  void ctx;
+  void label;
+  void classification;
+
+  // if (ctx.hasUI) {
+  //   const text = ctx.ui.theme?.fg
+  //     ? ctx.ui.theme.fg(classificationColor(classification), label)
+  //     : label;
+  //   ctx.ui.setStatus("permissions-classification", text);
+  // }
 }
 
 /**
