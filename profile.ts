@@ -250,7 +250,11 @@ export default function profileExtension(pi: ExtensionAPI): void {
     const previousProfile = getActiveModelProfile();
     const previousScope = [...ctx.scopedModels] as ScopedModel[];
     setActiveModelProfile(name);
-    replaceScope(ctx, baseWasScoped || name !== DEFAULT_MODEL_PROFILE ? scoped : []);
+    // Scope every profile, including the default one. An empty scope makes Pi treat
+    // the session as unscoped, so the model picker's "all" view and model cycling
+    // would offer models the profile blocks. A non-empty scope opens the picker in
+    // its "scoped" view, which lists exactly the models this profile allows.
+    replaceScope(ctx, scoped);
 
     if (defaultModel) {
       reconcilingModel = true;

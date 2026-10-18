@@ -2,15 +2,17 @@
   "profiles": {
     "home": {
       "allow": [
-        ".*"
+        "^opencode-go/.*$",
+        "^openai-codex/.*$"
       ],
       "defaultModel": "opencode-go/deepseek-v4.1-flash"
     },
     "work": {
       "allow": [
-        "^openai-codex-2/.*$"
+        "^openai-codex-2/.*$",
+        "^anthropic/.*$"
       ],
-      "defaultModel": "openai-codex-2/gpt-6-sol"
+      "defaultModel": "openai-codex-2/gpt-6.1-sol"
     }
   },
   "subagentModels": {
@@ -27,10 +29,10 @@
       "opencode-go/kimi-k2.6"
     ],
     "high": [
+      "openai-codex/gpt-6.1-sol",
       "openai-codex/gpt-6-luna",
-      "openai-codex/gpt-6-sol",
-      "openai-codex-2/gpt-6-luna",
-      "openai-codex-2/gpt-6-sol"
+      "openai-codex-2/gpt-6.1-sol",
+      "openai-codex-2/gpt-6-luna"
     ],
     "image": [
       "openai-codex/gpt-6-luna",
