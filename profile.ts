@@ -195,7 +195,7 @@ export default function profileExtension(pi: ExtensionAPI): void {
   }
 
   function updateStatus(ctx: ExtensionContext): void {
-    ctx.ui.setStatus(STATUS_ID, `profile:${getActiveModelProfile()}`);
+    ctx.ui.setStatus(STATUS_ID, getActiveModelProfile());
   }
 
   async function ensureAllowedModel(ctx: ExtensionContext, preferred?: Model): Promise<boolean> {
@@ -374,7 +374,7 @@ export default function profileExtension(pi: ExtensionAPI): void {
       if (!invalidProfiles.has(DEFAULT_MODEL_PROFILE)) {
         await applyProfile(DEFAULT_MODEL_PROFILE, ctx);
       } else {
-        ctx.ui.setStatus(STATUS_ID, "profile:invalid");
+        ctx.ui.setStatus(STATUS_ID, "invalid");
       }
       ctx.ui.notify(
         `Could not restore model profile "${requestedProfile}": ${error instanceof Error ? error.message : String(error)}`,
