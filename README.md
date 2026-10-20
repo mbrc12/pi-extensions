@@ -226,7 +226,7 @@ Subagent progress summaries are disabled. Their generation, activation, and rend
 
 ### `thinking-tail`
 
-Collapses long thinking blocks to the last 5 non-empty lines. Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
+Collapses long thinking blocks to the last 5 non-empty *displayed* lines, so one long paragraph cannot fill the whole fold and the newest text stays visible. Lines are counted after word wrapping, and the fold is rebuilt when the terminal width changes. Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
 
 ### `working-indicator`
 

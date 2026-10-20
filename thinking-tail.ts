@@ -1,16 +1,22 @@
 /**
  * Thinking Tail Extension
  *
- * Shows the final five non-empty lines of each thinking run in Pi's native
- * gray/italic thinking style on a colored background: light purple inside the
- * editor's integrated terminal, light gray everywhere else. Ctrl+O expands the full thinking; Ctrl+O again
- * returns to the tail. The tail updates as thinking streams and is applied to
- * restored historical messages too.
+ * Shows the final five non-empty *displayed* lines of each thinking run in
+ * Pi's native gray/italic thinking style on a colored background: light purple
+ * inside the editor's integrated terminal, light gray everywhere else. Lines
+ * are counted after word wrapping, so one long paragraph cannot fill the whole
+ * fold, and the fold is rebuilt when the terminal width changes. Ctrl+O expands
+ * the full thinking; Ctrl+O again returns to the tail. The tail updates as
+ * thinking streams and is applied to restored historical messages too.
  */
 
-import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
+import {
+  AssistantMessageComponent,
+  truncateToVisualLines,
+} from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+/** Number of non-empty displayed (wrapped) lines kept in the fold. */
 const TAIL_LINES = 5;
 
 // Footer status item shown while any thinking is present. 🤐 = collapsed,
@@ -33,6 +39,7 @@ type AssistantMessageLike = {
 
 type ComponentLike = {
   lastMessage?: AssistantMessageLike;
+  outputPad?: number;
   contentContainer?: {
     children?: unknown[];
   };
@@ -68,7 +75,9 @@ function thinkingBackground(text: string): string {
 /** Add a full-width colored background to the native thinking Markdown. */
 function applyThinkingBackground(component: ComponentLike): void {
   for (const child of component.contentContainer?.children ?? []) {
-    const markdown = child as ThinkingMarkdownLike;
+    // Pi wraps the thinking Markdown in a MouseRegion; look through it.
+    const inner = (child as { child?: unknown }).child ?? child;
+    const markdown = inner as ThinkingMarkdownLike;
     const style = markdown.defaultTextStyle;
     // Native thinking Markdown is the only assistant child with both styles.
     if (!style?.italic || !style.color) continue;
@@ -108,6 +117,10 @@ function messageHasThinking(message: unknown): boolean {
 // State is per rendered assistant-message component.
 const expandedInstances = new WeakSet<object>();
 const rawMessages = new WeakMap<object, AssistantMessageLike>();
+// Width the component was last rendered at, and the width its current children
+// were folded for. A mismatch means the fold is stale, e.g. after a resize.
+const lastRenderWidth = new WeakMap<object, number>();
+const foldedWidth = new WeakMap<object, number | undefined>();
 
 // Latest interactive UI context, captured on session_start so the
 // prototype-level setExpanded() override (which has no ctx) can still push
@@ -132,12 +145,69 @@ function syncThinkStatus(): void {
   );
 }
 
-function tailOf(text: string): string {
+/**
+ * Tail by newlines only. Used before the first render supplies a width, when
+ * the number of displayed lines is still unknown.
+ */
+function logicalTailOf(text: string): string {
   return text
     .split("\n")
     .filter((line) => line.trim())
     .slice(-TAIL_LINES)
     .join("\n");
+}
+
+/** Last non-empty displayed lines of `text` at `contentWidth`, at most TAIL_LINES. */
+function lastDisplayedLines(text: string, contentWidth: number): string[] {
+  // Ask for only the lines we need, widening the window if blank lines eat
+  // into the slice.
+  let take = TAIL_LINES;
+  for (;;) {
+    const { visualLines, skippedCount } = truncateToVisualLines(
+      text,
+      take,
+      contentWidth,
+      0,
+      "end",
+    );
+    const kept = visualLines
+      .filter((line) => Boolean(line.trim()))
+      .map((line) => line.trimEnd());
+    if (kept.length >= TAIL_LINES || skippedCount === 0) {
+      return kept.slice(-TAIL_LINES);
+    }
+    take *= 2;
+  }
+}
+
+/**
+ * Tail by displayed lines at the given render width. Wrapping mirrors Pi's
+ * Markdown: the text is laid out at `width`, less `paddingX` on each side, and
+ * pi-tui narrows that padding on very narrow terminals.
+ */
+function displayedTailOf(text: string, width: number, paddingX: number): string {
+  const pad = Math.min(paddingX, Math.max(0, Math.floor((width - 1) / 2)));
+  const contentWidth = Math.max(1, width - pad * 2);
+
+  // This runs for every streamed token, so re-wrap only a bounded trailing
+  // slice. The extra lines absorb the partial line where the slice starts;
+  // the kept lines are unaffected by anything before them.
+  const slack = TAIL_LINES + 3;
+  const sliceStart = text.length - contentWidth * slack;
+  if (sliceStart > 0) {
+    const tail = lastDisplayedLines(text.slice(sliceStart), contentWidth);
+    // A blank-heavy or line-broken tail can hide lines; retry on the full text.
+    if (tail.length === TAIL_LINES) return tail.join("\n");
+  }
+
+  return lastDisplayedLines(text, contentWidth).join("\n");
+}
+
+/** Tail whose wrapping depends on the component's last rendered width. */
+function tailOf(component: ComponentLike, text: string): string {
+  const width = lastRenderWidth.get(component);
+  if (width === undefined) return logicalTailOf(text);
+  return displayedTailOf(text, width, component.outputPad ?? 1);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -194,7 +264,7 @@ export default function (pi: ExtensionAPI) {
           // signal now lives in the footer status item instead of an inline hint.
           content.push({
             ...run[0]!,
-            thinking: tailOf(fullText),
+            thinking: tailOf(this, fullText),
           });
         }
       }
@@ -212,9 +282,30 @@ export default function (pi: ExtensionAPI) {
     // Critical: retain the raw message for invalidate(), theme changes, and
     // setExpanded(). Without this, Ctrl+O can only re-expand the tail itself.
     this.lastMessage = message;
+    // Remember which width these children were folded for, so render() can
+    // rebuild them once when the terminal is resized.
+    foldedWidth.set(this, lastRenderWidth.get(this));
   }
 
   proto.updateContent = updateContent;
+
+  const originalRender = proto.render as (this: ComponentLike, width: number) => string[];
+
+  /**
+   * Track the render width and refold stale tails. Width is only known while
+   * rendering, so the fold is rebuilt here the first time each component is
+   * rendered and again whenever the terminal width changes.
+   */
+  function render(this: ComponentLike, width: number): string[] {
+    lastRenderWidth.set(this, width);
+    const raw = rawMessages.get(this) ?? this.lastMessage;
+    if (raw && !expandedInstances.has(this) && foldedWidth.get(this) !== width) {
+      updateContent.call(this, raw);
+    }
+    return originalRender.call(this, width);
+  }
+
+  proto.render = render;
 
   // Pi calls setExpanded() on transcript children when Ctrl+O toggles tool
   // output. Adding this method makes thinking messages participate too.
@@ -277,6 +368,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     proto.updateContent = originalUpdateContent;
+    proto.render = originalRender;
     if (hadOwnSetExpanded) {
       proto.setExpanded = originalSetExpanded;
     } else {
