@@ -30,6 +30,7 @@ const {
 	describeUsage,
 	formatTokens,
 	getNotifyPercent,
+	MIN_COMPACT_PERCENT,
 	isCancellation,
 	parseThresholdArgument,
 	setNotifyPercent,
@@ -341,6 +342,17 @@ describe("self_compact usage helpers", () => {
 		expect(buildUsageAlert(usage, 90)).toContain("nearly full");
 		expect(buildUsageAlert(usage, 90)).toContain("at 90%");
 		expect(buildUsageAlert(usage, 90)).toContain("status: true");
+	});
+
+	test("discourages compacting below the minimum usage", () => {
+		const roomy = { tokens: 40_000, contextWindow: 200_000, percent: 20 };
+		const middling = { tokens: 140_000, contextWindow: 200_000, percent: 70 };
+		for (const usage of [roomy, middling]) {
+			const report = buildStatusReport(usage, false);
+			expect(report).toContain(`below ${MIN_COMPACT_PERCENT}% is strongly discouraged`);
+			expect(report).not.toContain("nearly full");
+			expect(report).not.toContain("message` note");
+		}
 	});
 });
 

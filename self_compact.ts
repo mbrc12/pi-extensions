@@ -13,6 +13,8 @@
  * Two extras keep the model informed:
  * - `status: true` on the tool reports the current context usage and schedules
  *   nothing, so the model can check the room it has left before it decides.
+ *   Compacting below {@link MIN_COMPACT_PERCENT} (60%) is discouraged, and the
+ *   status report says so.
  * - After a turn, usage at or above the configured threshold (90% by default,
  *   set with `/self_compact <percent>`) sends the model an alert with a turn
  *   trigger, so it can write a note instead of letting Pi's silent automatic
@@ -31,6 +33,8 @@ const MAX_INSTRUCTIONS_CHARS = 2_000;
 
 /** Alert threshold used when the user configures nothing. */
 export const DEFAULT_NOTIFY_PERCENT = 90;
+/** Compacting below this usage is discouraged: there is still plenty of room. */
+export const MIN_COMPACT_PERCENT = 60;
 /** The alert re-arms this many percentage points below the threshold. */
 export const NOTIFY_HYSTERESIS = 10;
 
@@ -171,11 +175,12 @@ export function buildStatusReport(
 			: `The automatic alert fires at ${notifyPercent}% usage.`,
 		"",
 	);
-	const nearlyFull = notifyPercent !== null && usage?.percent !== null && usage?.percent !== undefined && usage.percent >= notifyPercent;
+	const percent = usage?.percent;
+	const nearlyFull = notifyPercent !== null && typeof percent === "number" && percent >= notifyPercent;
 	lines.push(
 		nearlyFull
 			? "The context is nearly full. Compact at your next natural boundary, while still giving a note to your future self."
-			: "Give a `message` note to compact at the end of this turn, or keep working if there is room.",
+			: `Usage is below the alert. Keep working; nothing to do here. Compacting below ${MIN_COMPACT_PERCENT}% is strongly discouraged.`,
 	);
 	return lines.join("\n");
 }
@@ -280,14 +285,17 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Compact the conversation context at the end of this turn and receive a note you write to yourself, or report the " +
 			"current context usage with `status: true`. Call this when you reach a natural boundary: a unit of work is finished, " +
-			"the context is large, and you want to continue with more room. The conversation is summarized by Pi's normal " +
-			"compaction, and your note is delivered as the first message of the new context. Everything summarized away stays " +
-			"stored in the session and remains searchable with the context_recall tool, so the note only needs the goal, " +
-			"decisions, and next steps you need to keep acting. Use `status: true` to check how full the context is before you " +
-			"decide. Do not compact in the middle of a step you cannot describe in the note.",
+			"the context is large, and you want to continue with more room. Compacting below " +
+			`${MIN_COMPACT_PERCENT}% usage is strongly discouraged` +
+			", so check with `status: true` first and keep working while there is room. The conversation is summarized by Pi's " +
+			"normal compaction, and your note is delivered as the first message of the new context. Everything summarized away " +
+			"stays stored in the session and remains searchable with the context_recall tool, so the note only needs the goal, " +
+			"decisions, and next steps you need to keep acting. Do not compact in the middle of a step you cannot describe in " +
+			"the note.",
 		promptSnippet:
 			"Compact the context at a natural boundary and receive a note you write to yourself, or report the current context usage.",
 		promptGuidelines: [
+			`Do not call self_compact while context usage is below ${MIN_COMPACT_PERCENT}%; that is strongly discouraged. Check \`status: true\` first and keep working while there is still room.`,
 			"Call self_compact only at a natural boundary, after finishing a step of work and before starting the next one.",
 			"Your note supplements Pi's conversation summary and retained recent messages; it is not your only context after compaction.",
 			"Keep the note focused on the current goal, decisions, unresolved risks, and next steps. Do not duplicate the full history.",
