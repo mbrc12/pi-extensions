@@ -1,0 +1,153 @@
+:root{
+    --ink:#1b1a18;
+    --muted:#54514b;
+    --rule:#d9d6cf;
+    --bg:#fdfcf9;
+    --accent:#6b4a2a;
+    --code-bg:#f3f0e8;
+    --mark:#efe7d8;
+  }
+  html{font-size:19px;-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:"et-book",Palatino,"Palatino Linotype","Book Antiqua",Georgia,serif;
+    line-height:1.58;
+  }
+  .page{max-width:46rem;margin:0 auto;padding:3rem 1.25rem 7rem}
+  header.doc{margin-bottom:2.5rem}
+  .eyebrow{font-size:.78rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  h1{font-size:2.15rem;line-height:1.18;font-weight:400;margin:.4rem 0 .6rem}
+  .standfirst{font-size:1.02rem;color:var(--muted);max-width:38rem}
+  h2{font-size:1.45rem;font-weight:400;margin:3.2rem 0 .8rem;padding-top:1.4rem;border-top:1px solid var(--rule)}
+  h3{font-size:1.15rem;font-weight:400;font-style:italic;margin:2.2rem 0 .6rem}
+  h4{font-size:.98rem;font-weight:400;font-style:italic;margin:1.6rem 0 .4rem}
+  p{margin:0 0 .95rem}
+  a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px}
+  a:hover{text-decoration-style:solid}
+  a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .lede{font-size:1.02rem}
+  .note{font-size:.92rem;color:var(--muted)}
+  .small{font-size:.88rem}
+  nav.toc{margin:2rem 0 3rem;padding:1rem 0;border-top:1px solid var(--rule)}
+  nav.toc h2{font-size:.78rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 .6rem;padding:0;border:0}
+  nav.toc ol{margin:0;padding-left:0;list-style:none;font-size:.95rem}
+  nav.toc li{margin:.18rem 0;break-inside:avoid}
+  nav.toc ol ol{padding-left:1.15rem;font-size:.9rem}
+  .eq{display:grid;grid-template-columns:1fr auto;align-items:center;gap:1.25rem;margin:1.2rem 0}
+  .eq .math{min-width:0;overflow-x:auto}
+  .eq .num{font-size:.85rem;color:var(--muted);white-space:nowrap}
+  .eq.plain{grid-template-columns:1fr}
+  figure{margin:2rem 0}
+  figure img{display:block;margin:0 auto;max-width:100%;max-height:72vh;width:auto;height:auto;
+             border:1px solid var(--rule);background:#fff}
+  .eqimg{max-width:100%;max-height:60vh;width:auto;height:auto}
+  figcaption{font-size:.88rem;color:var(--muted);margin-top:.55rem;line-height:1.45}
+  figure.wide{margin-left:-1rem;margin-right:-1rem}
+  .demo{border-left:3px solid var(--accent);padding:.2rem 0 .2rem 1.1rem;margin:2rem 0}
+  .demo-head{font-size:.76rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.4rem}
+  .demo-head span.title{letter-spacing:0;text-transform:none;font-size:.95rem;color:var(--ink);font-style:italic}
+  pre{margin:.6rem 0;padding:.8rem .95rem;overflow-x:auto;background:var(--code-bg);
+      border:1px solid var(--rule);font-size:.72rem;line-height:1.55;border-radius:2px}
+  pre.out{background:#fff}
+  pre.out .prompt{color:var(--muted)}
+  code{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
+  /* syntax highlighting, kept close to the page palette */
+  .token.comment,.token.prolog,.token.doctype,.token.cdata{color:#6f6857;font-style:italic}
+  .token.punctuation{color:#54514b}
+  .token.namespace{opacity:.7}
+  .token.property,.token.tag,.token.boolean,.token.number,.token.constant,.token.symbol{color:#8a3d6b}
+  .token.selector,.token.attr-name,.token.string,.token.char,.token.builtin{color:#2f6b46}
+  .token.operator,.token.entity,.token.url{color:#54514b}
+  .token.atrule,.token.attr-value,.token.keyword{color:#9c4a10;font-weight:600}
+  .token.function,.token.class-name{color:#2b5285}
+  .token.regex,.token.important,.token.variable{color:#8a5a2a}
+  dl.api{margin:.9rem 0 1.1rem;padding:.7rem .9rem;border-left:2px solid var(--rule);
+         background:#faf8f3;font-size:.88rem;line-height:1.5}
+  dl.api dt{font-weight:600;margin-top:.45rem}
+  dl.api dt:first-child{margin-top:0}
+  dl.api dd{margin:.1rem 0 0 0}
+  ol.problems{font-size:1rem;padding-left:0;list-style:none}
+  ol.problems > li{margin:0 0 1.5rem}
+  details.solution{margin:.45rem 0 0}
+  details.solution summary{cursor:pointer;font-size:.85rem;font-weight:600;color:var(--accent);padding:.2rem 0}
+  details.solution summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  details.solution .body{font-size:.92rem;line-height:1.55;border-left:2px solid var(--rule);
+                         padding:.15rem 0 .15rem 1rem;margin-top:.3rem;color:#2b2925}
+  .katex{font-size:1em}
+  table{width:100%;border-collapse:collapse;margin:1.25rem 0;font-size:.92rem}
+  caption{caption-side:top;text-align:left;font-size:.88rem;color:var(--muted);padding-bottom:.5rem}
+  th,td{text-align:left;padding:.45rem .55rem;border-bottom:1px solid var(--rule);vertical-align:top}
+  thead th{border-bottom:1px solid #767676}
+  .ref{font-size:.85em;vertical-align:super;line-height:0}
+  aside.footnotes{font-size:.88rem;color:var(--muted);margin-top:3rem;padding-top:1rem;border-top:1px solid var(--rule)}
+  .backtop{font-size:.8rem;color:var(--muted);display:inline-block;margin-top:.6rem}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+       border:1px solid var(--rule);padding:.1rem .35rem;border-radius:2px;margin-left:.4rem;vertical-align:middle}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
+  @media (max-width:640px){
+    html{font-size:16px}
+    nav.toc ol{columns:1}
+    .grid2{grid-template-columns:1fr}
+    figure.wide{margin-left:0;margin-right:0}
+    .eq{grid-template-columns:1fr;gap:.2rem}
+    .eq .num{text-align:right}
+  }
+  @media (prefers-reduced-motion:no-preference){
+    html{scroll-behavior:smooth}
+  }
+
+nav.toc li.l2{margin-left:1.15rem;font-size:.88rem}
+nav.toc li.l1{margin-top:.25rem}
+
+  nav.pager{display:flex;flex-wrap:wrap;gap:.4rem 1rem;align-items:baseline;
+            font-size:.85rem;color:var(--muted);margin:0 0 1.6rem;
+            padding-bottom:.6rem;border-bottom:1px solid var(--rule)}
+  nav.pager a{color:var(--accent)}
+  nav.pager .pager-home{margin-right:auto;font-variant:small-caps;letter-spacing:.04em}
+  nav.pager .pager-prev,nav.pager .pager-next{white-space:nowrap}
+
+  /* numerical demonstrations are opt-in: revealed by the Contents switch */
+  .demo{display:none}
+  html.show-demos .demo{display:block}
+  .demo-switch{font-size:.9rem;margin:.3rem 0 1rem;color:var(--muted)}
+  .demo-switch label{cursor:pointer}
+  nav.toc li.l3{margin-left:2.2rem;font-size:.85rem}
+
+  /* single-file reader: the page wrapper must not constrain the shell */
+  body.reader .page{max-width:none;margin:0;padding:0}
+  body.reader .shell > main{padding-top:2.4rem}
+
+  .chapter-slot[hidden]{display:none}
+
+  aside details.chnav{margin:.1rem 0}
+  aside details.chnav > summary{list-style:none;cursor:pointer;display:grid;
+        grid-template-columns:.85rem 1fr;align-items:start;column-gap:.2rem;
+        padding:.12rem 0;line-height:1.35}
+  aside details.chnav > summary::-webkit-details-marker{display:none}
+  aside details.chnav > summary::before{
+        content:""; width:.4rem; height:.4rem; margin-top:.5em; justify-self:center;
+        background:currentColor; opacity:.55;
+        clip-path:polygon(0 0, 100% 50%, 0 100%);
+        transform-origin:40% 50%; transform:rotate(0deg)}
+  aside details.chnav[open] > summary::before{transform:rotate(90deg)}
+  aside details.chnav > summary a{display:block}
+
+  /* the demo index is only meaningful when demonstrations are shown */
+  #demos{display:none}
+  html.show-demos #demos{display:block}
+
+  .shell > main{max-width:40rem;margin:0 auto;padding:2.6rem 1.6rem 9rem}
+
+  /* reader text size: scales the article only, never the sidebar or chrome */
+  .shell > main#content { font-size: var(--read-size, 19px); }
+  .shell > main#content h1 { font-size: 1.95em; }
+  .shell > main#content h2 { font-size: 1.32em; }
+  .shell > main#content h3 { font-size: 1.06em; }
+  .shell > main#content h4 { font-size: 0.94em; }
+  .shell > main#content .eq .num,
+  .shell > main#content figcaption,
+  .shell > main#content .note { font-size: 0.9em; }
+
+  .demo-index{display:none}
+  html.show-demos .demo-index{display:block}
+  html.show-demos li.demo-index{display:list-item}

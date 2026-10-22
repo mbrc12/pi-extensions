@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<chapter n="1" title="Chapter 1 — Title of the chapter" eyebrow="Author · Book · 3rd edition">
+  <section id="s1-1" n="1.1" title="First section">
+    <p>Prose goes here, with inline maths such as $k = 2\pi/\lambda$ and a cross-reference to
+    <ref to="eq-1-1" soft="yes" text="(1-1)"/>.</p>
+
+    <eq id="eq-1-1" n="1-1">\nabla^2 u + k^2 u = 0</eq>
+
+    <fig id="fig-1-1" n="1.1" src="figures/fig1-01.png" alt="Describe what the figure shows">
+      Caption text, without a leading "Figure 1.1 —".
+    </fig>
+
+    <demo id="demo-1-1" n="1.1" title="A short numerical check">
+      <p>One sentence of setup.</p>
+      <code lang="python">print(2 + 2)</code>
+      <output>4</output>
+    </demo>
+  </section>
+</chapter>
