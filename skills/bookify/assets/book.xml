@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<book title="Book Title" author="Author Name" edition="Third edition · Publisher, Year">
-  <include src="ch01.xml"/>
-  <include src="ch02.xml"/>
-</book>

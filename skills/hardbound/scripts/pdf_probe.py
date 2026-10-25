@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Map a scanned PDF: page ranges per chapter, OCR text, and word bounding boxes.
 
-bookify works from two dumps per PDF, both produced here:
+hardbound transcription works from two dumps per PDF, both produced here:
 
   <work>/text.txt    layout-preserving text, pages separated by form feeds
   <work>/bbox.html   word bounding boxes (XHTML), used to crop figures/equations
@@ -121,12 +121,12 @@ def main() -> None:
 
     d = sub.add_parser("dump", help="write text.txt and bbox.html")
     d.add_argument("pdf", type=Path)
-    d.add_argument("--work", type=Path, default=Path("/tmp/bookify"))
+    d.add_argument("--work", type=Path, default=Path("/tmp/hardbound"))
 
     r = sub.add_parser("ranges", help="guess chapter page ranges")
     r.add_argument("pdf", type=Path)
     r.add_argument("--titles", type=Path, required=True, help="one chapter title per line")
-    r.add_argument("--work", type=Path, default=Path("/tmp/bookify"))
+    r.add_argument("--work", type=Path, default=Path("/tmp/hardbound"))
     r.add_argument("--skip", type=int, default=0, help="ignore pages before this one (contents pages)")
     r.add_argument("--top", type=int, default=3, help="how many first lines to inspect")
 
