@@ -114,8 +114,8 @@ function messageHasThinking(message: unknown): boolean {
   return contentHasThinking((message as { content?: unknown }).content);
 }
 
-// State is per rendered assistant-message component.
-const expandedInstances = new WeakSet<object>();
+// Raw messages are per component; expansion is global because Ctrl+O toggles
+// every expandable transcript child and new streaming components must inherit it.
 const rawMessages = new WeakMap<object, AssistantMessageLike>();
 // Width the component was last rendered at, and the width its current children
 // were folded for. A mismatch means the fold is stale, e.g. after a resize.
@@ -228,7 +228,7 @@ export default function (pi: ExtensionAPI) {
     // Keep the untouched message. The original renderer records the view copy
     // as lastMessage, so restore the raw one below for later Ctrl+O expansion.
     rawMessages.set(this, message);
-    const expanded = expandedInstances.has(this);
+    const expanded = currentExpanded;
     const content: ContentBlock[] = [];
 
     for (let i = 0; i < message.content.length; i++) {
@@ -299,7 +299,7 @@ export default function (pi: ExtensionAPI) {
   function render(this: ComponentLike, width: number): string[] {
     lastRenderWidth.set(this, width);
     const raw = rawMessages.get(this) ?? this.lastMessage;
-    if (raw && !expandedInstances.has(this) && foldedWidth.get(this) !== width) {
+    if (raw && !currentExpanded && foldedWidth.get(this) !== width) {
       updateContent.call(this, raw);
     }
     return originalRender.call(this, width);
@@ -310,18 +310,16 @@ export default function (pi: ExtensionAPI) {
   // Pi calls setExpanded() on transcript children when Ctrl+O toggles tool
   // output. Adding this method makes thinking messages participate too.
   proto.setExpanded = function (this: ComponentLike, expanded: boolean): void {
-    if (expanded) {
-      expandedInstances.add(this);
-    } else {
-      expandedInstances.delete(this);
-    }
+    // Pi calls this for every expandable child when Ctrl+O changes. Set the
+    // shared mode first so the update below, and any later streaming message,
+    // uses the same expansion state.
+    currentExpanded = expanded;
 
     const raw = rawMessages.get(this) ?? this.lastMessage;
     if (raw) updateContent.call(this, raw);
 
-    // Ctrl+O toggles the global expansion state. Reflect it in the footer
-    // think status. This override has no ctx, so use the captured uiRef.
-    currentExpanded = expanded;
+    // Reflect the global expansion state in the footer status. This override
+    // has no ctx, so use the captured uiRef.
     syncThinkStatus();
   };
 
