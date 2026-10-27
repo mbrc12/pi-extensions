@@ -17,8 +17,7 @@ type Result = Parameters<NonNullable<ToolRenderers["renderResult"]>>[0];
 type Theme = Parameters<NonNullable<ToolRenderers["renderResult"]>>[2];
 type RenderContext = Parameters<NonNullable<ToolRenderers["renderResult"]>>[3];
 
-/** Files under the home directory are also served by the local file server. */
-const PUBLIC_SERVER = "http://localhost:1002";
+/** Every image links to its own file, so opening it never depends on a server. */
 const HOME = homedir();
 
 type ImagePart = { type: "image"; data: string; mimeType?: string };
@@ -45,17 +44,6 @@ function expandHome(rawPath: string): string {
 	return rawPath;
 }
 
-function publicUrl(absolutePath: string): string | undefined {
-	const prefix = HOME.endsWith(sep) ? HOME : HOME + sep;
-	if (!absolutePath.startsWith(prefix)) return undefined;
-	const relativePath = absolutePath
-		.slice(prefix.length)
-		.split(sep)
-		.map((segment) => encodeURIComponent(segment))
-		.join("/");
-	return `${PUBLIC_SERVER}/${relativePath}`;
-}
-
 function describeImage(part: ImagePart, args: unknown, cwd: string, theme: Theme): string {
 	const mimeType = part.mimeType ?? "image/png";
 	const dimensions = getImageDimensions(part.data, mimeType) ?? undefined;
@@ -65,7 +53,7 @@ function describeImage(part: ImagePart, args: unknown, cwd: string, theme: Theme
 	const name = absolutePath ? basename(absolutePath) : mimeType.replace(/^image\//, "");
 
 	const label = theme.fg("accent", theme.underline(`${name}${size}`));
-	const url = absolutePath ? (publicUrl(absolutePath) ?? pathToFileURL(absolutePath).href) : undefined;
+	const url = absolutePath ? pathToFileURL(absolutePath).href : undefined;
 	if (!url) return label;
 	if (getCapabilities().hyperlinks) return hyperlink(`${label} ${theme.fg("muted", "↗")}`, url);
 	return `${label} ${theme.fg("muted", url)}`;
