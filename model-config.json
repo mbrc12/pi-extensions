@@ -3,7 +3,8 @@
     "home": {
       "allow": [
         "^opencode-go/.*$",
-        "^openai-codex/.*$"
+        "^openai-codex/.*$",
+        "^ollama/.*$"
       ],
       "defaultModel": "opencode-go/deepseek-v4.1-flash"
     },
