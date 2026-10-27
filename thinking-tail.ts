@@ -2,19 +2,26 @@
  * Thinking Tail Extension
  *
  * Shows the final five non-empty *displayed* lines of each thinking run in
- * Pi's native gray/italic thinking style on a colored background: light purple
- * inside the editor's integrated terminal, light gray everywhere else. Lines
- * are counted after word wrapping, so one long paragraph cannot fill the whole
- * fold, and the fold is rebuilt when the terminal width changes. Ctrl+O expands
- * the full thinking; Ctrl+O again returns to the tail. The tail updates as
- * thinking streams and is applied to restored historical messages too.
+ * Pi's native italic thinking style on a background taken from the active
+ * theme: the custom-message panel inside the editor's integrated terminal, and
+ * the pending-tool panel everywhere else. The collapsed tail uses the theme's
+ * main text colour for contrast; the expanded block keeps Pi's native muted
+ * thinking colour. Lines are counted after word wrapping, so one long paragraph
+ * cannot fill the whole fold, and the fold is rebuilt when the terminal width
+ * changes. Ctrl+O expands the full thinking; Ctrl+O again returns to the tail.
+ * The tail updates as thinking streams and is applied to restored historical
+ * messages too.
  */
 
 import {
   AssistantMessageComponent,
   truncateToVisualLines,
 } from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  Theme,
+  ThemeBg,
+} from "@earendil-works/pi-coding-agent";
 
 /** Number of non-empty displayed (wrapped) lines kept in the fold. */
 const TAIL_LINES = 5;
@@ -60,20 +67,28 @@ type ThinkingMarkdownLike = {
  */
 const IN_EDITOR_TERMINAL = process.env.TERM_PROGRAM === "vscode";
 
-// Backgrounds only; Pi's theme-controlled thinking text color stays unchanged.
-const EDITOR_THINKING_BACKGROUND = "\x1b[48;2;221;215;229m"; // #ddd7e5 lavender on the #d6d8df terminal background
-const DEFAULT_THINKING_BACKGROUND = "\x1b[48;2;224;224;224m"; // #e0e0e0 light gray
-const THINKING_BACKGROUND = IN_EDITOR_TERMINAL
-  ? EDITOR_THINKING_BACKGROUND
-  : DEFAULT_THINKING_BACKGROUND;
-const RESET_BACKGROUND = "\x1b[49m";
+// Backgrounds come from the active Pi theme, so the fold follows the selected
+// theme instead of carrying hard-coded ANSI colours.
+const EDITOR_THINKING_BACKGROUND_TOKEN: ThemeBg = "customMessageBg";
+const DEFAULT_THINKING_BACKGROUND_TOKEN: ThemeBg = "toolPendingBg";
+const THINKING_BACKGROUND_TOKEN = IN_EDITOR_TERMINAL
+  ? EDITOR_THINKING_BACKGROUND_TOKEN
+  : DEFAULT_THINKING_BACKGROUND_TOKEN;
 
 function thinkingBackground(text: string): string {
-  return `${THINKING_BACKGROUND}${text}${RESET_BACKGROUND}`;
+  return uiRef ? uiRef.theme.bg(THINKING_BACKGROUND_TOKEN, text) : text;
 }
 
-/** Add a full-width colored background to the native thinking Markdown. */
-function applyThinkingBackground(component: ComponentLike): void {
+/** Main text colour for the collapsed tail, which sits on a panel background. */
+function thinkingText(text: string): string {
+  return uiRef ? uiRef.theme.fg("text", text) : text;
+}
+
+/** Native thinking text colour, restored when Ctrl+O expands the block. */
+const originalThinkingColors = new WeakMap<object, unknown>();
+
+/** Add a full-width themed background and readable text to the thinking Markdown. */
+function applyThinkingStyle(component: ComponentLike): void {
   for (const child of component.contentContainer?.children ?? []) {
     // Pi wraps the thinking Markdown in a MouseRegion; look through it.
     const inner = (child as { child?: unknown }).child ?? child;
@@ -82,6 +97,15 @@ function applyThinkingBackground(component: ComponentLike): void {
     // Native thinking Markdown is the only assistant child with both styles.
     if (!style?.italic || !style.color) continue;
     style.bgColor = thinkingBackground;
+    if (currentExpanded) {
+      const original = originalThinkingColors.get(markdown);
+      if (original !== undefined) style.color = original;
+    } else {
+      if (!originalThinkingColors.has(markdown)) {
+        originalThinkingColors.set(markdown, style.color);
+      }
+      style.color = thinkingText;
+    }
     markdown.invalidate?.();
   }
 }
@@ -90,6 +114,7 @@ function applyThinkingBackground(component: ComponentLike): void {
 type StatusUI = {
   setStatus(key: string, text: string | undefined): void;
   getToolsExpanded(): boolean;
+  readonly theme: Theme;
 };
 
 /** Return true if an assistant message content array has thinking text. */
@@ -277,7 +302,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     originalUpdateContent.call(this, { ...message, content });
-    applyThinkingBackground(this);
+    applyThinkingStyle(this);
 
     // Critical: retain the raw message for invalidate(), theme changes, and
     // setExpanded(). Without this, Ctrl+O can only re-expand the tail itself.
