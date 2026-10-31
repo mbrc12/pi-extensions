@@ -22,10 +22,8 @@ symlink to this folder.
 | `tools/memory-store` | Persistent memory in SQLite with FTS5 search plus LLM rerank |
 | `tools/permissions` | Classifies and approves tool calls (`allow`, `classify`, `ask`) |
 | `tools/py-explore` | `py_explore` runs read-only Python, gated by deny-list and LLM check |
-| `tools/quiz` | `quiz` tool that grades an inline answer (currently unloaded) |
 | `tools/self_compact` | `self_compact` lets the model compact at a boundary it chooses, with a note |
 | `tools/task-backgrounder` | `task_start`/`status`/`stop`/`clear` run commands in detached tmux |
-| `tools/todo-list` | `todo` tool and `/todo-*` commands; optional per-turn injection (currently unloaded) |
 | `tools/web-use` | `web_use` search and fetch over DDG, Exa, and curl backends |
 | `agents/subagent` | `subagent` delegation in single, parallel, and chain modes |
 | `agents/background-subagent` | `background_subagent` runs one agent without blocking the caller |
@@ -38,10 +36,24 @@ symlink to this folder.
 | `session/cleanup` | `/cleanup` tells the model to stop and clean up session resources |
 | `session/exit-alias` | `/exit` alias for `/quit` |
 | `session/notify-on-idle` | Desktop notification when a turn ends, on shutdown, or on `prompt_wait` |
-| `session/recap` | "Now" and "Next" recap widget after 30s idle (currently unloaded) |
 | `session/rename` | `/rename [hint]` proposes session names from broadest to narrowest and asks you to pick one |
 | `shared/` | Imported helpers: model config, fast-mode, notification gate |
 | `model-config.json` | Model fallback lists and profiles used by the extensions above |
+
+## Disabled
+
+`extensions/disabled/` is the only disable mechanism. A file there is never loaded because no
+`package.json` lists it, and it stays in git so the reason survives a fresh checkout. To re-enable
+one, move it back into its topic folder and add it to that folder's `pi.extensions` array.
+
+- `disabled/notes.ts` — scratch notes panel; superseded by the memory store.
+- `disabled/plan-mode.ts` — deny-by-default plan mode; reference only, it imports a missing `./types`.
+- `disabled/plan-mode.test.ts` — tests for plan mode.
+- `disabled/quiet-tool-toggle.ts` — suppresses the "Tool output: expanded/collapsed" rows.
+- `disabled/quiz.ts` — `quiz` tool that grades an inline answer.
+- `disabled/recap.ts` — "Now" and "Next" recap widget after 30s idle.
+- `disabled/style-guard.ts` — rewrites dense final answers through a second pass.
+- `disabled/todo-list.ts` — `todo` tool and `/todo-*` commands with optional per-turn injection.
 
 - `multiagent` tries the configured capability models in order. It retries a failed request only before the operator has used any tools; otherwise it reports the failure without replaying the assignment.
 

@@ -20,7 +20,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { promptWait } from "../session/notify-on-idle";
-import { askViaUI, type ToolOption } from "./ask-question";
+import { askViaUI, type ToolOption } from "../tools/ask-question";
 
 function normalize(s: string, loose: boolean): string {
 	let out = s.trim().toLowerCase();

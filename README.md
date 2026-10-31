@@ -40,10 +40,10 @@ Pi reads resources from `~/.pi/agent`. Seven symlinks point at this repo:
 ## Extensions
 
 - Each subfolder has a `package.json` whose `pi.extensions` array lists the files to load.
-- Extensions in `extensions/disabled/` are not loaded. Renaming a file or folder is enough to
-  keep it out of the way.
-- `~/.pi/agent/settings.json` can also pin the list, and `!` excludes a file, for example
-  `"!extensions/tools/quiz.ts"`.
+- `extensions/disabled/` is the only way to disable an extension: move the file there and remove it
+  from its folder's `pi.extensions` array. Nothing there is listed by a manifest, so nothing loads.
+- Do not disable extensions through the `extensions` setting in `~/.pi/agent/settings.json`. That
+  file is not tracked here, so a `!` exclusion would not survive a fresh checkout.
 - `extensions/model-config.json` holds the model fallback lists used by `subagent`,
   `multiagent`, and the capability tiers.
 - Tests: run `bun test` from `extensions/`.
