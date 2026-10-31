@@ -82,7 +82,7 @@ loads from jsDelivr.
 ## Quick start
 
 ```bash
-S=~/.pi/agent/extensions/skills/hardbound/scripts
+S=~/.pi/agent/skills/hardbound/scripts
 
 # 1. Map the scan
 python3 $S/pdf_probe.py dump book.pdf --work /tmp/book

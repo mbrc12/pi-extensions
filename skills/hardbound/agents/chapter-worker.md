@@ -15,7 +15,7 @@ Convert chapter <N> of a scanned book into hardbound Markdown.
 
 ## Read first
 
-1. `~/.pi/agent/extensions/skills/hardbound/references/markdown.md` — the dialect.
+1. `~/.pi/agent/skills/hardbound/references/markdown.md` — the dialect.
 2. The exemplar chapter.
 
 ## Method

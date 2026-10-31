@@ -14,18 +14,37 @@ found there, fall back to `node_modules` (the built-in bundled extensions live u
 
 This ensures local user-level extensions take precedence over bundled or package-installed ones.
 
+## Layout of the user config
+
+The editable sources live in the repo at `~/dev/pi/`, and the agent directory links to them:
+
+| Agent directory entry | Points to |
+|---|---|
+| `~/.pi/agent/AGENTS.md` | `~/dev/pi/AGENTS.md` |
+| `~/.pi/agent/extensions` | `~/dev/pi/extensions` |
+| `~/.pi/agent/skills` | `~/dev/pi/skills` |
+| `~/.pi/agent/prompts` | `~/dev/pi/prompts` |
+| `~/.pi/agent/themes` | real directory, not in the repo |
+
+Edit files under `~/dev/pi`, never through the symlinks, and commit the change there.
+`~/.pi/agent/settings.json`, `auth.json`, and `mcp.json` stay in the agent directory.
+
 ## Skills location
 
-**Skills live in `~/.pi/agent/extensions/skills/<name>/`.** That path is registered in
-`~/.pi/agent/settings.json` under `"skills": ["extensions/skills"]`; nothing in
-`~/.pi/agent/skills/` is loaded unless the setting is changed.
+**Skills live in `~/.pi/agent/skills/<name>/`, a symlink to `~/dev/pi/skills/<name>/`.** This is
+pi's default skill directory, so `settings.json` needs no `skills` entry.
 
 - A skill is a directory with `SKILL.md` (YAML frontmatter: `name`, `description`) plus optional `references/`, `scripts/`, `assets/`, and `agents/`.
-- Install new skills by copying or cloning into `~/.pi/agent/extensions/skills/` — not into the npm package directory and not into `~/.pi/agent/skills/`.
-- Bundled skills under the npm package are read-only; extend behaviour by adding a skill in the user directory that wraps or overrides it.
+- Add a new skill by creating `~/dev/pi/skills/<name>/SKILL.md`. The agent directory picks it up through the symlink.
+- Bundled skills under the npm package are read-only; extend behaviour with a user skill that wraps or overrides it.
 - When a downloaded skill is a repository with many skills, copy only the subdirectory you need.
 - Check what loaded: the skill's `name` and `description` appear in the available-skills list; a malformed `SKILL.md` is skipped with a warning at startup.
 - Write descriptions that say both what the skill does and when it applies. Vague descriptions such as "Helps with PDFs" do not route.
+
+## Extensions location
+
+Extension code lives in `~/dev/pi/extensions/`, linked from `~/.pi/agent/extensions`. Its history
+comes from the `pi-extensions` repo, imported under the `extensions/` prefix.
 
 ## Prompt templates
 
