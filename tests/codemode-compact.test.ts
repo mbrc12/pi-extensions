@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 const tui = await import("/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js");
 mock.module("@earendil-works/pi-tui", () => tui);
 mock.module("@earendil-works/pi-coding-agent", () => ({ keyHint: (_key: string, description: string) => `Ctrl-O ${description}` }));
-const { default: register } = await import("../codemode-compact.ts");
+const { default: register } = await import("../tui/codemode-compact.ts");
 
 const theme: any = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 function harness(native?: any) {

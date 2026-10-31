@@ -43,12 +43,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { subagentEnvironment } from "../shared/fast-mode.ts";
+import { subagentEnvironment } from "../../shared/fast-mode.ts";
 import {
 	completeWithModelFallback,
 	getSubagentModelFallbacks,
 	type SubagentCapability,
-} from "../shared/model-config.ts";
+} from "../../shared/model-config.ts";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 
 const MAX_PARALLEL_TASKS = 16;

@@ -2,125 +2,63 @@
 
 Custom extensions for [pi](https://pi.dev/).
 
-## Extensions
+## Layout
 
-### `background-subagent`
+```text
+extensions/
+├── tui/        terminal presentation: rendering, statusline, spinner, theme
+├── tools/      tools, commands, and the guards around them
+├── agents/     subagent delegation
+├── models/     provider, model-profile, and usage configuration
+├── session/    session lifecycle, notifications, and export-style actions
+├── shared/     imported helper modules (not an extension)
+├── skills/     skills registered in settings.json
+├── disabled/   parked extensions that are not loaded
+├── tests/      bun tests for the extensions above
+├── model-config.json
+└── README.md
+```
 
-Adds `background_subagent` to start one specialized agent without blocking the caller. It uses the same agent discovery, model fallbacks, strength, and wise-context behavior as `subagent`. The result (or failure) is stored in the session and delivered as a visible message; a hidden follow-up wakes the main agent.
+| Folder | Extensions |
+|---|---|
+| `tui/` | `code-block-box`, `codemode-compact`, `image-links`, `minimal-tools`, `odin-highlight`, `prompt-prefix`, `statusline`, `thinking-tail`, `vscode-theme`, `working-indicator` |
+| `tools/` | `ask-question`, `context`, `export-md`, `memory-store`, `permissions`, `py-explore`, `quiz`, `self_compact`, `task-backgrounder`, `todo-list`, `web-use` |
+| `agents/` | `background-subagent`, `subagent` |
+| `models/` | `codex-account-alias`, `fast`, `profile`, `provider-status`, `tool-summary` |
+| `session/` | `cleanup`, `exit-alias`, `notify-on-idle`, `recap` |
 
-`background_subagent_status` lists tracked jobs when called without a name. With a name, it shows a live snapshot: elapsed time, phase, model, turns, cost, recent tool calls and results, and the latest assistant text (not private thinking). Use `/background-subagent-status [name]` to inspect a job directly in the TUI; omit the name to choose from a list. The statusline's third line shows `⏳ sub <running count> · <latest elapsed time>` while jobs run and removes it when they finish. Progress is not injected into the main conversation; only the final result is. Completion messages show a compact status line by default; press `Ctrl+O` to expand the full answer and press it again to collapse. This changes only the display—the model still receives the full result. Use `background_subagent_stop` to cancel a running job.
+### How the groups load
 
-Project-local agents require confirmation by default. A Pi reload or session switch interrupts in-process agents; the next session start reports the interruption. Unlike `task_start`, background subagents do not survive a Pi restart.
+- Pi discovers `extensions/*.ts` files and one level of subdirectories. A subdirectory needs an entry point: an `index.ts`, or a `package.json` with a `pi.extensions` list.
+- Each group folder has that `package.json`, listing its members. Every member still loads as its own extension, so no group shares a runtime, a load error, or a reload.
+- Two extensions stay excluded in `~/.pi/agent/settings.json`: `!extensions/tools/quiz.ts` and `!extensions/session/recap.ts`.
+- `shared/` has no entry point and is imported by relative path, for example `../shared/model-config.ts`. `model-config.json` stays in the extensions root because `shared/model-config.ts` reads it from there.
 
-### `context`
-
-Adds `context_recall` for searching and reading original messages on the active session branch, including messages no longer sent to the model after compaction. Its result display is compact by default; use `Ctrl+O` to expand or collapse the full result. Search is case-insensitive literal text and returns eight short results per page; reads are limited to 8,000 characters per call with an offset for the rest. It excludes system messages, private assistant thinking, and image data. It does not change Pi's built-in compaction or store another copy of the session.
-
-### `cleanup`
-
-Registers `/cleanup`, which sends the model a hidden comprehensive instruction to stop active processing and clean up session-related local and cloud resources. It steers the current turn when the agent is busy and does not directly execute cleanup actions.
-
-### `ask-question`
-
-Adds an `ask_question` tool that renders an interactive TUI dialog. Supports single-choice (radio), multiple-choice (checkboxes), and free-text input. Emits a `prompt_wait` notification when the UI opens and aborts the turn on cancel.
+## `tui/` — terminal presentation
 
 ### `code-block-box`
 
 Renders fenced code in assistant messages as one single-line Unicode box-drawing frame with a borderless language label set into its top border. Code lines are numbered and separated by a vertical gutter; long unbroken lines wrap within the frame without overflowing the terminal. Use `/code-block-box off` to restore Pi's native rendering for the session, or `/code-block-box on` to re-enable it.
 
-### `codex-account-alias`
+### `codemode-compact`
 
-Registers `openai-codex-2` as a second independent Codex OAuth provider. It reuses Pi's built-in Codex models and request implementation while keeping a separate credential under the alias provider ID. It does not perform account rotation or automatic failover.
+Compacts the `codemode` tool presentation. Collapsed, it shows the call list, status, and elapsed time with no JavaScript source and no result dump: one physical line per call, bounded to the most recent calls, with a failure count when the rest do not fit. Expanding with `Ctrl+O` delegates to Pi's native rendering and returns to the compact view on the next toggle.
 
-### `exit-alias`
+### `image-links`
 
-Registers `/exit` as a shorthand alias for `/quit`.
-
-### `fast`
-
-Registers `/fast` to toggle OpenAI priority processing for the current session. Use `/fast on`, `/fast off`, or `/fast status` for an explicit action. The setting applies to direct OpenAI and OpenAI Codex providers, including numbered Codex account aliases, and survives session reloads and branching. Subagents inherit it only when their selected model uses `openai-codex` or a numbered alias such as `openai-codex-2`; other subagent providers do not receive the setting. Priority processing may use paid API capacity or plan credits faster.
+Adds a clickable link to every image a tool returns, sized from the image dimensions. Pi draws images inline only when the terminal supports it, and tmux drops those escape sequences, so an image can otherwise arrive with no visible trace. The link works in any terminal and survives scrolling.
 
 ### `minimal-tools`
 
 Compact TUI rendering for all built-in tools — truncated commands for bash, just the path for read/write/edit. Uses `renderShell: "self"` to minimize padding.
 
-### `notify-on-idle`
-
-Sends a desktop notification when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. It uses cmux’s native notification CLI inside cmux so unfocused tabs play the configured sound, with terminal bell, OSC sequences, and Windows toast fallbacks for other terminals.
-
 ### `odin-highlight`
 
-Adds Odin syntax highlighting for fenced code blocks tagged `odin` (assistant messages and `code-block-box`). Pi bundles a fixed highlight.js language set with no API to add grammars, so the extension locates the bundled chunk that owns the shared highlight.js core and registers a vendored `highlightjs-odinlang` grammar on that same instance. `.odin` file paths stay unhighlighted (pi’s path-to-language table is closed), as does exported HTML (it re-highlights in the browser from its own bundled highlight.js copy).
-
-### `provider-status`
-
-Adds provider-specific limits to the statusline. Two adapters are available:
-
-- `openai-codex` and numbered aliases such as `openai-codex-2`: each 5-hour or 7-day window as its remaining percentage and reset countdown.
-- `opencode-go`: the rolling 5-hour, weekly, and monthly Go plan windows, read from `https://opencode.ai/zen/go/v1/usage` with the stored API key.
-
-Usage refreshes every five minutes, while countdowns update every minute. Run `/provider-status` to force a detailed refresh.
-
-### `py-explore`
-
-Adds a `py_explore` tool for running read-only/exploratory Python scripts.
-
-- Use it for quick data inspection, polars/pandas/numpy exploration, and small read-only transformations.
-- Prefer it over Python heredocs or `python -c` via `bash` for read-only scripts.
-- Prefers the interpreter from `uv python find --no-python-downloads` and falls back to the system Python if uv is unavailable or invalid.
-- Collapses submitted code and output by default; use `Ctrl+O` to expand both.
-- Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
-- Also registers `/py-explore-test` to tune the LLM write-check prompt against a built-in test suite.
-
-### `profile`
-
-Adds `/profile` to limit model use in the current session. Run `/profile` to choose a profile, or use `/profile <name>` directly. Each profile has an `allow` list of JavaScript regular expressions matched against the full `provider/model-id` string. It also has a `defaultModel`. Selecting a profile switches the main session to that model.
-
-The profile scopes Pi's model picker to the allowed models, so the picker opens in its `scoped` view, and it scopes model cycling. Press Tab in the picker to switch to the `all` view, which lists every model with credentials; the profile still blocks selecting one of those. It also filters every fallback list read through `shared/model-config.ts`, including subagents, summaries, web extraction, permission checks, and Python write checks. These background operations still use their own model-config entries; they do not use the profile's default model. Spawned subagents inherit the active filter while preserving the model selected for their capability tier. If the session already has a model scope, the profile is applied as an additional filter. When `/fast` is enabled in the caller, a subagent attempt inherits priority processing only if its selected provider is `openai-codex` or a numbered alias such as `openai-codex-2`.
-
-The selected profile is stored in the session and restored on resume. New sessions start with `home`. Choosing a profile also records it against the current working directory in `profile-directories.json`, so the next session started in that directory uses the same profile. Profiles are configured under `profiles` in `model-config.json`. At startup, the extension checks every profile's regular expressions and default model. It also checks that every shared model category and each subagent capability tier has at least one allowed model in Pi's model catalog. Invalid profiles are reported and cannot be activated.
+Adds Odin syntax highlighting for fenced code blocks tagged `odin` (assistant messages and `code-block-box`). Pi bundles a fixed highlight.js language set with no API to add grammars, so the extension locates the bundled chunk that owns the shared highlight.js core and registers a vendored `highlightjs-odinlang` grammar on that same instance. `.odin` file paths stay unhighlighted (pi's path-to-language table is closed), as does exported HTML (it re-highlights in the browser from its own bundled highlight.js copy). The grammar ships beside the extension in `tui/odin-grammar.cjs`.
 
 ### `prompt-prefix`
 
 Adds a `»` prefix before the editor prompt to visually distinguish it from assistant output.
-
-### `recap`
-
-Shows a small recap widget after 30 seconds without user input, then hides it as soon as the user types again. The recap gives a brief "Now" summary and "Next" suggestion. Toggle/show with `/recap`, `/recap on`, or `/recap off`.
-
-### `self_compact`
-
-Adds a `self_compact` tool that lets the model compact the context at a natural boundary it chooses. The model passes a note to its future self; Pi compacts at the end of that turn using its normal summarization, then delivers the note as the first message of the new context. Because the summary can drop details, the note is the model's only carry-over, so it should hold the goal, decisions, and next steps. The full history stays stored and searchable with the `context_recall` tool. A user interrupt during the turn or the compaction cancels the note, so interrupted work never silently starts a new turn. If a resumed session's transcript predates the extension, the tool re-activates itself on the next prompt so older sessions gain it too.
-
-Two extras keep the model informed about its budget:
-
-- `status: true` reports the current context usage (for example `92% of 200k tokens (184k used)`), the alert threshold, and whether a compaction is already queued. It schedules nothing, so the model can check the room left before it decides.
-- When a turn ends with usage at or above the threshold and no compaction queued, the extension sends the model an alert with a turn trigger, so the model can write a note before Pi's own silent automatic compaction drops details. On a 200k-token window Pi's own threshold is about 91.8%, so the default 90% alert lands just before it. The alert fires once per high-usage episode and re-arms only after usage falls 10 points below the threshold, which prevents a notification loop.
-
-### Setting the threshold
-
-The alert threshold defaults to 90% and is held in memory for the running Pi process.
-
-| Command | Effect |
-|---|---|
-| `/self_compact` | Show the current threshold |
-| `/self_compact 85` | Alert at 85% usage (any whole number from 1 to 100) |
-| `/self_compact off` | Disable the alert |
-| `/self_compact on` | Restore the 90% default |
-
-The value survives new sessions in the same Pi process and reverts to 90% when Pi restarts or the extensions reload. There is no settings file, because Pi gives extensions no way to write settings and a single preference does not justify a file of its own. Edit the `notifyPercent` variable in `self_compact.ts` to change the built-in default.
-
-### `permissions`
-
-Intercepts tool calls and classifies them before execution. Emits `prompt_wait` before approval dialogs. Three modes:
-
-| Mode | Behavior |
-|---|---|
-| `allow` | Everything passes through |
-| `classify` | Two-stage: rule-based → LLM → prompt user |
-| `ask` | Every tool call prompts for confirmation |
-
-Plan mode is disabled. Permission controls remain available through `/permissions allow|classify|ask` and the `F8` shortcut.
 
 ### `statusline`
 
@@ -137,6 +75,156 @@ The `tok/s` item shows output speed in tokens per second as an exponential movin
 Costs use US dollars by default. Use `/rupees on` to replace the USD cost with INR and `/rupees off` to switch back to USD.
 
 Toggle with `/statusline`.
+
+### `thinking-tail`
+
+Collapses long thinking blocks to the last 5 non-empty *displayed* lines, so one long paragraph cannot fill the whole fold and the newest text stays visible. Lines are counted after word wrapping, and the fold is rebuilt when the terminal width changes. Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
+
+### `vscode-theme`
+
+Switches pi to a different theme inside a VS Code or VSCodium integrated terminal, keyed off `TERM_PROGRAM=vscode`. The global `theme` setting is never modified, so pi keeps its configured theme in every other terminal. A runtime theme is not re-resolved when the terminal reports new colors, so restart pi after switching the editor's theme.
+
+### `working-indicator`
+
+Replaces the default working loader with a ping-pong dots spinner, 200 randomly selected deadpan technical excuses, live tool activity, and elapsed time. Consecutive fallback messages never repeat.
+
+## `tools/` — model and user tools
+
+### `ask-question`
+
+Adds an `ask_question` tool that renders an interactive TUI dialog. Supports single-choice (radio), multiple-choice (checkboxes), and free-text input. Emits a `prompt_wait` notification when the UI opens and aborts the turn on cancel.
+
+### `context`
+
+Adds `context_recall` for searching and reading original messages on the active session branch, including messages no longer sent to the model after compaction. Its result display is compact by default; use `Ctrl+O` to expand or collapse the full result. Search is case-insensitive literal text and returns eight short results per page; reads are limited to 8,000 characters per call with an offset for the rest. It excludes system messages, private assistant thinking, and image data. It does not change Pi's built-in compaction or store another copy of the session.
+
+### `export-md`
+
+Registers `/export-md [file]`, which writes the active session branch as a readable Markdown transcript: user and assistant messages as headings, tool results in fenced code blocks, and toggle notes for compaction, branch summaries, and model changes. Without an argument it picks a default path under the home directory.
+
+### `memory-store`
+
+Persistent memory in one SQLite file (`node:sqlite`, WAL, `busy_timeout`), with in-process LLM calls only — no child pi processes and no auth stripping. Search uses FTS5 keyword matching and then an LLM rerank of ids. There is no system-prompt injection; standing context belongs in `AGENTS.md`.
+
+| Capability | Kind |
+|---|---|
+| `memory_search` | tool |
+| `memory_add` | tool |
+| `memory_update` | tool |
+| `memory_remove` | tool |
+| `/memory-search`, `/memory-list`, `/memory-stats`, `/memory-health` | commands |
+
+It acts on `message_end` (user turns), `turn_end` (background review on turn and tool-call thresholds), `session_before_compact` (flush pending memories), and `session_shutdown` (flush and close the database). Configuration and layout notes live in `tools/memory-store/README.md`.
+
+### `permissions`
+
+Intercepts tool calls and classifies them before execution. Emits `prompt_wait` before approval dialogs. Three modes:
+
+| Mode | Behavior |
+|---|---|
+| `allow` | Everything passes through |
+| `classify` | Two-stage: rule-based → LLM → prompt user |
+| `ask` | Every tool call prompts for confirmation |
+
+Plan mode is disabled. Permission controls remain available through `/permissions allow|classify|ask` and the `F8` shortcut.
+
+### `py-explore`
+
+Adds a `py_explore` tool for running read-only/exploratory Python scripts.
+
+- Use it for quick data inspection, polars/pandas/numpy exploration, and small read-only transformations.
+- Prefer it over Python heredocs or `python -c` via `bash` for read-only scripts.
+- Prefers the interpreter from `uv python find --no-python-downloads` and falls back to the system Python if uv is unavailable or invalid.
+- Collapses submitted code and output by default; use `Ctrl+O` to expand both.
+- Code is gated by a regex deny-list and a cheap LLM check that blocks writes, deletes, moves, copies, and destructive subprocesses.
+- Also registers `/py-explore-test` to tune the LLM write-check prompt against a built-in test suite.
+
+### `quiz`
+
+Adds a `quiz` tool that asks the user a question with a known correct answer and grades it inline in the terminal. The UI is the same interactive component as `ask_question`, so it is useful for testing the dialog itself. Answer grading uses the `correct` field the model supplies. Currently excluded from loading in `settings.json`.
+
+### `self_compact`
+
+Adds a `self_compact` tool that lets the model compact the context at a natural boundary it chooses. The model passes a note to its future self; Pi compacts at the end of that turn using its normal summarization, then delivers the note as the first message of the new context. Because the summary can drop details, the note is the model's only carry-over, so it should hold the goal, decisions, and next steps. The full history stays stored and searchable with the `context_recall` tool. A user interrupt during the turn or the compaction cancels the note, so interrupted work never silently starts a new turn. If a resumed session's transcript predates the extension, the tool re-activates itself on the next prompt so older sessions gain it too.
+
+Two extras keep the model informed about its budget:
+
+- `status: true` reports the current context usage (for example `92% of 200k tokens (184k used)`), the alert threshold, and whether a compaction is already queued. It schedules nothing, so the model can check the room left before it decides.
+- When a turn ends with usage at or above the threshold and no compaction queued, the extension sends the model an alert with a turn trigger, so the model can write a note before Pi's own silent automatic compaction drops details. On a 200k-token window Pi's own threshold is about 91.8%, so the default 90% alert lands just before it. The alert fires once per high-usage episode and re-arms only after usage falls 10 points below the threshold, which prevents a notification loop.
+
+#### Setting the threshold
+
+The alert threshold defaults to 90% and is held in memory for the running Pi process.
+
+| Command | Effect |
+|---|---|
+| `/self_compact` | Show the current threshold |
+| `/self_compact 85` | Alert at 85% usage (any whole number from 1 to 100) |
+| `/self_compact off` | Disable the alert |
+| `/self_compact on` | Restore the 90% default |
+
+The value survives new sessions in the same Pi process and reverts to 90% when Pi restarts or the extensions reload. There is no settings file, because Pi gives extensions no way to write settings and a single preference does not justify a file of its own. Edit the `notifyPercent` variable in `tools/self_compact.ts` to change the built-in default.
+
+### `task-backgrounder`
+
+Runs shell commands in detached tmux sessions and reports when they finish. Full details are in `tools/task-backgrounder/README.md`.
+
+| Capability | Kind |
+|---|---|
+| `task_start` | tool |
+| `task_status` | tool |
+| `task_stop` | tool |
+| `task_clear` | tool |
+| `/task-status`, `/task-stop`, `/task-clear`, `/task-list` | commands |
+
+One durable message is injected per terminal state, plus a hidden follow-up that wakes the agent. There is no progress spam while a task runs. `task_clear` deletes the `/tmp` log and script files, and `include_running` stops running tasks first. Unlike background subagents, tasks survive a Pi restart because tmux owns them.
+
+### `todo-list`
+
+A simplified plan-mode todo list. Registers a `todo` tool (list/add/complete/clear), a `/todo-clear` command, and a `/todo-inject on|off` toggle.
+
+The extension does not manage or push the model. One `promptGuidelines` line tells it to update the list as appropriate when one exists. There is no watchdog, no auto-continue, and no `agent_end` nudge; the model decides when to yield.
+
+Optional `before_agent_start` injection adds the current todos to the model context each turn. It is off by default. Use `/todo-inject on` to enable it and `/todo-inject off` to disable it for the current session. When injection is on, the existing todo status shows `📌`; when it is off, the status has no injection marker.
+
+`clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. Tool actions store state in tool-result details. User commands store state as custom session entries. State is reconstructed from the session branch, so settings survive resume and branching keeps the correct state.
+
+Todo mutations are hidden from the transcript (`renderShell/renderCall/renderResult: Container`) so the todo widget and `/todos` command remain the user-facing interface.
+
+### `web-use`
+
+Adds a `web_use` tool for search and fetch, implemented in TypeScript in `tools/web-use/web.ts`:
+
+| Mode | Description |
+|---|---|
+| `search` | Search the web via Exa, return titles/URLs/descriptions |
+| `fetch` | Fetch a URL and extract the important text |
+| `full` | Fetch the raw HTML of a page via curl (8 KB preview in output) |
+
+Backend order lives at the top of `tools/web-use/web.ts`. Swap or drop entries in these two arrays to change which backend runs first; a request tries them left to right until one succeeds.
+
+| Constant | Default | Order |
+|---|---|---|
+| `SEARCH_BACKENDS` | `["ddg", "exa"]` | DuckDuckGo, then Exa |
+| `FETCH_BACKENDS` | `["curl", "exa"]` | curl, then Exa |
+
+The backends:
+
+- `ddg` — DuckDuckGo's no-JS endpoint at `https://html.duckduckgo.com/html/`. DuckDuckGo gates its JS result payload (`links.duckduckgo.com/d.js`) behind an anti-bot challenge, so that route returns an anomaly page; the HTML endpoint still answers a browser-like GET.
+- `exa` — keyless Exa MCP (`https://mcp.exa.ai/mcp`) for search and fetch. Set `EXA_API_KEY` to send `x-api-key` and lift the free-plan rate limits, or `EXA_MCP_URL` to point at another endpoint.
+- `curl` — plain page fetch, with the text extracted by the HTML parser in the same file.
+
+Model selection for summarization is configurable via `model-config.json` (`webSummarization`).
+
+## `agents/` — subagent delegation
+
+### `background-subagent`
+
+Adds `background_subagent` to start one specialized agent without blocking the caller. It uses the same agent discovery, model fallbacks, strength, and wise-context behavior as `subagent`. The result (or failure) is stored in the session and delivered as a visible message; a hidden follow-up wakes the main agent.
+
+`background_subagent_status` lists tracked jobs when called without a name. With a name, it shows a live snapshot: elapsed time, phase, model, turns, cost, recent tool calls and results, and the latest assistant text (not private thinking). Use `/background-subagent-status [name]` to inspect a job directly in the TUI; omit the name to choose from a list. The statusline's third line shows `⏳ sub <running count> · <latest elapsed time>` while jobs run and removes it when they finish. Progress is not injected into the main conversation; only the final result is. Completion messages show a compact status line by default; press `Ctrl+O` to expand the full answer and press it again to collapse. This changes only the display—the model still receives the full result. Use `background_subagent_stop` to cancel a running job.
+
+Project-local agents require confirmation by default. A Pi reload or session switch interrupts in-process agents; the next session start reports the interruption. Unlike `task_start`, background subagents do not survive a Pi restart.
 
 ### `subagent`
 
@@ -222,21 +310,40 @@ The `agentScope` param controls where agents are loaded from:
 
 Project-local agents require user confirmation by default (`confirmProjectAgents`). Subagent tool-result details include per-task usage stats (tokens, cost, turns), the first-chosen and reported model, the models tried, and the run duration. The statusline aggregates subagent cost into the total.
 
-Subagent progress summaries are disabled. Their generation, activation, and rendering code remains commented in `subagent/index.ts` so it can be restored later.
+Subagent progress summaries are disabled. Their generation, activation, and rendering code remains commented in `agents/subagent/index.ts` so it can be restored later.
 
-### `thinking-tail`
+## `models/` — providers, profiles, and usage
 
-Collapses long thinking blocks to the last 5 non-empty *displayed* lines, so one long paragraph cannot fill the whole fold and the newest text stays visible. Lines are counted after word wrapping, and the fold is rebuilt when the terminal width changes. Ctrl+O expands the full thinking run; pressing it again re-collapses. The tail updates live as thinking streams and is applied to restored historical messages on reload. Preserves Pi's native `type="thinking"` rendering throughout.
+### `codex-account-alias`
 
-### `working-indicator`
+Registers `openai-codex-2` as a second independent Codex OAuth provider. It reuses Pi's built-in Codex models and request implementation while keeping a separate credential under the alias provider ID. It does not perform account rotation or automatic failover.
 
-Replaces the default working loader with a ping-pong dots spinner, 200 randomly selected deadpan technical excuses, live tool activity, and elapsed time. Consecutive fallback messages never repeat.
+### `fast`
+
+Registers `/fast` to toggle OpenAI priority processing for the current session. Use `/fast on`, `/fast off`, or `/fast status` for an explicit action. The setting applies to direct OpenAI and OpenAI Codex providers, including numbered Codex account aliases, and survives session reloads and branching. Subagents inherit it only when their selected model uses `openai-codex` or a numbered alias such as `openai-codex-2`; other subagent providers do not receive the setting. Priority processing may use paid API capacity or plan credits faster.
+
+### `profile`
+
+Adds `/profile` to limit model use in the current session. Run `/profile` to choose a profile, or use `/profile <name>` directly. Each profile has an `allow` list of JavaScript regular expressions matched against the full `provider/model-id` string. It also has a `defaultModel`. Selecting a profile switches the main session to that model.
+
+The profile scopes Pi's model picker to the allowed models, so the picker opens in its `scoped` view, and it scopes model cycling. Press Tab in the picker to switch to the `all` view, which lists every model with credentials; the profile still blocks selecting one of those. It also filters every fallback list read through `shared/model-config.ts`, including subagents, summaries, web extraction, permission checks, and Python write checks. These background operations still use their own model-config entries; they do not use the profile's default model. Spawned subagents inherit the active filter while preserving the model selected for their capability tier. If the session already has a model scope, the profile is applied as an additional filter. When `/fast` is enabled in the caller, a subagent attempt inherits priority processing only if its selected provider is `openai-codex` or a numbered alias such as `openai-codex-2`.
+
+The selected profile is stored in the session and restored on resume. New sessions start with `home`. Choosing a profile also records it against the current working directory in `profile-directories.json`, so the next session started in that directory uses the same profile. Profiles are configured under `profiles` in `model-config.json`. At startup, the extension checks every profile's regular expressions and default model. It also checks that every shared model category and each subagent capability tier has at least one allowed model in Pi's model catalog. Invalid profiles are reported and cannot be activated.
+
+### `provider-status`
+
+Adds provider-specific limits to the statusline. Two adapters are available:
+
+- `openai-codex` and numbered aliases such as `openai-codex-2`: each 5-hour or 7-day window as its remaining percentage and reset countdown.
+- `opencode-go`: the rolling 5-hour, weekly, and monthly Go plan windows, read from `https://opencode.ai/zen/go/v1/usage` with the stored API key.
+
+Usage refreshes every five minutes, while countdowns update every minute. Run `/provider-status` to force a detailed refresh.
 
 ### `tool-summary`
 
 Shows one compact, muted line after each turn that uses tools: `Tool: <summary>`. The italic ASD-STE100 text prefers a few words over a full sentence and focuses on tool actions and key results. It keeps the conversation context in mind without summarizing overall progress or repeating an obvious file name from the tool call.
 
-The extension immediately reserves one transcript position after the turn's tool calls with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Any turn that uses `todo` gets no summary, even if it also uses other tools. The blacklist in `tool-summary.ts` omits `ask_question` and `web_use` from summaries; turns containing only blacklisted tools also produce no summary. Toggle summaries for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
+The extension immediately reserves one transcript position after the turn's tool calls with `Tool: Summarizing…`, then replaces that text in place when asynchronous generation finishes. It never blocks the main agent loop or the next tool. Summaries are stored as custom session entries and never enter the main model's context. Any turn that uses `todo` gets no summary, even if it also uses other tools. The blacklist in `models/tool-summary.ts` omits `ask_question` and `web_use` from summaries; turns containing only blacklisted tools also produce no summary. Toggle summaries for the current session with `/tool-summary on` or `/tool-summary off`; the setting survives reloads within that session.
 
 Each stored resolution entry also records the provider and model that produced the summary, such as `opencode-go/mimo-v2.5`, so a session can be audited for the model that really answered.
 
@@ -244,46 +351,27 @@ Run `/tool-summary-model` to probe the configured fallback list. It sends one mi
 
 Summary generation asks OpenCode models to answer without reasoning. `mimo-v2.5` otherwise spends 700–1750 tokens reasoning about a one-line summary, and a small token cap is then consumed before it writes any text, so the selector treats the response as empty and moves to the next model. The request allows 1024 output tokens so a reasoning fallback model still fits. For the same reason the `toolSummaryGeneration` list is short: `opencode-go/mimo-v2.5`, then the two Codex Luna accounts.
 
-### `todo-list`
+## `session/` — lifecycle and notifications
 
-A simplified plan-mode todo list. Registers a `todo` tool (list/add/complete/clear), a `/todo-clear` command, and a `/todo-inject on|off` toggle.
+### `cleanup`
 
-The extension does not manage or push the model. One `promptGuidelines` line tells it to update the list as appropriate when one exists. There is no watchdog, no auto-continue, and no `agent_end` nudge; the model decides when to yield.
+Registers `/cleanup`, which sends the model a hidden comprehensive instruction to stop active processing and clean up session-related local and cloud resources. It steers the current turn when the agent is busy and does not directly execute cleanup actions.
 
-Optional `before_agent_start` injection adds the current todos to the model context each turn. It is off by default. Use `/todo-inject on` to enable it and `/todo-inject off` to disable it for the current session. When injection is on, the existing todo status shows `📌`; when it is off, the status has no injection marker.
+### `exit-alias`
 
-`clear` is guarded: blocked while incomplete todos remain, allowed once all are done. Users can force-clear anytime via `/todo-clear`. Tool actions store state in tool-result details. User commands store state as custom session entries. State is reconstructed from the session branch, so settings survive resume and branching keeps the correct state.
+Registers `/exit` as a shorthand alias for `/quit`.
 
-Todo mutations are hidden from the transcript (`renderShell/renderCall/renderResult: Container`) so the todo widget and `/todos` command remain the user-facing interface.
+### `notify-on-idle`
 
-### `web-use`
+Sends a desktop notification when the agent finishes a turn, the session shuts down, or a `prompt_wait` event fires. It uses cmux's native notification CLI inside cmux so unfocused tabs play the configured sound, with terminal bell, OSC sequences, and Windows toast fallbacks for other terminals.
 
-Adds a `web_use` tool for search and fetch, implemented in TypeScript in `web-use/web.ts`:
+### `recap`
 
-| Mode | Description |
-|---|---|
-| `search` | Search the web via Exa, return titles/URLs/descriptions |
-| `fetch` | Fetch a URL and extract the important text |
-| `full` | Fetch the raw HTML of a page via curl (8 KB preview in output) |
-
-Backend order lives at the top of `web-use/web.ts`. Swap or drop entries in these two arrays to change which backend runs first; a request tries them left to right until one succeeds.
-
-| Constant | Default | Order |
-|---|---|---|
-| `SEARCH_BACKENDS` | `["ddg", "exa"]` | DuckDuckGo, then Exa |
-| `FETCH_BACKENDS` | `["curl", "exa"]` | curl, then Exa |
-
-The backends:
-
-- `ddg` — DuckDuckGo's no-JS endpoint at `https://html.duckduckgo.com/html/`. DuckDuckGo gates its JS result payload (`links.duckduckgo.com/d.js`) behind an anti-bot challenge, so that route returns an anomaly page; the HTML endpoint still answers a browser-like GET.
-- `exa` — keyless Exa MCP (`https://mcp.exa.ai/mcp`) for search and fetch. Set `EXA_API_KEY` to send `x-api-key` and lift the free-plan rate limits, or `EXA_MCP_URL` to point at another endpoint.
-- `curl` — plain page fetch, with the text extracted by the HTML parser in the same file.
-
-Model selection for summarization is configurable via `model-config.json` (`webSummarization`).
+Shows a small recap widget after 30 seconds without user input, then hides it as soon as the user types again. The recap gives a brief "Now" summary and "Next" suggestion. Toggle/show with `/recap`, `/recap on`, or `/recap off`. Currently excluded from loading in `settings.json`.
 
 ---
 
-## Shared Modules
+## Shared modules
 
 ### `shared/model-config.ts`
 
@@ -306,3 +394,19 @@ Managed via `model-config.json` in the extensions root.
 The shared selector also adds the `x-opencode-session` and `x-opencode-client` headers for OpenCode-hosted models. Pi adds these only inside its own agent loop; extension requests call the model registry directly, and the OpenCode gateway rejects them with `MissingSessionID` without the headers. Every purpose list that starts with an `opencode-go` model needs this, or the first candidate fails and the request silently falls through to the next model. Pass `onCandidateFailure` to a completion call to see those failures.
 
 Set `disableReasoning` in the same options to send `reasoning_effort: "none"` for OpenCode-hosted models. Other providers reject that value, as do OpenCode's own `minimax-m2.7` and `glm-5.3`, so keep it off for any purpose list that contains them.
+
+### `shared/fast-mode.ts` and `shared/notification-gate.ts`
+
+Small helpers shared by several groups. `fast-mode.ts` decides which providers accept OpenAI priority processing, including numbered Codex aliases. `notification-gate.ts` holds completion and self-compaction notices until Pi is idle and any compaction has finished, so a message cannot be injected mid-compaction.
+
+---
+
+## Tests
+
+`tests/` holds bun tests for the extensions that have behaviour worth pinning down:
+
+```sh
+cd ~/.pi/agent/extensions && bun test
+```
+
+One known failure exists in the full run: `tests/codemode-compact.test.ts` passes alone but fails inside the suite, because an earlier file's `mock.module` of `@earendil-works/pi-tui` leaks into the shared bun process. Run that file on its own when changing it. `disabled/plan-mode.test.ts` is a standalone script, not a bun test, and is expected to report separately.

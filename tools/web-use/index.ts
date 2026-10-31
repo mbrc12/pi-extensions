@@ -2,7 +2,7 @@ import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { completeWithModelFallback } from "../shared/model-config.ts";
+import { completeWithModelFallback } from "../../shared/model-config.ts";
 import { curlFetchFull, runFetch, runSearch } from "./web.ts";
 
 const WebUseParams = Type.Object({

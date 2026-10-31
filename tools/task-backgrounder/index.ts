@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createNotificationGate } from "../shared/notification-gate.ts";
+import { createNotificationGate } from "../../shared/notification-gate.ts";
 import { access, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { Type, type Static } from "typebox";
 import { Container, Key, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";

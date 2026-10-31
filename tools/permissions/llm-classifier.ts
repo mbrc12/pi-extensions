@@ -15,7 +15,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Classification, LlmClass, ClassificationResult } from "./types";
 import { getEffectiveCwdForCommand } from "./cwd";
 import { COMMAND_PREVIEW_LENGTH } from "./types";
-import { completeWithModelFallback } from "../shared/model-config.ts";
+import { completeWithModelFallback } from "../../shared/model-config.ts";
 
 // ---------------------------------------------------------------------------
 // System prompt for the classifier

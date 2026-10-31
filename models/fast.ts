@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isOpenAICodexProvider, OPENAI_FAST_MODE_ENV } from "./shared/fast-mode.ts";
+import { isOpenAICodexProvider, OPENAI_FAST_MODE_ENV } from "../shared/fast-mode.ts";
 
 const STATE_ENTRY_TYPE = "openai-fast-mode-state";
 const STATUS_ID = "openai-fast-mode";

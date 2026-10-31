@@ -15,7 +15,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { promptWait } from "../notify-on-idle";
+import { promptWait } from "../../session/notify-on-idle";
 import { classifyToolCall } from "./classifier";
 import { classifyWithLLM } from "./llm-classifier";
 import type { Classification, PermissionMode } from "./types";

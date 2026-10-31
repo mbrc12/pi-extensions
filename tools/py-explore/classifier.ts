@@ -11,7 +11,7 @@
 
 import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext, Model, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { completeWithModelFallback } from "../shared/model-config.ts";
+import { completeWithModelFallback } from "../../shared/model-config.ts";
 
 export interface WriteCheckResult {
   allowed: boolean;

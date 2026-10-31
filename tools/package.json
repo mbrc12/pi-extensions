@@ -1,0 +1,17 @@
+{
+  "pi": {
+    "extensions": [
+      "./ask-question.ts",
+      "./context.ts",
+      "./self_compact.ts",
+      "./todo-list.ts",
+      "./quiz.ts",
+      "./export-md.ts",
+      "./permissions/index.ts",
+      "./py-explore/index.ts",
+      "./web-use/index.ts",
+      "./memory-store/index.ts",
+      "./task-backgrounder/index.ts"
+    ]
+  }
+}

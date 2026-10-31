@@ -35,7 +35,7 @@ const {
 	parseThresholdArgument,
 	setNotifyPercent,
 	shouldAlertUsage,
-} = await import("../self_compact.ts");
+} = await import("../tools/self_compact.ts");
 
 function harness(options: {
 	active?: string[];

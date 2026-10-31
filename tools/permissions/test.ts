@@ -4,7 +4,7 @@
  * Tests the rule-based classifier against a comprehensive set of commands.
  * Shows which classifications would be made and which would escalate to LLM.
  *
- * Run with: npx tsx ~/.pi/agent/extensions/permissions/test.ts
+ * Run with: npx tsx ~/.pi/agent/extensions/tools/permissions/test.ts
  */
 
 import * as path from "node:path";

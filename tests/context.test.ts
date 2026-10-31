@@ -6,7 +6,7 @@ mock.module("@earendil-works/pi-ai", () => ({ StringEnum: () => ({}) }));
 mock.module("@earendil-works/pi-coding-agent", () => ({ keyHint: (_action: string, label: string) => `ctrl+o ${label}` }));
 mock.module("@earendil-works/pi-tui", () => ({ Text: class Text { constructor(public text: string) {} } }));
 mock.module("typebox", () => ({ Type: { Object: () => ({}), String: () => ({}), Integer: () => ({}), Optional: () => ({}) } }));
-const { recall, default: registerContext } = await import("../context.ts");
+const { recall, default: registerContext } = await import("../tools/context.ts");
 
 function user(id: string, content: string): SessionEntry {
 	return { type: "message", id, parentId: null, timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content, timestamp: 0 } };

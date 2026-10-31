@@ -19,7 +19,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { promptWait } from "./notify-on-idle";
+import { promptWait } from "../session/notify-on-idle";
 import {
 	Editor,
 	type EditorTheme,

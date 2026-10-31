@@ -15,7 +15,7 @@ import {
   resetActiveModelProfile,
   setActiveModelProfile,
   SUBAGENT_CAPABILITIES,
-} from "./shared/model-config.ts";
+} from "../shared/model-config.ts";
 
 type Model = PiModel<any>;
 type ScopedModel = { model: Model; thinkingLevel?: any };

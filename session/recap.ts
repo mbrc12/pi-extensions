@@ -1,6 +1,6 @@
 import { CustomEditor, getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, type MarkdownTheme } from "@earendil-works/pi-tui";
-import { completeWithModelFallback } from "./shared/model-config.ts";
+import { completeWithModelFallback } from "../shared/model-config.ts";
 
 const WIDGET_ID = "recap";
 const IDLE_MS = 30_000;

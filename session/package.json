@@ -1,0 +1,10 @@
+{
+  "pi": {
+    "extensions": [
+      "./cleanup.ts",
+      "./exit-alias.ts",
+      "./notify-on-idle.ts",
+      "./recap.ts"
+    ]
+  }
+}

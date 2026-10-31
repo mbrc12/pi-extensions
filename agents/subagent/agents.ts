@@ -5,7 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { SubagentCapability } from "../shared/model-config.ts";
+import type { SubagentCapability } from "../../shared/model-config.ts";
 
 export type AgentScope = "user" | "project" | "both";
 

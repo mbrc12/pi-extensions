@@ -6,7 +6,7 @@ const execute = mock(async () => ({
 	usage: { cost: { total: 0.25 } },
 	isError: false,
 }));
-mock.module("../subagent/index.ts", () => ({ createSubagentTool: () => ({ execute }) }));
+mock.module("../agents/subagent/index.ts", () => ({ createSubagentTool: () => ({ execute }) }));
 mock.module("@earendil-works/pi-coding-agent", () => ({
 	getMarkdownTheme: () => ({}), keyHint: (_action: string, label: string) => `Ctrl+O ${label}`,
 }));
@@ -19,15 +19,15 @@ mock.module("@earendil-works/pi-tui", () => ({
 	Key: { escape: "escape" },
 	matchesKey: (input: string, key: string) => input === key,
 }));
-mock.module("../subagent/agents.ts", () => ({
+mock.module("../agents/subagent/agents.ts", () => ({
 	discoverAgents: () => ({ agents: [{ name: "scout", source: "user", filePath: "/tmp/scout.md" }], projectAgentsDir: null }),
 }));
 const wrap = (value: unknown) => value;
 mock.module("typebox", () => ({ Type: {
 	Object: wrap, String: wrap, Optional: wrap, Boolean: wrap, Union: wrap, Literal: wrap,
 } }));
-const { default: register } = await import("../background-subagent/index.ts");
-const { default: registerSelfCompact } = await import("../self_compact.ts");
+const { default: register } = await import("../agents/background-subagent/index.ts");
+const { default: registerSelfCompact } = await import("../tools/self_compact.ts");
 
 function harness() {
 	const tools = new Map<string, any>();

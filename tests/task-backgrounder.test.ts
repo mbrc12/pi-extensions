@@ -14,8 +14,8 @@ const wrap = (value: unknown) => value;
 mock.module("typebox", () => ({ Type: {
 	Object: wrap, String: wrap, Optional: wrap, Boolean: wrap, Number: wrap,
 } }));
-const { default: register } = await import("../task-backgrounder/index.ts");
-const { default: registerSelfCompact } = await import("../self_compact.ts");
+const { default: register } = await import("../tools/task-backgrounder/index.ts");
+const { default: registerSelfCompact } = await import("../tools/self_compact.ts");
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function harness() {

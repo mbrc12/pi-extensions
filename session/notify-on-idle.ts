@@ -40,27 +40,11 @@ function notifyWindows(title: string, body: string): void {
 	execFile("powershell.exe", ["-NoProfile", "-Command", windowsToastScript(title, body)]);
 }
 
-function notifyCmux(title: string, body: string): void {
-	const command = process.env.CMUX_BUNDLED_CLI_PATH || "cmux";
-	execFile(
-		command,
-		["notify", "--title", title, "--body", body],
-		{ timeout: 5_000 },
-		(error) => {
-			// Keep notifications working if the cmux socket or CLI is unavailable.
-			if (error) notifyOSC777(title, body);
-		},
-	);
-}
-
 function notify(title: string, body: string): void {
 	bell();
 
-	if (process.env.CMUX_SOCKET_PATH || process.env.CMUX_WORKSPACE_ID) {
-		notifyCmux(title, body);
-		return;
-	}
-
+	// No cmux branch by request: never call the cmux CLI or post into a cmux
+	// workspace. Inside a cmux terminal this now falls through to OSC 777.
 	if (process.env.WT_SESSION) {
 		notifyWindows(title, body);
 		return;

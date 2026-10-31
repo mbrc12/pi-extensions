@@ -5,7 +5,7 @@ import { getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext } f
 import { Box, Container, Key, Markdown, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
 import { createSubagentTool } from "../subagent/index.ts";
 import { discoverAgents } from "../subagent/agents.ts";
-import { createNotificationGate } from "../shared/notification-gate.ts";
+import { createNotificationGate } from "../../shared/notification-gate.ts";
 
 const STATE = "background-subagent-state";
 const COMPLETION = "background-subagent-completion";

@@ -19,7 +19,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
-import { promptWait } from "./notify-on-idle";
+import { promptWait } from "../session/notify-on-idle";
 import { askViaUI, type ToolOption } from "./ask-question";
 
 function normalize(s: string, loose: boolean): string {

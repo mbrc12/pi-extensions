@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type Component, type TUI } from "@earendil-works/pi-tui";
-import { completeWithModelFallback, getActiveModelProfile, getModelFallbacks } from "./shared/model-config.ts";
+import { completeWithModelFallback, getActiveModelProfile, getModelFallbacks } from "../shared/model-config.ts";
 
 const SUMMARY_ENTRY_TYPE = "tool-summary";
 const RESOLUTION_ENTRY_TYPE = "tool-summary-resolution";

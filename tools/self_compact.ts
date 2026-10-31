@@ -23,7 +23,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { SELF_COMPACT_NOTICE_PENDING, SELF_COMPACT_NOTICE_SENT } from "./shared/notification-gate.ts";
+import { SELF_COMPACT_NOTICE_PENDING, SELF_COMPACT_NOTICE_SENT } from "../shared/notification-gate.ts";
 
 const TOOL_NAME = "self_compact";
 const COMMAND_NAME = "self_compact";
