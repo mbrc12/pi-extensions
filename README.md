@@ -21,7 +21,7 @@ extensions/
 
 | Folder | Extensions |
 |---|---|
-| `tui/` | `code-block-box`, `codemode-compact`, `image-links`, `minimal-tools`, `odin-highlight`, `prompt-prefix`, `statusline`, `thinking-tail`, `vscode-theme`, `working-indicator` |
+| `tui/` | `banner`, `code-block-box`, `codemode-compact`, `image-links`, `minimal-tools`, `odin-highlight`, `prompt-prefix`, `statusline`, `thinking-tail`, `vscode-theme`, `working-indicator` |
 | `tools/` | `ask-question`, `context`, `export-md`, `memory-store`, `permissions`, `py-explore`, `quiz`, `self_compact`, `task-backgrounder`, `todo-list`, `web-use` |
 | `agents/` | `background-subagent`, `subagent` |
 | `models/` | `codex-account-alias`, `fast`, `profile`, `provider-status`, `tool-summary` |
@@ -35,6 +35,21 @@ extensions/
 - `shared/` has no entry point and is imported by relative path, for example `../shared/model-config.ts`. `model-config.json` stays in the extensions root because `shared/model-config.ts` reads it from there.
 
 ## `tui/` — terminal presentation
+
+### `banner`
+
+Replaces Pi's startup header and the loaded-resource listing with two lines:
+
+```text
+ ▀▀█   v1.4.0 · 7 skills · 31 extensions · 3 prompts
+ █▀ █  context ~/.pi/agent/APPEND_SYSTEM.md · ~/.pi/agent/AGENTS.md
+```
+
+- The icon is Pi's own half-block logo. `/banner wordmark` swaps in the text mark for terminals that draw half blocks badly, `/banner logo` restores the blocks, and `/banner off` puts Pi's built-in header back.
+- Counts come from what the session loaded: skills and prompt templates from their registered slash commands, extensions from repeating Pi's discovery over the agent and project extension directories with the `!`/`-`/`+` patterns from `settings.json`. Extensions installed as `packages` are not counted.
+- Context files mirror Pi's own `[Context]` section: a `SYSTEM.md`, an `APPEND_SYSTEM.md`, then the AGENTS-style files from the agent directory and every project ancestor.
+- Set `"quietStartup": "header"` in `settings.json` to keep the header but drop the full resource listing. With `"quietStartup": true`, Pi shows no header at all and the extension stays out of the way.
+- Numbers match the listing exactly, so nothing is lost by hiding it.
 
 ### `code-block-box`
 

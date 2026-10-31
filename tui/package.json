@@ -1,6 +1,7 @@
 {
   "pi": {
     "extensions": [
+      "./banner.ts",
       "./code-block-box.ts",
       "./thinking-tail.ts",
       "./statusline.ts",
