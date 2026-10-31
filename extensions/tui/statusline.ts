@@ -1,7 +1,8 @@
 /**
  * Custom Statusline Extension
  *
- * Replaces the default footer with a clean, three-line statusline:
+ * Replaces the default footer with a clean statusline, top to bottom:
+ *   Session: the session name in italics, only when the session has one
  *   Line 1: cwd (git branch) · ctx · provider limits · subagent time
  *   Line 2: provider/model think:level · cost · generation rate
  *   Line 3: extension statuses such as permissions, todo, and thinking-tail.
@@ -333,6 +334,7 @@ function subagentCostFromToolResult(message: unknown): number {
 
 export default function (pi: ExtensionAPI) {
   let currentThinkingLevel = "off";
+  let sessionName: string | undefined;
   let enabled = true;
   let rupeesEnabled = false;
   const activeSubagents = new Map<string, number>();
@@ -457,6 +459,14 @@ export default function (pi: ExtensionAPI) {
     currentThinkingLevel = event.level;
   });
 
+  // ---- track the session name ----
+  // The name is set by /rename and lives in the session file, so re-read it on both
+  // a rename and a session switch rather than caching it at startup only.
+  pi.on("session_info_changed", (event) => {
+    sessionName = event.name;
+    requestFooterRender?.();
+  });
+
   // ---- generation speed: live ticks from the token stream ----
   pi.on("message_start", (event) => {
     if (event.message.role !== "assistant") return;
@@ -536,6 +546,7 @@ export default function (pi: ExtensionAPI) {
   // ---- enable custom footer on every session start ----
   pi.on("session_start", (_event, ctx) => {
     currentThinkingLevel = pi.getThinkingLevel();
+    sessionName = pi.getSessionName();
     resetSubagentTime();
     emaTokPerSec = undefined;
     rateModelKey = undefined;
@@ -740,6 +751,11 @@ export default function (pi: ExtensionAPI) {
             .map(([, text]) => sanitize(text))
             .filter(Boolean);
 
+          // Line 0: the session name, only when the session has one
+          const nameLine = sessionName
+            ? theme.style(sanitize(sessionName), { bold: true, italic: true })
+            : "";
+
           // Line 1: cwd · ctx · provider limits · current/last subagent time
           const line1 = [dirSeg, ctxSeg, limitsSeg, subagentTimeSeg]
             .filter(Boolean)
@@ -757,6 +773,9 @@ export default function (pi: ExtensionAPI) {
             : externalStatusPrefix;
 
           return [
+            ...(nameLine
+              ? [truncateToWidth(nameLine, width, theme.fg("dim", "…"))]
+              : []),
             truncateToWidth(line1, width, theme.fg("dim", "…")),
             truncateToWidth(line2, width, theme.fg("dim", "…")),
             truncateToWidth(line3, width, theme.fg("dim", "…")),
