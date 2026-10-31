@@ -10,6 +10,7 @@ export const MODEL_CONFIG_PURPOSES = [
   "toolSummaryGeneration",
   "subagentProgressSummary",
   "wiseCompacter",
+  "sessionRename",
   "webSummarization",
   "permissionClassification",
   "pythonWriteClassification",
@@ -80,6 +81,11 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "opencode-go/mimo-v2.5",
     "openai-codex/gpt-5.6-luna",
     "openai-codex-2/gpt-5.6-luna",
+  ],
+  sessionRename: [
+    "opencode-go/deepseek-v4.1-flash",
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna",
   ],
   webSummarization: [
     "opencode-go/deepseek-v4-flash",

@@ -45,6 +45,11 @@
     "openai-codex-2/gpt-6-luna",
     "openai-codex/gpt-6-luna"
   ],
+  "sessionRename": [
+    "opencode-go/deepseek-v4.1-flash",
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna"
+  ],
   "recapGeneration": [
     "opencode-go/mimo-v2.6-flash",
     "openai-codex/gpt-6-luna",
