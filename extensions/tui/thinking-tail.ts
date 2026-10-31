@@ -1,0 +1,404 @@
+/**
+ * Thinking Tail Extension
+ *
+ * Shows the final five non-empty *displayed* lines of each thinking run in
+ * Pi's native italic thinking style on a background taken from the active
+ * theme: the custom-message panel inside the editor's integrated terminal, and
+ * the pending-tool panel everywhere else. The collapsed tail uses the theme's
+ * main text colour for contrast; the expanded block keeps Pi's native muted
+ * thinking colour. Lines are counted after word wrapping, so one long paragraph
+ * cannot fill the whole fold, and the fold is rebuilt when the terminal width
+ * changes. Ctrl+O expands the full thinking; Ctrl+O again returns to the tail.
+ * The tail updates as thinking streams and is applied to restored historical
+ * messages too.
+ */
+
+import {
+  AssistantMessageComponent,
+  truncateToVisualLines,
+} from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  Theme,
+  ThemeBg,
+} from "@earendil-works/pi-coding-agent";
+
+/** Number of non-empty displayed (wrapped) lines kept in the fold. */
+const TAIL_LINES = 5;
+
+// Footer status item shown while any thinking is present. 🤐 = collapsed,
+// 😮 = expanded. The hint header that used to live inside the collapsed
+// thinking block is gone; this status line now carries that signal.
+const THINK_STATUS_KEY = "thinking";
+const EMOJI_COLLAPSED = "\u{1F910}"; // 🤐 zipped mouth
+const EMOJI_EXPANDED = "\u{1F62E}"; // 😮 face with open mouth
+
+type ContentBlock = {
+  type: string;
+  thinking?: string;
+  [key: string]: unknown;
+};
+
+type AssistantMessageLike = {
+  content: ContentBlock[];
+  [key: string]: unknown;
+};
+
+type ComponentLike = {
+  lastMessage?: AssistantMessageLike;
+  outputPad?: number;
+  contentContainer?: {
+    children?: unknown[];
+  };
+};
+
+type ThinkingMarkdownLike = {
+  defaultTextStyle?: {
+    italic?: boolean;
+    color?: unknown;
+    bgColor?: (text: string) => string;
+  };
+  invalidate?: () => void;
+};
+
+/**
+ * Editors set TERM_PROGRAM=vscode in their integrated terminal (VS Code, VSCodium
+ * and forks); vscode-theme.ts keys its theme switch off the same variable.
+ */
+const IN_EDITOR_TERMINAL = process.env.TERM_PROGRAM === "vscode";
+
+// Backgrounds come from the active Pi theme, so the fold follows the selected
+// theme instead of carrying hard-coded ANSI colours.
+const EDITOR_THINKING_BACKGROUND_TOKEN: ThemeBg = "customMessageBg";
+const DEFAULT_THINKING_BACKGROUND_TOKEN: ThemeBg = "toolPendingBg";
+const THINKING_BACKGROUND_TOKEN = IN_EDITOR_TERMINAL
+  ? EDITOR_THINKING_BACKGROUND_TOKEN
+  : DEFAULT_THINKING_BACKGROUND_TOKEN;
+
+function thinkingBackground(text: string): string {
+  return uiRef ? uiRef.theme.bg(THINKING_BACKGROUND_TOKEN, text) : text;
+}
+
+/** Main text colour for the collapsed tail, which sits on a panel background. */
+function thinkingText(text: string): string {
+  return uiRef ? uiRef.theme.fg("text", text) : text;
+}
+
+/** Native thinking text colour, restored when Ctrl+O expands the block. */
+const originalThinkingColors = new WeakMap<object, unknown>();
+
+/** Add a full-width themed background and readable text to the thinking Markdown. */
+function applyThinkingStyle(component: ComponentLike): void {
+  for (const child of component.contentContainer?.children ?? []) {
+    // Pi wraps the thinking Markdown in a MouseRegion; look through it.
+    const inner = (child as { child?: unknown }).child ?? child;
+    const markdown = inner as ThinkingMarkdownLike;
+    const style = markdown.defaultTextStyle;
+    // Native thinking Markdown is the only assistant child with both styles.
+    if (!style?.italic || !style.color) continue;
+    style.bgColor = thinkingBackground;
+    if (currentExpanded) {
+      const original = originalThinkingColors.get(markdown);
+      if (original !== undefined) style.color = original;
+    } else {
+      if (!originalThinkingColors.has(markdown)) {
+        originalThinkingColors.set(markdown, style.color);
+      }
+      style.color = thinkingText;
+    }
+    markdown.invalidate?.();
+  }
+}
+
+// Minimal slice of ExtensionUIContext needed to push the footer status.
+type StatusUI = {
+  setStatus(key: string, text: string | undefined): void;
+  getToolsExpanded(): boolean;
+  readonly theme: Theme;
+};
+
+/** Return true if an assistant message content array has thinking text. */
+function contentHasThinking(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: string }).type === "thinking" &&
+      typeof (block as { thinking?: string }).thinking === "string" &&
+      (block as { thinking?: string }).thinking!.trim()
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function messageHasThinking(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  return contentHasThinking((message as { content?: unknown }).content);
+}
+
+// Raw messages are per component; expansion is global because Ctrl+O toggles
+// every expandable transcript child and new streaming components must inherit it.
+const rawMessages = new WeakMap<object, AssistantMessageLike>();
+// Width the component was last rendered at, and the width its current children
+// were folded for. A mismatch means the fold is stale, e.g. after a resize.
+const lastRenderWidth = new WeakMap<object, number>();
+const foldedWidth = new WeakMap<object, number | undefined>();
+
+// Latest interactive UI context, captured on session_start so the
+// prototype-level setExpanded() override (which has no ctx) can still push
+// status updates. One extension instance serves all sessions in a process.
+let uiRef: StatusUI | undefined;
+// Whether the current session branch has any thinking content at all. The
+// think status is only shown when there is something to collapse/expand.
+let thinkingPresent = false;
+// Most recently applied expand state, for use during streaming updates that
+// do not pass through setExpanded().
+let currentExpanded = false;
+
+function statusText(expanded: boolean): string {
+  return `think: ${expanded ? EMOJI_EXPANDED : EMOJI_COLLAPSED}`;
+}
+
+function syncThinkStatus(): void {
+  if (!uiRef) return;
+  uiRef.setStatus(
+    THINK_STATUS_KEY,
+    thinkingPresent ? statusText(currentExpanded) : undefined,
+  );
+}
+
+/**
+ * Tail by newlines only. Used before the first render supplies a width, when
+ * the number of displayed lines is still unknown.
+ */
+function logicalTailOf(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => line.trim())
+    .slice(-TAIL_LINES)
+    .join("\n");
+}
+
+/** Last non-empty displayed lines of `text` at `contentWidth`, at most TAIL_LINES. */
+function lastDisplayedLines(text: string, contentWidth: number): string[] {
+  // Ask for only the lines we need, widening the window if blank lines eat
+  // into the slice.
+  let take = TAIL_LINES;
+  for (;;) {
+    const { visualLines, skippedCount } = truncateToVisualLines(
+      text,
+      take,
+      contentWidth,
+      0,
+      "end",
+    );
+    const kept = visualLines
+      .filter((line) => Boolean(line.trim()))
+      .map((line) => line.trimEnd());
+    if (kept.length >= TAIL_LINES || skippedCount === 0) {
+      return kept.slice(-TAIL_LINES);
+    }
+    take *= 2;
+  }
+}
+
+/**
+ * Tail by displayed lines at the given render width. Wrapping mirrors Pi's
+ * Markdown: the text is laid out at `width`, less `paddingX` on each side, and
+ * pi-tui narrows that padding on very narrow terminals.
+ */
+function displayedTailOf(text: string, width: number, paddingX: number): string {
+  const pad = Math.min(paddingX, Math.max(0, Math.floor((width - 1) / 2)));
+  const contentWidth = Math.max(1, width - pad * 2);
+
+  // This runs for every streamed token, so re-wrap only a bounded trailing
+  // slice. The extra lines absorb the partial line where the slice starts;
+  // the kept lines are unaffected by anything before them.
+  const slack = TAIL_LINES + 3;
+  const sliceStart = text.length - contentWidth * slack;
+  if (sliceStart > 0) {
+    const tail = lastDisplayedLines(text.slice(sliceStart), contentWidth);
+    // A blank-heavy or line-broken tail can hide lines; retry on the full text.
+    if (tail.length === TAIL_LINES) return tail.join("\n");
+  }
+
+  return lastDisplayedLines(text, contentWidth).join("\n");
+}
+
+/** Tail whose wrapping depends on the component's last rendered width. */
+function tailOf(component: ComponentLike, text: string): string {
+  const width = lastRenderWidth.get(component);
+  if (width === undefined) return logicalTailOf(text);
+  return displayedTailOf(text, width, component.outputPad ?? 1);
+}
+
+export default function (pi: ExtensionAPI) {
+  const proto = AssistantMessageComponent.prototype as unknown as Record<string, unknown>;
+  const originalUpdateContent = proto.updateContent as (
+    this: ComponentLike,
+    message: AssistantMessageLike,
+  ) => void;
+  const hadOwnSetExpanded = Object.hasOwn(proto, "setExpanded");
+  const originalSetExpanded = proto.setExpanded;
+
+  /**
+   * Feed Pi's normal renderer a view-only copy of the message. Thinking stays
+   * type="thinking", preserving Pi's native gray italic styling; only its
+   * visible text is folded while collapsed.
+   */
+  function updateContent(this: ComponentLike, message: AssistantMessageLike): void {
+    // Keep the untouched message. The original renderer records the view copy
+    // as lastMessage, so restore the raw one below for later Ctrl+O expansion.
+    rawMessages.set(this, message);
+    const expanded = currentExpanded;
+    const content: ContentBlock[] = [];
+
+    for (let i = 0; i < message.content.length; i++) {
+      const block = message.content[i]!;
+      if (block.type !== "thinking") {
+        content.push(block);
+        continue;
+      }
+
+      // Pi normally renders adjacent thinking chunks as one block. Fold the
+      // whole run, rather than independently showing five lines per chunk.
+      const run: ContentBlock[] = [];
+      while (i < message.content.length && message.content[i]!.type === "thinking") {
+        run.push(message.content[i]!);
+        i++;
+      }
+      i--; // The outer loop advances past this run.
+
+      if (expanded) {
+        content.push(...run);
+      } else {
+        const fullText = run
+          .map((part) => part.thinking?.trim())
+          .filter((part): part is string => Boolean(part))
+          .join("\n\n");
+
+        if (!fullText) {
+          // Keep empty/signature-only blocks intact; Pi's normal renderer knows
+          // how to handle them.
+          content.push(...run);
+        } else {
+          // One native thinking block showing just the tail fold. The collapse
+          // signal now lives in the footer status item instead of an inline hint.
+          content.push({
+            ...run[0]!,
+            thinking: tailOf(this, fullText),
+          });
+        }
+      }
+
+      // Leave one blank line before the next text or tool output. Do not add
+      // it while thinking is still streaming by itself.
+      if (i + 1 < message.content.length) {
+        content.push({ type: "text", text: "\n" });
+      }
+    }
+
+    originalUpdateContent.call(this, { ...message, content });
+    applyThinkingStyle(this);
+
+    // Critical: retain the raw message for invalidate(), theme changes, and
+    // setExpanded(). Without this, Ctrl+O can only re-expand the tail itself.
+    this.lastMessage = message;
+    // Remember which width these children were folded for, so render() can
+    // rebuild them once when the terminal is resized.
+    foldedWidth.set(this, lastRenderWidth.get(this));
+  }
+
+  proto.updateContent = updateContent;
+
+  const originalRender = proto.render as (this: ComponentLike, width: number) => string[];
+
+  /**
+   * Track the render width and refold stale tails. Width is only known while
+   * rendering, so the fold is rebuilt here the first time each component is
+   * rendered and again whenever the terminal width changes.
+   */
+  function render(this: ComponentLike, width: number): string[] {
+    lastRenderWidth.set(this, width);
+    const raw = rawMessages.get(this) ?? this.lastMessage;
+    if (raw && !currentExpanded && foldedWidth.get(this) !== width) {
+      updateContent.call(this, raw);
+    }
+    return originalRender.call(this, width);
+  }
+
+  proto.render = render;
+
+  // Pi calls setExpanded() on transcript children when Ctrl+O toggles tool
+  // output. Adding this method makes thinking messages participate too.
+  proto.setExpanded = function (this: ComponentLike, expanded: boolean): void {
+    // Pi calls this for every expandable child when Ctrl+O changes. Set the
+    // shared mode first so the update below, and any later streaming message,
+    // uses the same expansion state.
+    currentExpanded = expanded;
+
+    const raw = rawMessages.get(this) ?? this.lastMessage;
+    if (raw) updateContent.call(this, raw);
+
+    // Reflect the global expansion state in the footer status. This override
+    // has no ctx, so use the captured uiRef.
+    syncThinkStatus();
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    // Capture the interactive UI for the prototype-level toggle override and
+    // for streaming-message handlers below.
+    uiRef = ctx.ui;
+    currentExpanded = ctx.ui.getToolsExpanded();
+
+    // Reapply the current Ctrl+O state to every historical assistant
+    // component; chat history was just rebuilt before session_start.
+    ctx.ui.setToolsExpanded(currentExpanded);
+
+    // Determine whether this session branch has any thinking content, then
+    // show (or hide) the footer think status accordingly.
+    thinkingPresent = false;
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type !== "message") continue;
+      if (messageHasThinking(entry.message)) {
+        thinkingPresent = true;
+        break;
+      }
+    }
+    syncThinkStatus();
+  });
+
+  // As thinking streams in, flip thinkingPresent on so the collapsed status
+  // appears from the first thinking run onward (before any Ctrl+O toggle).
+  pi.on("message_update", (event) => {
+    if (!messageHasThinking(event.message)) return;
+    if (!thinkingPresent) {
+      thinkingPresent = true;
+      syncThinkStatus();
+    }
+  });
+
+  pi.on("message_end", (event) => {
+    if (!messageHasThinking(event.message)) return;
+    if (!thinkingPresent) {
+      thinkingPresent = true;
+      syncThinkStatus();
+    }
+  });
+
+  pi.on("session_shutdown", () => {
+    proto.updateContent = originalUpdateContent;
+    proto.render = originalRender;
+    if (hadOwnSetExpanded) {
+      proto.setExpanded = originalSetExpanded;
+    } else {
+      delete proto.setExpanded;
+    }
+    if (uiRef) uiRef.setStatus(THINK_STATUS_KEY, undefined);
+    uiRef = undefined;
+    thinkingPresent = false;
+  });
+}

@@ -1,0 +1,17 @@
+{
+  "pi": {
+    "extensions": [
+      "./banner.ts",
+      "./code-block-box.ts",
+      "./thinking-tail.ts",
+      "./statusline.ts",
+      "./working-indicator.ts",
+      "./prompt-prefix.ts",
+      "./vscode-theme.ts",
+      "./image-links.ts",
+      "./minimal-tools.ts",
+      "./codemode-compact.ts",
+      "./odin-highlight.ts"
+    ]
+  }
+}

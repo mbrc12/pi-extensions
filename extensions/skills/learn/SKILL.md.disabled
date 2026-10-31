@@ -1,0 +1,104 @@
+---
+name: learn
+description: Run an active Socratic learning session on a topic, entirely inline in chat. Gauge the user's current level with graded quiz questions, make a short plan, teach focused chunks, quiz to verify, revise the plan, and loop until the topic is mastered. Use when the user asks to learn, be taught, be quizzed, or "active-learn" a topic.
+license: MIT
+---
+
+# Learn (active Socratic tutoring)
+
+Turn any topic into an **active** learning loop, entirely inline in this
+session. The user does not just read — they answer graded questions and get
+corrected, repeatedly, until the topic sticks. No separate files are needed:
+the record is this conversation.
+
+## Tools
+
+- **`quiz`** — graded question with a known answer. You grade the user; green
+  ✓ / red ✗. Works exactly like `ask_question` (arrow keys, Space/Enter,
+  "Type something...", Esc to cancel).
+- **`ask_question`** — only for decisions and preferences, NOT for testing.
+
+## 1. Gauge the level (start)
+
+Before explaining anything, find out what the user already knows:
+
+- Ask 2–4 graded `quiz` questions covering the fundamentals the topic builds
+  on. Use **choice** with realistic distractors, or **type** for recall of a
+  key definition or formula.
+- Calibrate from the results: start with what is unknown, skip what is known.
+- Remember the observed level for the plan below.
+
+## 2. Make a short plan (inline outline)
+
+Once the gauge tells you the level, sketch the route before teaching:
+
+- Draft a short route: the building blocks → the target concept → the
+  **checkpoints** where you will quiz → a final **mastery** check. Keep it to
+  about 5–8 steps.
+- Present it **inline as a compact numbered outline** in chat (the terminal
+  cannot render mermaid or LaTeX). Mark each step with the object to test, e.g.:
+  ```
+  1. prerequisite A  -> teach, then quiz
+  2. concept B       -> teach, then quiz (checkpoint)
+  3. target C        -> teach, then quiz
+  4. combine -> mastery quiz
+  ```
+- Treat it as **mutable**: you will revise it after each quiz.
+
+## 3. Run the loop
+
+```
+gauge level -> (make or modify) plan -> pick a plan step -> teach -> quiz -> update plan -> continue
+```
+
+Each iteration:
+
+1. **Gauge level** — once, at the start (§1).
+2. **Make or modify the plan** — create it after the gauge (§2); after that,
+   only revise it.
+3. **Pick a plan step** — the next untaught step whose prerequisites are done,
+   or the re-teach branch from the last miss.
+4. **Teach** that step. Small piece, a concrete example, plain language — a
+   short block, not an essay.
+5. **Quiz** it (§4 below). Grade it.
+6. **Update the plan** — a miss adds a re-teach step or a checkpoint; mastery
+   marks the step done and may merge or drop others. Show the revised outline
+   (or the single changed line) in one or two lines.
+7. **Continue** — return to step 3 until the final mastery quiz passes without
+   prompting.
+
+If the user says they already know a step, skip its teach part, quiz it
+directly to confirm, then move on.
+
+## 4. Quiz to verify (and grade)
+
+- After each taught step, ask a graded `quiz` question that tests that step.
+- Vary it: conceptual **choice**, a worked numeric recall, or a **type**-in.
+- Let the tool grade it (green/red). After a miss, **re-teach** the exact piece
+  they got wrong, then ask a closely related question to confirm the fix.
+- Reveal the correct answer and an explanation after grading every question.
+
+Keep the correct answer in the `correct` field. Never reveal it before the user
+answers — the tool hides it; you must not spoil it in your own text either.
+
+## 5. Close the session
+
+- Summarize in a few lines: what you covered, what the user missed, and the
+  final mastery result.
+- Give one "try it yourself" exercise for later.
+- If the session produced durable, well-grounded knowledge, offer to file it
+  into the wiki (concept page, review card, or question page) — but do not do
+  that unless the user agrees.
+
+## Guidelines that always apply
+
+- **`quiz` tests with a known answer; `ask_question` asks for a decision.**
+- **Correct answers are hidden** — only the user answers; you grade silently.
+- **If the user cancels a question (Esc), do not answer for them.** Move on or
+  rephrase; never fabricate their reply.
+- **Do not lecture for long stretches** — alternate explanation and questions.
+- **No LaTeX and no mermaid in chat** — the terminal cannot render them. Use
+  plain text and inline ASCII/Unicode where a formula or diagram is needed.
+- **Keep chat short and plain** (ISO 24495-1): clear, direct, concrete.
+- **Ground every claim** — do not invent numbers, papers, or examples. If
+  unsure, say so.

@@ -1,0 +1,168 @@
+---
+name: explainer-tree
+description: Builds a careful, proof-focused HTML exposition of a paper or document as an expandable hierarchy of uniquely numbered atomic claims, with KaTeX, stable anchors, persistent open state, and validation. Use when a user asks to explain, map, annotate, or iteratively study a technical document in a tree-structured HTML file.
+license: MIT
+compatibility: Requires ordinary file tools; PDF extraction or web access may be needed for remote or PDF sources.
+---
+
+# Explainer tree
+
+Create an expandable HTML document in which every substantive assertion is a stable, individually numbered node. The result should support both a first-pass exposition and a long iterative discussion in which individual nodes are clarified or expanded without destabilizing the rest of the tree.
+
+## Inputs
+
+Obtain or infer:
+
+- the source document or paper;
+- the output path, defaulting to `main.html`;
+- the reader's assumed background;
+- the desired scope: theorem only, proof-focused core, or core plus consequences.
+
+Ask for scope only when it materially changes the result. A strong default for technical papers is: retain the background needed to understand the main theorem, isolate the theorem, then retain only the machinery used to prove it. Do not add peripheral corollaries, surveys of related work, open problems, or speculative consequences unless requested.
+
+## Source study
+
+1. Locate the source. It may be a local text file, TeX source, PDF, arXiv identifier, or URL.
+2. Extract searchable text when necessary.
+3. Read the entire source before drafting the final tree.
+4. Prefer TeX source over PDF text extraction when checking formulas, constants, indices, or normalization.
+5. Record the logical spine:
+   - fundamental objects and notation;
+   - scaling or assumptions;
+   - observable under study;
+   - principal theorem;
+   - exact representation used by the proof;
+   - successive proof mechanisms;
+   - final deduction of the theorem.
+6. Separate proved statements, quoted background results, definitions, and heuristics. Never present a heuristic as a theorem.
+
+## Tree architecture
+
+Use this default order, adapting it to the source:
+
+1. Minimal problem orientation.
+2. Objects, assumptions, and scaling.
+3. Observable or quantity of interest.
+4. Main theorem, isolated visibly and stated precisely.
+5. Exact representation or reduction.
+6. Core analytic, probabilistic, algebraic, or geometric mechanism.
+7. Main estimate or combinatorial construction.
+8. Transfer step and completion of the proof.
+
+Keep consequences after the proof only when requested. Do not duplicate the proof as a later “conceptual summary” branch.
+
+## Atomic claim discipline
+
+Every factual assertion, including elementary definitions and caveats, must live in a numbered claim node.
+
+Use markup of the form:
+
+```html
+<li class="claim" id="claim-2-4-3">
+  <details class="node">
+    <summary>
+      <span class="num">2.4.3</span>
+      <span class="claim-text">One precise claim.</span>
+    </summary>
+    <ol class="children">
+      <!-- dependent claims -->
+    </ol>
+  </details>
+</li>
+```
+
+Rules:
+
+- The displayed number and ID must agree: `2.4.3` ↔ `claim-2-4-3`.
+- IDs are permanent handles. Never renumber existing nodes during later elaboration.
+- Add elaboration beneath a node as children rather than inserting prose outside the tree.
+- Prefer one logical assertion per node.
+- A parent may summarize its children, but it must not conceal a necessary qualification.
+- Define local jargon before relying on it. Terms such as “diagram,” “sector,” “sampling,” “effective coupling,” or “dominant contribution” require an operational definition.
+- Keep document prose neutral. Do not write “Yes,” “you are right,” or other conversational replies inside claim text.
+
+## Precision standards
+
+When explaining technical arguments:
+
+- Spell out the algebra behind limiting factors rather than saying they “accumulate.”
+- State what a factor contributes to: an integrand, one diagram, a sector sum, a moment, or a normalized measure.
+- If all terms in a sector receive the same factor, show how it factors out of the sector sum.
+- Distinguish an index fixed while an inner sum is taken from an index that varies with the scaling parameter.
+- Use triangular-array notation when both the distribution and number of variables depend on the scaling parameter.
+- When claiming a range is dominant, treat the smaller, central, and larger ranges; pointwise decay of one term is not enough to control a summed tail.
+- Failure of an upper bound is not proof of divergence or non-convergence.
+- State explicitly when an argument is heuristic and name the theorem needed to make it rigorous.
+- Check constants and normalizations directly against the source.
+
+## HTML behavior and appearance
+
+Start from [the HTML template](assets/tree-template.html). Replace every placeholder before delivering it.
+
+Required behavior:
+
+- semantic nested `<ol>`, `<li>`, `<details>`, and `<summary>` structure;
+- boxed `+` and `−` controls only for nodes with children;
+- a thick clickable vertical rail on every expandable node;
+- `localStorage` persistence of open/closed state across refreshes;
+- hash navigation that opens all ancestors of a linked claim;
+- expand-all, collapse-all, and main-branches controls;
+- KaTeX rendering for `$$...$$` and `\(...\)`;
+- responsive horizontal scrolling for large display equations;
+- stable direct-link anchors;
+- a restrained, readable layout with a soft cream background;
+- progressively darker node backgrounds computed from actual nesting depth, not a fixed list of depth selectors.
+
+Keep styling minimal. Avoid hero headers, cards with heavy shadows, decorative gradients, badges, or large color palettes.
+
+## Mathematics in HTML
+
+- Escape raw less-than signs inside source math as `&lt;`; use `&gt;` for consistency.
+- Keep TeX delimiters balanced.
+- Use KaTeX-supported environments and commands.
+- Do not attach unverified integrity hashes to CDN resources.
+- If the source is expected to work offline, vendor KaTeX only when the user requests it; otherwise use the template CDN links.
+
+## Iterative expansion workflow
+
+When the user asks to expand or clarify a node:
+
+1. Find the exact node by ID.
+2. Verify the relevant statement against the source.
+3. Decide whether clearer wording is enough or child claims are needed.
+4. Preserve the existing ID and number.
+5. Add children using the parent number as prefix.
+6. Correct misleading language rather than defending it.
+7. Re-run validation.
+
+If a requested node does not exist, identify likely nearby nodes and ask a structured clarification question instead of guessing when ambiguity is material.
+
+## Scope trimming
+
+When asked to isolate the true main result:
+
+- preserve already-requested background;
+- retain the exact main theorem and all machinery needed for its proof;
+- remove tail corollaries, unrelated applications, historical comparisons, open problems, hypothetical improvements, and repeated summaries unless explicitly requested;
+- keep a source citation in the footer even if metadata branches are removed.
+
+## Validation
+
+Run:
+
+```bash
+python3 scripts/validate_tree.py /path/to/main.html
+```
+
+Prefer Python for helper and validation scripts. Use JavaScript only for behavior that must run in the generated browser document.
+
+Also inspect the result for:
+
+- source fidelity and theorem hypotheses;
+- logical continuity from background to theorem to proof;
+- accidental conversational language;
+- unsupported “therefore” claims;
+- formulas broken by raw HTML characters;
+- visual behavior in a browser when one is available.
+
+Do not claim browser validation if no browser was available. Report structural validation separately from visual validation.

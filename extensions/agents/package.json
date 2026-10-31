@@ -1,0 +1,9 @@
+{
+  "pi": {
+    "extensions": [
+      "./subagent/index.ts",
+      "./background-subagent/index.ts",
+      "./multiagent/index.ts"
+    ]
+  }
+}

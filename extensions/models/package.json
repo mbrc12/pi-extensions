@@ -1,0 +1,11 @@
+{
+  "pi": {
+    "extensions": [
+      "./profile.ts",
+      "./provider-status.ts",
+      "./fast.ts",
+      "./codex-account-alias.ts",
+      "./tool-summary.ts"
+    ]
+  }
+}
