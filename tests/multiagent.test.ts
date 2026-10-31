@@ -61,6 +61,20 @@ describe("multiagent RPC operators", () => {
   expect(h.statuses.has("multiagent")).toBe(false);
  });
 
+ test("lists operators by most recent activity, newest first", async () => {
+  settleMode = "hang";
+  const h = harness(); const tool = h.tools.get("multiagent");
+  await tool.execute("id", { action: "start", name: "first", agent: "scout", task: "one" }, undefined, undefined, h.ctx);
+  await new Promise((done) => setTimeout(done, 5));
+  await tool.execute("id", { action: "start", name: "second", agent: "scout", task: "two" }, undefined, undefined, h.ctx);
+  const names = async () => (await tool.execute("id", { action: "list" }, undefined, undefined, h.ctx)).details.operators.map((op: any) => op.name);
+  expect(await names()).toEqual(["second", "first"]);
+  await new Promise((done) => setTimeout(done, 5));
+  children[0].stdout.write(`${JSON.stringify({ type: "agent_settled", aborted: false })}\n`); await tick();
+  expect(await names()).toEqual(["first", "second"]);
+  h.handlers.get("session_shutdown")(undefined, h.ctx);
+ });
+
  test("renders compact tool and completion entries with expandable output", async () => {
   const h = harness(); const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text, bold: (text: string) => text };
   const tool = h.tools.get("multiagent");

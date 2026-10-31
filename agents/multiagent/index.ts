@@ -19,7 +19,7 @@ const COMPLETE = "multiagent_completion";
 type Status = "idle" | "running" | "stopped" | "failed" | "aborted";
 interface Operator {
  id: string; name: string; agent: string; sessionFile: string; priorSessionFiles?: string[]; agentConfig?: AgentConfig; cwd: string; status: Status; model?: string; modelFallback?: string;
- assignment?: string; assignmentId?: string; startedAt: number; finishedAt?: number; lastOutput?: string; lastActivity?: string; pendingCompletion?: string;
+ assignment?: string; assignmentId?: string; startedAt: number; updatedAt?: number; finishedAt?: number; lastOutput?: string; lastActivity?: string; pendingCompletion?: string;
 }
 interface LiveOperator { client: RpcProcess; operator: Operator; busy: boolean; starting?: boolean; error?: string; models: string[]; modelIndex: number; toolExecutionStarted: boolean; interactiveBlocked: boolean; retrying?: boolean; pendingSettlement?: boolean; pendingAborted?: boolean; }
 class RpcProcess {
@@ -91,7 +91,16 @@ export default function(pi: any) {
    deliverCompletion(op, status);
   }
  });
- function record(action: string, operator: Operator) { pi.appendEntry(STATE, { action, operator: { ...operator } }); updateIndicator(); }
+ function record(action: string, operator: Operator) {
+  operator.updatedAt = Date.now();
+  pi.appendEntry(STATE, { action, operator: { ...operator } });
+  updateIndicator();
+ }
+ /** Listing order: most recently active operator first. */
+ function orderedOperators(): Operator[] {
+  const activity = (op: Operator) => op.updatedAt ?? op.finishedAt ?? op.startedAt;
+  return [...operators.values()].sort((a, b) => activity(b) - activity(a));
+ }
  /** Statusline summary: ▶ while any operator is working, ⏸ when all are idle; running/total. */
  function updateIndicator() {
   const ctx = currentCtx; if (!ctx?.ui?.setStatus) return;
@@ -260,7 +269,7 @@ export default function(pi: any) {
  pi.on("session_start", (_event: any, ctx: any) => restore(ctx)); pi.on("session_tree", (_event: any, ctx: any) => restore(ctx));
  pi.on("session_shutdown", () => { generation++; notifications.dispose(); for (const item of live.values()) { void stopLive(item); if (item.operator.status === "running") { item.operator.status = "stopped"; item.operator.finishedAt = Date.now(); item.operator.lastActivity = "Interrupted: planner session shut down; child process stopped."; record("status", item.operator); } } live.clear(); currentCtx?.ui?.setStatus?.(STATUS_KEY, undefined); currentCtx = undefined; });
  pi.registerCommand("operators", { description: "Browse persistent operators and their recent session activity", handler: async (args: string, ctx: any) => {
-  const values = [...operators.values()]; if (!values.length) { ctx.ui.notify("No operators tracked on this planner branch.", "info"); return; }
+  const values = orderedOperators(); if (!values.length) { ctx.ui.notify("No operators tracked on this planner branch.", "info"); return; }
   let op = values.find(item => item.name === args.trim());
   if (!op && args.trim()) { ctx.ui.notify(`Unknown operator: ${args.trim()}`, "warning"); return; }
   if (!op && ctx.mode === "tui") { const selected = await ctx.ui.select("Choose operator:", values.map(statusLine)); if (!selected) return; op = values[values.map(statusLine).indexOf(selected)]; }
@@ -294,7 +303,7 @@ export default function(pi: any) {
   },
   async execute(_id: string, params: any, _signal: any, _update: any, ctx: any) {
    const action: string = params.action; const name = params.name?.trim(); if (["send", "inspect", "stop", "restart"].includes(action) && !name) throw new Error(`${action} requires name.`);
-   if (action === "list") { const values = [...operators.values()]; return { content: [{ type: "text", text: values.map(statusLine).join("\n") || "No operators on this planner branch." }], details: { operators: values.map(op => ({ ...op })) } }; }
+   if (action === "list") { const values = orderedOperators(); return { content: [{ type: "text", text: values.map(statusLine).join("\n") || "No operators on this planner branch." }], details: { operators: values.map(op => ({ ...op })) } }; }
    if (action === "start" || action === "restart") {
     if (!name || !params.agent || !params.task) throw new Error(`${action} requires name, agent, and task.`); if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new Error("Name must use 1–64 letters, numbers, underscores, or hyphens.");
     const found = discoverAgents(params.cwd ?? ctx.cwd, params.agentScope ?? "user"); const agent = found.agents.find((item: AgentConfig) => item.name === params.agent); if (!agent) throw new Error(`Unknown agent "${params.agent}". Available: ${found.agents.map((a: AgentConfig) => a.name).join(", ") || "none"}.`);
