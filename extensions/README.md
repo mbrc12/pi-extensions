@@ -25,7 +25,7 @@ symlink to this folder.
 | `tools/quiz` | `quiz` tool that grades an inline answer (currently unloaded) |
 | `tools/self_compact` | `self_compact` lets the model compact at a boundary it chooses, with a note |
 | `tools/task-backgrounder` | `task_start`/`status`/`stop`/`clear` run commands in detached tmux |
-| `tools/todo-list` | `todo` tool and `/todo-*` commands; optional per-turn injection |
+| `tools/todo-list` | `todo` tool and `/todo-*` commands; optional per-turn injection (currently unloaded) |
 | `tools/web-use` | `web_use` search and fetch over DDG, Exa, and curl backends |
 | `agents/subagent` | `subagent` delegation in single, parallel, and chain modes |
 | `agents/background-subagent` | `background_subagent` runs one agent without blocking the caller |

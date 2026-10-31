@@ -9,6 +9,7 @@ a set of symlinks into it.
 | Path | What it holds |
 |---|---|
 | `AGENTS.md` | Global instructions: skill map, document and code rules, commit rules |
+| `keybindings.json` | Keybinding overrides: fullscreen line scrolling on `Shift+Up` / `Shift+Down` |
 | `extensions/` | TypeScript extensions, grouped as `tui/`, `tools/`, `agents/`, `models/`, `session/`, and `shared/` helpers |
 | `skills/<name>/SKILL.md` | Procedures loaded on demand — one folder per skill |
 | `prompts/<name>.md` | Prompt templates, exposed as slash commands such as `/commit` and `/multiagent` |
@@ -20,15 +21,16 @@ The full extension list, with one line per extension, lives in
 
 ## How it is wired
 
-Pi reads resources from `~/.pi/agent`. Six symlinks point at this repo:
+Pi reads resources from `~/.pi/agent`. Seven symlinks point at this repo:
 
 ```text
-~/.pi/agent/AGENTS.md   -> ~/dev/pi/AGENTS.md
-~/.pi/agent/agents      -> ~/dev/pi/agents
-~/.pi/agent/extensions  -> ~/dev/pi/extensions
-~/.pi/agent/prompts     -> ~/dev/pi/prompts
-~/.pi/agent/skills      -> ~/dev/pi/skills
-~/.pi/agent/themes      -> ~/dev/pi/themes
+~/.pi/agent/AGENTS.md        -> ~/dev/pi/AGENTS.md
+~/.pi/agent/agents           -> ~/dev/pi/agents
+~/.pi/agent/extensions       -> ~/dev/pi/extensions
+~/.pi/agent/keybindings.json -> ~/dev/pi/keybindings.json
+~/.pi/agent/prompts          -> ~/dev/pi/prompts
+~/.pi/agent/skills           -> ~/dev/pi/skills
+~/.pi/agent/themes           -> ~/dev/pi/themes
 ```
 
 - Edit files here, never through the symlinks, and commit in this repo.
