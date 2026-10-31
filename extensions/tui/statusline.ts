@@ -7,10 +7,13 @@
  *   Line 2: provider/model think:level · cost · generation rate
  *   Line 3: extension statuses such as permissions, todo, and thinking-tail.
  *
+ * A named session also renames the terminal title (and so the tmux window) to the bare name
+ * instead of pi's "π - <name> - <cwd>".
+ *
  * Toggle with /statusline
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
@@ -335,6 +338,9 @@ function subagentCostFromToolResult(message: unknown): number {
 export default function (pi: ExtensionAPI) {
   let currentThinkingLevel = "off";
   let sessionName: string | undefined;
+  // The last name written to the terminal title. Pi resets the title to "π - <name> - <cwd>"
+  // on start-up, rename, and reload, so the footer re-asserts the bare name once afterwards.
+  let titledName: string | undefined;
   let enabled = true;
   let rupeesEnabled = false;
   const activeSubagents = new Map<string, number>();
@@ -462,10 +468,19 @@ export default function (pi: ExtensionAPI) {
   // ---- track the session name ----
   // The name is set by /rename and lives in the session file, so re-read it on both
   // a rename and a session switch rather than caching it at startup only.
-  pi.on("session_info_changed", (event) => {
+  // Pi's own title update runs before this handler, so this write is the one that sticks.
+  pi.on("session_info_changed", (event, ctx) => {
     sessionName = event.name;
+    applyTerminalTitle(ctx, event.name);
     requestFooterRender?.();
   });
+
+  /** Name the terminal after the session; an unnamed session keeps pi's own title. */
+  function applyTerminalTitle(ctx: ExtensionContext, name: string | undefined): void {
+    if (!name) return;
+    ctx.ui.setTitle(name);
+    titledName = name;
+  }
 
   // ---- generation speed: live ticks from the token stream ----
   pi.on("message_start", (event) => {
@@ -547,6 +562,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     currentThinkingLevel = pi.getThinkingLevel();
     sessionName = pi.getSessionName();
+    // Start-up ends by setting pi's own title, after this handler, so the first footer
+    // render re-asserts the bare name instead of writing it here.
+    titledName = undefined;
     resetSubagentTime();
     emaTokPerSec = undefined;
     rateModelKey = undefined;
@@ -620,6 +638,7 @@ export default function (pi: ExtensionAPI) {
 
         render(width: number): string[] {
           if (rupeesEnabled) refreshInrRate(() => tui.requestRender());
+          if (sessionName && sessionName !== titledName) applyTerminalTitle(ctx, sessionName);
 
           // ----- cumulative cost stats -----
           let baseCost = 0;
