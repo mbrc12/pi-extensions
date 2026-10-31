@@ -38,7 +38,7 @@ code churn). Also use it to regenerate an existing report after new sessions.
 ## Quick start
 
 ```bash
-SK=/Users/subwave/.pi/agent/skills/usage-report
+SK=/Users/subwave/dev/pi/skills/usage-report
 PY=/Users/subwave/dev/tmp/random-tasks/.venv/bin/python
 
 # writes <out>/index.html (default output dir is the skill's scripts/ dir)

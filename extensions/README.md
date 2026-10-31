@@ -1,6 +1,7 @@
-# pi-extensions
+# Extensions
 
-Custom extensions for [pi](https://pi.dev/).
+Custom extensions for [pi](https://pi.dev/). The source lives here; `~/.pi/agent/extensions` is a
+symlink to this folder.
 
 | Extension | Purpose |
 |---|---|
@@ -44,4 +45,4 @@ Custom extensions for [pi](https://pi.dev/).
 
 - `multiagent` tries the configured capability models in order. It retries a failed request only before the operator has used any tools; otherwise it reports the failure without replaying the assignment.
 
-Run the tests with `cd ~/.pi/agent/extensions && bun test`.
+Run the tests with `cd ~/dev/pi/extensions && bun test`.

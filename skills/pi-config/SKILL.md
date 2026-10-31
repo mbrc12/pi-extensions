@@ -8,7 +8,7 @@ license: MIT
 
 ## Extension lookup order
 
-**When the user mentions an extension, first check `~/.pi/agent/extensions`.** Only if it is not
+**When the user mentions an extension, first check `~/dev/pi/extensions`.** Only if it is not
 found there, fall back to `node_modules` (the built-in bundled extensions live under
 `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent`).
 
@@ -21,6 +21,7 @@ The editable sources live in the repo at `~/dev/pi/`, and the agent directory li
 | Agent directory entry | Points to |
 |---|---|
 | `~/.pi/agent/AGENTS.md` | `~/dev/pi/AGENTS.md` |
+| `~/.pi/agent/agents` | `~/dev/pi/agents` |
 | `~/.pi/agent/extensions` | `~/dev/pi/extensions` |
 | `~/.pi/agent/skills` | `~/dev/pi/skills` |
 | `~/.pi/agent/prompts` | `~/dev/pi/prompts` |
@@ -31,7 +32,7 @@ Edit files under `~/dev/pi`, never through the symlinks, and commit the change t
 
 ## Skills location
 
-**Skills live in `~/.pi/agent/skills/<name>/`, a symlink to `~/dev/pi/skills/<name>/`.** This is
+**Skills live in `~/dev/pi/skills/<name>/`, linked into `~/.pi/agent/skills/<name>/`.** This is
 pi's default skill directory, so `settings.json` needs no `skills` entry.
 
 - A skill is a directory with `SKILL.md` (YAML frontmatter: `name`, `description`) plus optional `references/`, `scripts/`, `assets/`, and `agents/`.
@@ -46,9 +47,15 @@ pi's default skill directory, so `settings.json` needs no `skills` entry.
 Extension code lives in `~/dev/pi/extensions/`, linked from `~/.pi/agent/extensions`. Its history
 comes from the `pi-extensions` repo, imported under the `extensions/` prefix.
 
+## Subagent definitions
+
+- Live in `~/dev/pi/agents/<name>.md`, linked from `~/.pi/agent/agents/` like the other resources.
+- Frontmatter: `name`, `description`, `tools`, and `capability` (`low`, `medium`, `high`, or `image`). The capability picks the model tier from `extensions/model-config.json`.
+- Edit them in the repo; `subagent`, `background_subagent`, and `multiagent` read the linked copies.
+
 ## Prompt templates
 
-- Live in `~/.pi/agent/prompts/<name>.md` and become `/<name>` commands.
+- Live in `~/dev/pi/prompts/<name>.md`, linked from `~/.pi/agent/prompts/`, and become `/<name>` commands.
 - Frontmatter: `description`, optional `argument-hint`. Substitutions: `$1`, `$2`, `$@`/`$ARGUMENTS`, `${1:-default}`, `${@:N}`, `${@:N:L}`.
 - They load only when invoked, so they never self-trigger. Use a skill instead when the model must decide on its own.
 

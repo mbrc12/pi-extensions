@@ -19,7 +19,7 @@ Replaces the markdown-file + subprocess machinery of pi-hermes-memory with:
 
 | Path | Purpose |
 |---|---|
-| `~/.pi/agent/extensions/tools/memory-store/` | Extension source (auto-discovered, hot-reloadable) |
+| `~/dev/pi/extensions/tools/memory-store/` | Extension source (auto-discovered, hot-reloadable) |
 | `~/.pi/agent/memory-store/memories.db` | Instance data: the SQLite store (created on first run) |
 | `~/.pi/agent/memory-store/config.json` | Optional instance config (see below) |
 

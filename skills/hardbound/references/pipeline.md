@@ -16,7 +16,7 @@ pdftotext -f 1 -l 3 -layout book.pdf - | head -40
 ## 1. Dumps
 
 ```bash
-python3 ~/.pi/agent/skills/hardbound/scripts/pdf_probe.py dump book.pdf --work /tmp/book
+python3 ~/dev/pi/skills/hardbound/scripts/pdf_probe.py dump book.pdf --work /tmp/book
 ```
 
 Two files:
@@ -95,7 +95,7 @@ Ground rules for whoever transcribes:
 Crop helper:
 
 ```bash
-S=~/.pi/agent/skills/hardbound/scripts
+S=~/dev/pi/skills/hardbound/scripts
 # fractions of the page
 python3 $S/pdf_probe.py crop book.pdf 143 --frac 0.12,0.30,0.90,0.62 --out book/assets/figures/fig4-03.png
 # or exact points from bbox.html
