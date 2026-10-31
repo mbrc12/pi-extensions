@@ -51,6 +51,18 @@ function modeLabel(mode: PermissionMode): string {
   }
 }
 
+/** Footer status shows the mode as an emoji only; the label stays in notifications. */
+function modeEmoji(mode: PermissionMode): string {
+  switch (mode) {
+    case "allow":
+      return "🟢";
+    case "classify":
+      return "🤖";
+    case "ask":
+      return "🔴";
+  }
+}
+
 function modeColor(mode: PermissionMode): "success" | "warning" | "error" {
   switch (mode) {
     case "allow":
@@ -768,8 +780,8 @@ function updateStatus(ctx: ExtensionContext) {
     ctx.ui.setStatus(
       "permissions",
       ctx.ui.theme?.fg
-        ? ctx.ui.theme.fg(modeColor(currentMode), modeLabel(currentMode))
-        : modeLabel(currentMode),
+        ? ctx.ui.theme.fg(modeColor(currentMode), modeEmoji(currentMode))
+        : modeEmoji(currentMode),
     );
   }
 }
