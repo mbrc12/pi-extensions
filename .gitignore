@@ -1,0 +1,8 @@
+# Scratch and generated files
+node_modules/
+__pycache__/
+.DS_Store
+
+# Local test databases
+extensions/tools/memory-store/test-db.ts
+extensions/tools/memory-store/test-load.ts
