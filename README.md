@@ -38,7 +38,10 @@ Custom extensions for [pi](https://pi.dev/).
 | `session/exit-alias` | `/exit` alias for `/quit` |
 | `session/notify-on-idle` | Desktop notification when a turn ends, on shutdown, or on `prompt_wait` |
 | `session/recap` | "Now" and "Next" recap widget after 30s idle (currently unloaded) |
+| `session/rename` | `/rename [hint]` proposes session names from broadest to narrowest and asks you to pick one |
 | `shared/` | Imported helpers: model config, fast-mode, notification gate |
 | `model-config.json` | Model fallback lists and profiles used by the extensions above |
+
+- `multiagent` tries the configured capability models in order. It retries a failed request only before the operator has used any tools; otherwise it reports the failure without replaying the assignment.
 
 Run the tests with `cd ~/.pi/agent/extensions && bun test`.

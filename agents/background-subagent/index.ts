@@ -2,10 +2,13 @@
 import { randomUUID } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Key, Markdown, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { createOperatorViewer } from "../multiagent/viewer.ts";
 import { createSubagentTool } from "../subagent/index.ts";
 import { discoverAgents } from "../subagent/agents.ts";
 import { createNotificationGate } from "../../shared/notification-gate.ts";
+import { compactActivityText, extractSessionActivity, formatDuration, renderSessionActivity } from "../shared/session-activity.ts";
+import { formatSessionDisplay } from "../shared/session-display.ts";
 
 const STATE = "background-subagent-state";
 const COMPLETION = "background-subagent-completion";
@@ -34,6 +37,8 @@ interface Job {
 	activity?: string[];
 	draft?: string;
 	updatedAt?: number;
+	/** Latest child transcript, kept in memory and attached to completion messages. */
+	messages?: unknown[];
 }
 const StartParams = Type.Object({
 	name: Type.Optional(Type.String({ description: "Unique job name (generated if omitted)" })),
@@ -50,38 +55,23 @@ const NamedParams = Type.Object({ name: Type.String({ description: "Background s
 const StatusParams = Type.Object({ name: Type.Optional(Type.String({ description: "Job to inspect; omit to list all tracked jobs" })) });
 
 function elapsed(startedAt: number, finishedAt = Date.now()): string {
-	const seconds = Math.max(0, Math.floor((finishedAt - startedAt) / 1000));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
-	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m${String(seconds % 60).padStart(2, "0")}s`;
+	return formatDuration(finishedAt - startedAt, "clock");
 }
 
 function lastText(value: unknown, max = 500): string {
-	const text = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
-	return text.length > max ? `${text.slice(0, max)}…` : text;
+	return compactActivityText(value, max);
 }
 
-function progressFromUpdate(update: Progress): Pick<Job, "phase" | "activity" | "draft" | "model" | "turns" | "cost"> {
+function progressFromUpdate(update: Progress): Pick<Job, "phase" | "activity" | "draft" | "model" | "turns" | "cost" | "messages"> {
 	const result = update.details?.results?.at(-1);
 	if (!result) return { phase: "compacting caller context", activity: [], draft: "" };
-	const activity: string[] = [];
-	let draft = "";
-	for (const message of result.messages.slice(-20)) {
-		if (message.role === "assistant") {
-			for (const part of message.content) {
-				if (part.type === "toolCall") activity.push(`Called ${part.name}: ${lastText(JSON.stringify(part.arguments), 140)}`);
-				else if (part.type === "text") draft = lastText(part.text, 1000);
-			}
-		} else if (message.role === "toolResult") {
-			const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join(" ");
-			activity.push(`${message.isError ? "Failed" : "Finished"} ${message.toolName}${text ? `: ${lastText(text, 180)}` : ""}`);
-		}
-	}
+	const { activity, draft } = extractSessionActivity(result.messages, {
+		messageLimit: 20, activityLimit: RECENT_ACTIVITY, argumentChars: 140, resultChars: 180, draftChars: 1000,
+	});
 	return {
-		phase: "working", activity: activity.slice(-RECENT_ACTIVITY), draft,
+		phase: "working", activity, draft,
 		model: result.model ?? result.requestedModel,
-		turns: result.usage.turns, cost: result.usage.cost,
+		turns: result.usage.turns, cost: result.usage.cost, messages: result.messages,
 	};
 }
 
@@ -91,29 +81,50 @@ function formatJob(job: Job, expanded: boolean): string {
 		lines.push(`Phase: ${job.phase ?? "starting"}`);
 		if (job.model) lines.push(`Model: ${job.model}`);
 		if (job.turns || job.cost) lines.push(`Turns: ${job.turns ?? 0} · Cost: $${(job.cost ?? 0).toFixed(4)}`);
-		if (job.activity?.length) {
-			lines.push(`Last activity: ${job.activity.at(-1)}`);
-			if (expanded && job.activity.length > 1) lines.push("Recent activity:", ...job.activity.slice(0, -1).map((item) => `- ${item}`));
-		}
-		if (expanded && job.draft) lines.push("Latest assistant text:", job.draft);
-	} else if (job.output) lines.push("", expanded ? job.output : lastText(job.output, 240));
+		if (job.messages?.length) lines.push(...formatTranscript(job.messages, expanded));
+		else lines.push(...renderSessionActivity({ activity: job.activity, draft: job.draft }, expanded));
+	} else if (job.messages?.length) lines.push("", ...formatTranscript(job.messages, expanded));
+	else if (job.output) lines.push("", expanded ? job.output : lastText(job.output, 199));
 	return lines.join("\n");
 }
 
-class JobStatusDialog extends Container {
-	constructor(report: string, theme: ExtensionContext["ui"]["theme"], private close: () => void) {
-		super();
-		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("accent", theme.bold(" Background subagent status ")), 1, 0));
-		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("toolOutput", report), 1, 0));
-		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("dim", "Press Escape to close"), 1, 0));
-	}
+/**
+ * Selection/list order: running jobs first, then most recently started.
+ * Running outranks recency so active work is never buried under finished jobs.
+ */
+function orderedJobs(all: Iterable<Job>): Job[] {
+	return [...all].sort((a, b) => {
+		const runningA = a.status === "running" ? 1 : 0;
+		const runningB = b.status === "running" ? 1 : 0;
+		if (runningA !== runningB) return runningB - runningA;
+		return b.startedAt - a.startedAt;
+	});
+}
 
-	handleInput(data: string): void {
-		if (matchesKey(data, Key.escape)) this.close();
+/** One selection-row label with status and how long the job has been active. */
+function jobRow(job: Job): string {
+	return `${job.name} (${job.agent}) · ${job.status} · ${elapsed(job.startedAt, job.finishedAt)}`;
+}
+
+function formatTranscript(messages: readonly unknown[], expanded: boolean): string[] {
+	const transcript = formatSessionDisplay(messages, { expanded });
+	return transcript ? [transcript] : [];
+}
+
+function italicize(theme: ExtensionContext["ui"]["theme"], text: string): string {
+	const withItalic = theme as unknown as { italic?: (value: string) => string };
+	return typeof withItalic.italic === "function" ? withItalic.italic(text) : text;
+}
+
+function coloredReport(report: string, theme: ExtensionContext["ui"]["theme"]): Container {
+	const container = new Container();
+	for (const line of report.split("\n")) {
+		const match = /^(\[(user|system|tool)(?: [^\]]+)?\])/.exec(line);
+		if (match) container.addChild(new Text(theme.fg(match[2] === "user" ? "accent" : match[2] === "system" ? "warning" : "toolTitle", match[1]) + italicize(theme, line.slice(match[1].length)), 0, 0));
+		else if (line === "-----") container.addChild(new Text(theme.fg("dim", line), 0, 0));
+		else container.addChild(new Text(theme.fg("toolOutput", line), 0, 0));
 	}
+	return container;
 }
 
 function preview(text: string): string {
@@ -165,7 +176,7 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 			customType: COMPLETION,
 			content: `Background subagent ${job.name} (${job.agent}) ${job.status}.\n\n${job.output || "(no output)"}`,
 			display: true,
-			details: { id: job.id, name: job.name, agent: job.agent, status: job.status, cost: job.cost, startedAt: job.startedAt, finishedAt: job.finishedAt },
+			details: { id: job.id, name: job.name, agent: job.agent, status: job.status, cost: job.cost, startedAt: job.startedAt, finishedAt: job.finishedAt, messages: job.messages },
 		}, { deliverAs: "followUp", triggerTurn: false });
 		delivered.add(job.id);
 		if (currentCtx?.model) {
@@ -186,7 +197,8 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 		job.cost = cost;
 		controllers.delete(job.id);
 		updateIndicator();
-		pi.appendEntry(STATE, { action: "finish", job: { ...job } });
+		const { messages: _messages, ...persistedJob } = job;
+		pi.appendEntry(STATE, { action: "finish", job: persistedJob });
 		try { notify(job); } catch { /* Persisted result is retried on session start. */ }
 	}
 
@@ -201,16 +213,21 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 		jobs.clear();
 		delivered.clear();
 		currentCtx = ctx;
+		const savedMessages = new Map<string, unknown[]>();
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type === "custom" && entry.customType === STATE) {
 				const data = entry.data as { action?: string; job?: Job } | undefined;
 				if (data?.job && (data.action === "start" || data.action === "finish")) jobs.set(data.job.name, data.job);
 			} else if (entry.type === "custom_message" && entry.customType === COMPLETION) {
-				const data = entry.details as { id?: string } | undefined;
-				if (data?.id) delivered.add(data.id);
+				const data = entry.details as { id?: string; messages?: unknown[] } | undefined;
+				if (data?.id) {
+					delivered.add(data.id);
+					if (data.messages) savedMessages.set(data.id, data.messages);
+				}
 			}
 		}
 		for (const job of jobs.values()) {
+			job.messages ??= savedMessages.get(job.id);
 			if (job.status === "running") finish(job, "interrupted", "Pi stopped or reloaded before this subagent finished. Check any file changes before retrying.");
 			else if (!delivered.has(job.id)) {
 				try { notify(job); } catch { /* Next session start can retry. */ }
@@ -219,7 +236,7 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 		updateIndicator();
 	}
 
-	pi.registerMessageRenderer<{ id: string; name: string; agent?: string; status: Status; cost?: number; startedAt?: number; finishedAt?: number }>(
+	pi.registerMessageRenderer<{ id: string; name: string; agent?: string; status: Status; cost?: number; startedAt?: number; finishedAt?: number; messages?: unknown[] }>(
 		COMPLETION,
 		(message, { expanded, outputPad }, theme) => {
 			const details = message.details;
@@ -243,9 +260,8 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 			const separator = fullText.indexOf("\n\n");
 			const body = separator >= 0 ? fullText.slice(separator + 2) : fullText;
 			box.addChild(new Spacer(1));
-			box.addChild(new Markdown(body, 0, 0, getMarkdownTheme(), {
-				color: (text) => theme.fg("customMessageText", text),
-			}));
+			if (details?.messages?.length) box.addChild(coloredReport(formatSessionDisplay(details.messages, { expanded }), theme));
+			else box.addChild(new Markdown(body, 0, 0, getMarkdownTheme(), { color: (text) => theme.fg("customMessageText", text) }));
 			return box;
 		},
 	);
@@ -309,6 +325,8 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 					}, ctx);
 					if (epoch !== generation || job.status !== "running") return;
 					const output = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+					const latest = result.details?.results?.at(-1);
+					if (latest?.messages) job.messages = latest.messages;
 					finish(job, result.isError ? "failed" : "succeeded", output, result.usage?.cost?.total);
 				} catch (error) {
 					if (epoch === generation && job.status === "running") finish(job, controller.signal.aborted ? "stopped" : "failed", String(error));
@@ -325,19 +343,20 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 		parameters: StatusParams,
 		async execute(_id, { name }) {
 			if (!name) {
-				const tracked = [...jobs.values()].map((job) => formatJob(job, false)).join("\n\n");
-				return { content: [{ type: "text" as const, text: tracked || "No background subagents tracked." }], details: { jobs: [...jobs.values()].map((job) => ({ ...job })) } };
+				const ordered = orderedJobs(jobs.values());
+				const tracked = ordered.map((job) => formatJob(job, false)).join("\n\n");
+				return { content: [{ type: "text" as const, text: tracked || "No background subagents tracked." }], details: { jobs: ordered.map((job) => ({ ...job })) } };
 			}
 			const job = jobs.get(name);
 			if (!job) return { content: [{ type: "text" as const, text: `Unknown job ${name}. Tracked: ${[...jobs.keys()].join(", ") || "none"}.` }], details: {} };
-			return { content: [{ type: "text" as const, text: formatJob(job, true) }], details: { job: { ...job } } };
+			return { content: [{ type: "text" as const, text: formatJob(job, false) }], details: { job: { ...job } } };
 		},
 		renderResult(result, { expanded }, theme) {
 			const details = result.details as { job?: Job; jobs?: Job[] } | undefined;
-			if (details?.job) return new Text(theme.fg("toolOutput", formatJob(details.job, expanded)), 0, 0);
+			if (details?.job) return coloredReport(formatJob(details.job, expanded), theme);
 			if (details?.jobs) {
 				const text = details.jobs.map((job) => formatJob(job, expanded)).join("\n\n");
-				return new Text(theme.fg("toolOutput", text || "No background subagents tracked."), 0, 0);
+				return coloredReport(text || "No background subagents tracked.", theme);
 			}
 			const first = result.content[0];
 			return new Text(first?.type === "text" ? first.text : "", 0, 0);
@@ -353,9 +372,10 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 					ctx.ui.notify("No background subagents tracked.", "info");
 					return;
 				}
-				if (jobs.size === 1) name = [...jobs.keys()][0];
+				const ordered = orderedJobs(jobs.values());
+				if (ordered.length === 1) name = ordered[0].name;
 				else {
-					const selected = await ctx.ui.select("Choose background subagent:", [...jobs.values()].map((job) => `${job.name} (${job.agent}): ${job.status}`));
+					const selected = await ctx.ui.select("Choose background subagent:", ordered.map(jobRow));
 					if (!selected) return;
 					name = selected.split(" (")[0];
 				}
@@ -365,12 +385,18 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 				ctx.ui.notify(`Unknown background subagent: ${name}`, "warning");
 				return;
 			}
-			const report = formatJob(job, true);
 			if (ctx.mode !== "tui") {
-				ctx.ui.notify(report, "info");
+				ctx.ui.notify(formatJob(job, false), "info");
 				return;
 			}
-			await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => new JobStatusDialog(report, theme, done));
+			const selectedJob = job;
+			const fallbackMessages = selectedJob.output
+				? [{ role: "assistant", content: [{ type: "text", text: selectedJob.output }] }]
+				: [];
+			await ctx.ui.custom(createOperatorViewer(() => ({
+				name: selectedJob.name, agent: selectedJob.agent, status: selectedJob.status,
+				model: selectedJob.model ?? "model pending", messages: selectedJob.messages?.length ? selectedJob.messages : fallbackMessages,
+			}), { heightFraction: 0.6 }));
 		},
 	});
 

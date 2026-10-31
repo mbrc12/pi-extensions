@@ -11,12 +11,13 @@ mock.module("@earendil-works/pi-coding-agent", () => ({
 	getMarkdownTheme: () => ({}), keyHint: (_action: string, label: string) => `Ctrl+O ${label}`,
 }));
 mock.module("@earendil-works/pi-tui", () => ({
-	Container: class Container { children: any[] = []; addChild(child: unknown) { this.children.push(child); } },
+	Container: class Container { children: any[] = []; addChild(child: unknown) { this.children.push(child); } clear() { this.children = []; } },
 	Box: class Box { children: any[] = []; constructor(_pad: number, _margin: number, _background: unknown) {} addChild(child: unknown) { this.children.push(child); } },
+	ScrollView: class ScrollView { constructor(_child: unknown, _options?: unknown) {} getContentWidth(width: number) { return width; } },
 	Markdown: class Markdown { constructor(public text: string) {} },
 	Spacer: class Spacer {},
 	Text: class Text { constructor(public text: string) {} },
-	Key: { escape: "escape" },
+	Key: { escape: "escape", ctrl: (key: string) => `ctrl-${key}` },
 	matchesKey: (input: string, key: string) => input === key,
 }));
 mock.module("../agents/subagent/agents.ts", () => ({
@@ -202,6 +203,55 @@ describe("background subagents", () => {
 		expect(h.statuses.has("background-subagent")).toBe(false);
 	});
 
+	test("keeps tool calls and tool results compact even when expanded", async () => {
+		let update!: (result: any) => void;
+		let resolve!: (result: any) => void;
+		execute.mockImplementationOnce((_id: any, _params: any, _signal: any, onUpdate: any) => {
+			update = onUpdate;
+			return new Promise((done) => { resolve = done; });
+		});
+		const h = harness(); h.handlers.get("session_start")(undefined, h.ctx);
+		const started = await h.tools.get("background_subagent").execute("id", { name: "compact", agent: "scout", task: "Explore" }, undefined, undefined, h.ctx);
+		const path = "x".repeat(250);
+		update({ details: { results: [{ usage: { turns: 1, cost: 0 }, messages: [{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path } }] }, { role: "toolResult", toolName: "read", content: [{ type: "text", text: path }] }] }] } });
+		const result = await h.tools.get("background_subagent_status").execute("id", { name: started.details.name });
+		const render = h.tools.get("background_subagent_status").renderResult;
+		const theme = { fg: (_color: string, text: string) => text };
+		const compact = render(result, { expanded: false }, theme).children.map((item: any) => item.text).join("\n");
+		const expanded = render(result, { expanded: true }, theme).children.map((item: any) => item.text).join("\n");
+		expect(compact).toContain("[tool] read: path = "); expect(compact).toContain("…"); expect(compact).not.toContain(path);
+		expect(expanded).toContain("[tool] read result: ");
+		expect(expanded).not.toContain(`[tool] read result: ${path}`);
+		expect(expanded).not.toContain(`[tool] read: path = "${path}"`);
+		resolve({ content: [{ type: "text", text: "Done" }] }); await tick(); h.handlers.get("session_shutdown")();
+	});
+
+	test("lists running jobs first, then most recent, with elapsed time", async () => {
+		const pending: Array<(result: any) => void> = [];
+		execute.mockImplementation(() => new Promise((done) => { pending.push(done); }));
+		const h = harness(); h.handlers.get("session_start")(undefined, h.ctx);
+		const start = h.tools.get("background_subagent").execute;
+		await start("a", { name: "oldest-running", agent: "scout", task: "One" }, undefined, undefined, h.ctx);
+		await new Promise((done) => setTimeout(done, 5));
+		await start("b", { name: "recent-finished", agent: "scout", task: "Two" }, undefined, undefined, h.ctx);
+		pending[1]({ content: [{ type: "text", text: "done" }], isError: false }); await tick();
+		await new Promise((done) => setTimeout(done, 5));
+		await start("c", { name: "newest-finished", agent: "scout", task: "Three" }, undefined, undefined, h.ctx);
+		pending[2]({ content: [{ type: "text", text: "done" }], isError: false }); await tick();
+
+		let captured: string[] = [];
+		h.ctx.ui.select = async (_title: string, options: string[]) => { captured = options; return undefined; };
+		await h.commands.get("background-subagent-status").handler("", h.ctx);
+		expect(captured.map((row) => row.split(" (")[0])).toEqual(["oldest-running", "newest-finished", "recent-finished"]);
+		expect(captured[0]).toMatch(/· running · \d+s$/);
+		expect(captured[1]).toMatch(/· succeeded · \d+s$/);
+
+		const listed = await h.tools.get("background_subagent_status").execute("id", {});
+		expect(listed.details.jobs.map((job: any) => job.name)).toEqual(["oldest-running", "newest-finished", "recent-finished"]);
+		pending[0]({ content: [{ type: "text", text: "late" }], isError: false }); await tick();
+		h.handlers.get("session_shutdown")();
+	});
+
 	test("shows live tool activity and a third-line footer indicator without injecting progress", async () => {
 		let update!: (result: any) => void;
 		let resolve!: (result: any) => void;
@@ -223,7 +273,7 @@ describe("background subagents", () => {
 			{ role: "assistant", content: [{ type: "text", text: "Investigating the parser" }] },
 		] }] } });
 		const status = await h.tools.get("background_subagent_status").execute("id", { name });
-		expect(status.content[0].text).toContain("Finished read: Found relevant code");
+		expect(status.content[0].text).toContain("[tool] read result: Found relevant code");
 		expect(status.content[0].text).toContain("Investigating the parser");
 		expect(status.content[0].text).toContain("Turns: 2 · Cost: $0.0300");
 		expect(status.content[0].text).not.toContain("private thought");

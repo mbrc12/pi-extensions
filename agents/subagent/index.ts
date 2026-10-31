@@ -37,13 +37,14 @@ import {
 	type ExtensionAPI,
 	type ToolDefinition,
 	getAgentDir,
-	getMarkdownTheme,
 	serializeConversation,
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { subagentEnvironment } from "../../shared/fast-mode.ts";
+import { formatDuration } from "../shared/session-activity.ts";
+import { getSessionDisplayEntries } from "../shared/session-display.ts";
 import {
 	completeWithModelFallback,
 	getSubagentModelFallbacks,
@@ -65,15 +66,6 @@ function formatTokens(count: number): string {
 	return `${(count / 1000000).toFixed(1)}M`;
 }
 
-function formatDuration(ms: number): string {
-	const totalSeconds = Math.max(0, ms) / 1000;
-	if (totalSeconds < 10) return `${totalSeconds.toFixed(1)}s`;
-	if (totalSeconds < 60) return `${Math.round(totalSeconds)}s`;
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = Math.round(totalSeconds % 60);
-	if (minutes < 60) return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
-	return `${Math.floor(minutes / 60)}h${(minutes % 60).toString().padStart(2, "0")}m`;
-}
 
 /**
  * Shorten a provider/id reference to its model id. The compact rows have no
@@ -134,74 +126,6 @@ function fallbackPosition(result: SingleResult): number | undefined {
 	if (!attempts || attempts.length < 2) return undefined;
 	const okIndex = attempts.findIndex((attempt) => attempt.ok);
 	return (okIndex >= 0 ? okIndex : attempts.length - 1) + 1;
-}
-
-function formatToolCall(
-	toolName: string,
-	args: Record<string, unknown>,
-	themeFg: (color: any, text: string) => string,
-): string {
-	const shortenPath = (p: string) => {
-		const home = os.homedir();
-		return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-	};
-
-	switch (toolName) {
-		case "bash": {
-			const command = (args.command as string) || "...";
-			const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
-			return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
-		}
-		case "read": {
-			const rawPath = (args.file_path || args.path || "...") as string;
-			const filePath = shortenPath(rawPath);
-			const offset = args.offset as number | undefined;
-			const limit = args.limit as number | undefined;
-			let text = themeFg("accent", filePath);
-			if (offset !== undefined || limit !== undefined) {
-				const startLine = offset ?? 1;
-				const endLine = limit !== undefined ? startLine + limit - 1 : "";
-				text += themeFg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
-			}
-			return themeFg("muted", "read ") + text;
-		}
-		case "write": {
-			const rawPath = (args.file_path || args.path || "...") as string;
-			const filePath = shortenPath(rawPath);
-			const content = (args.content || "") as string;
-			const lines = content.split("\n").length;
-			let text = themeFg("muted", "write ") + themeFg("accent", filePath);
-			if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
-			return text;
-		}
-		case "edit": {
-			const rawPath = (args.file_path || args.path || "...") as string;
-			return themeFg("muted", "edit ") + themeFg("accent", shortenPath(rawPath));
-		}
-		case "ls": {
-			const rawPath = (args.path || ".") as string;
-			return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));
-		}
-		case "find": {
-			const pattern = (args.pattern || "*") as string;
-			const rawPath = (args.path || ".") as string;
-			return themeFg("muted", "find ") + themeFg("accent", pattern) + themeFg("dim", ` in ${shortenPath(rawPath)}`);
-		}
-		case "grep": {
-			const pattern = (args.pattern || "") as string;
-			const rawPath = (args.path || ".") as string;
-			return (
-				themeFg("muted", "grep ") +
-				themeFg("accent", `/${pattern}/`) +
-				themeFg("dim", ` in ${shortenPath(rawPath)}`)
-			);
-		}
-		default: {
-			const argsStr = JSON.stringify(args);
-			const preview = argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-			return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
-		}
-	}
 }
 
 interface UsageStats {
@@ -562,21 +486,6 @@ function truncateParallelOutput(output: string): string {
 		truncated = truncated.slice(0, -1);
 	}
 	return `${truncated}\n\n[Output truncated: ${byteLength - Buffer.byteLength(truncated, "utf8")} bytes omitted. Full output preserved in tool details.]`;
-}
-
-type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
-
-function getDisplayItems(messages: Message[]): DisplayItem[] {
-	const items: DisplayItem[] = [];
-	for (const msg of messages) {
-		if (msg.role === "assistant") {
-			for (const part of msg.content) {
-				if (part.type === "text") items.push({ type: "text", text: part.text });
-				else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
-			}
-		}
-	}
-	return items;
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
@@ -1316,10 +1225,11 @@ export function createSubagentTool(pi: ExtensionAPI) {
 			const details = result.details as SubagentDetails | undefined;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
-				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+				const value = text?.type === "text" ? text.text : "(no output)";
+				const compact = value.replace(/\s+/g, " ");
+				return new Text(expanded ? value : compact.length > 200 ? `${compact.slice(0, 199)}…` : compact, 0, 0);
 			}
 
-			const mdTheme = getMarkdownTheme();
 			const sep = theme.fg("dim", " · ");
 
 			const stateIcon = (r: SingleResult): string => {
@@ -1347,9 +1257,9 @@ export function createSubagentTool(pi: ExtensionAPI) {
 
 			const durationText = (r: SingleResult): string | undefined => {
 				if (r.exitCode === -1) {
-					return r.startedAt !== undefined ? formatDuration(Date.now() - r.startedAt) : undefined;
+					return r.startedAt !== undefined ? formatDuration(Date.now() - r.startedAt, "precise") : undefined;
 				}
-				return r.durationMs !== undefined ? formatDuration(r.durationMs) : undefined;
+				return r.durationMs !== undefined ? formatDuration(r.durationMs, "precise") : undefined;
 			};
 
 			/** `✓ reviewer (project) · gpt-5.6-luna (fallback 2/3) · 42s · stopped on a tool call` */
@@ -1384,7 +1294,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 							? theme.fg("dim", ` (ran ${reported})`)
 							: "";
 					const detail = attempt.ok
-						? theme.fg("muted", formatDuration(attempt.durationMs))
+						? theme.fg("muted", formatDuration(attempt.durationMs, "precise"))
 						: theme.fg("dim", attempt.failure ?? "failed");
 					return `${icon} ${theme.fg("muted", attempt.model)}${swapped} ${detail}`;
 				});
@@ -1503,17 +1413,19 @@ export function createSubagentTool(pi: ExtensionAPI) {
 			};
 			 */
 
-			const renderDisplayItems = (items: DisplayItem[], limit?: number) => {
-				const toShow = limit ? items.slice(-limit) : items;
-				const skipped = limit && items.length > limit ? items.length - limit : 0;
-				let text = "";
-				if (skipped > 0) text += theme.fg("muted", `... ${skipped} earlier items\n`);
-				for (const item of toShow) {
-					if (item.type === "text") {
-						const preview = expanded ? item.text : item.text.split("\n").slice(0, 3).join("\n");
-						text += `${theme.fg("toolOutput", preview)}\n`;
+			const renderDisplayItems = (messages: Message[], limit?: number) => {
+				const entries = getSessionDisplayEntries(messages, { expanded });
+				const toShow = limit && !expanded ? entries.slice(-limit) : entries;
+				const skipped = limit && !expanded && entries.length > limit ? entries.length - limit : 0;
+				let text = skipped > 0 ? theme.fg("muted", `... ${skipped} earlier items\n`) : "";
+				for (const entry of toShow) {
+					if (entry.type === "assistant") {
+						text += `${theme.fg("dim", "-----")}\n${theme.fg("toolOutput", entry.body)}\n${theme.fg("dim", "-----")}\n`;
 					} else {
-						text += `${theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme))}\n`;
+						const tag = theme.fg(entry.type === "user" ? "accent" : entry.type === "system" ? "warning" : "toolTitle", `[${entry.type}]`);
+						const body = entry.type === "tool" ? `${entry.label}${entry.body ? `: ${entry.body}` : ""}` : entry.body;
+						const italic = typeof (theme as any).italic === "function" ? (theme as any).italic(body) : theme.fg("toolOutput", body);
+						text += `${tag}${body ? ` ${italic}` : ""}\n`;
 					}
 				}
 				return text.trimEnd();
@@ -1521,8 +1433,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const displayItems = getDisplayItems(r.messages);
-				const finalOutput = getFinalOutput(r.messages);
+				const displayItems = getSessionDisplayEntries(r.messages, { expanded });
 				const usageText = usageLine(r.usage, { tier: tierOf(r) });
 				const wiseText = wiseUsageLine();
 
@@ -1538,23 +1449,10 @@ export function createSubagentTool(pi: ExtensionAPI) {
 					container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
-					if (displayItems.length === 0 && !finalOutput) {
+					if (displayItems.length === 0) {
 						container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
 					} else {
-						for (const item of displayItems) {
-							if (item.type === "toolCall")
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-						}
-						if (finalOutput) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
-						}
+						container.addChild(new Text(renderDisplayItems(r.messages), 0, 0));
 					}
 					if (usageText) {
 						container.addChild(new Spacer(1));
@@ -1565,11 +1463,14 @@ export function createSubagentTool(pi: ExtensionAPI) {
 				}
 
 				let text = agentHeader(r);
-				if (r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+				if (r.errorMessage) {
+					const error = r.errorMessage.replace(/\s+/g, " ");
+					text += `\n${theme.fg("error", `Error: ${error.length > 200 ? `${error.slice(0, 199)}…` : error}`)}`;
+				}
 				else if (displayItems.length === 0) {
 					text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
 				} else {
-					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
+					text += `\n${renderDisplayItems(r.messages, COLLAPSED_ITEM_COUNT)}`;
 				}
 				if (usageText) text += `\n${usageText}`;
 				if (wiseText) text += `\n${wiseText}`;
@@ -1607,8 +1508,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 					container.addChild(new Text(groupHeader("chain", status, details.results), 0, 0));
 
 					for (const r of details.results) {
-						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const displayItems = getSessionDisplayEntries(r.messages, { expanded });
 
 						container.addChild(new Spacer(1));
 						container.addChild(
@@ -1619,25 +1519,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 						if (attempts) container.addChild(new Text("  " + attempts, 0, 0));
 						if (r.errorMessage)
 							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
-
-						// Show tool calls
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-							}
-						}
-
-						// Show final output as markdown
-						if (finalOutput) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
-						}
+						if (displayItems.length > 0) container.addChild(new Text(renderDisplayItems(r.messages), 0, 0));
 
 						const stepUsage = usageLine(r.usage, { tier: rowTier(r) });
 						if (stepUsage) container.addChild(new Text(stepUsage, 0, 0));
@@ -1656,11 +1538,11 @@ export function createSubagentTool(pi: ExtensionAPI) {
 				// Collapsed view
 				let text = groupHeader("chain", status, details.results);
 				for (const r of details.results) {
-					const displayItems = getDisplayItems(r.messages);
+					const displayItems = getSessionDisplayEntries(r.messages, { expanded });
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step} ─── `)}${agentHeader(r)}`;
 					if (displayItems.length === 0) {
 						text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
-					} else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					} else text += `\n${renderDisplayItems(r.messages, 5)}`;
 				}
 				const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });
 				if (usageStr) text += `\n\n${usageStr}`;
@@ -1682,8 +1564,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 					container.addChild(new Text(groupHeader("parallel", status, details.results), 0, 0));
 
 					for (const r of details.results) {
-						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const displayItems = getSessionDisplayEntries(r.messages, { expanded });
 
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(theme.fg("muted", "─── ") + agentHeader(r), 0, 0));
@@ -1692,25 +1573,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 						if (attempts) container.addChild(new Text("  " + attempts, 0, 0));
 						if (r.errorMessage)
 							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
-
-						// Show tool calls
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
-							}
-						}
-
-						// Show final output as markdown
-						if (finalOutput) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
-						}
+						if (displayItems.length > 0) container.addChild(new Text(renderDisplayItems(r.messages), 0, 0));
 
 						const taskUsage = usageLine(r.usage, { tier: rowTier(r) });
 						if (taskUsage) container.addChild(new Text(taskUsage, 0, 0));
@@ -1729,11 +1592,11 @@ export function createSubagentTool(pi: ExtensionAPI) {
 				// Collapsed view (or still running)
 				let text = groupHeader("parallel", status, details.results);
 				for (const r of details.results) {
-					const displayItems = getDisplayItems(r.messages);
+					const displayItems = getSessionDisplayEntries(r.messages, { expanded });
 					text += `\n\n${theme.fg("muted", "─── ")}${agentHeader(r)}`;
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
-					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					else text += `\n${renderDisplayItems(r.messages, 5)}`;
 				}
 				if (!isRunning) {
 					const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });
