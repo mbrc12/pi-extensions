@@ -46,7 +46,7 @@ that kind of work.
 ## Pi extensions and configuration
 
 - **Extension lookup order:** check `~/.pi/agent/extensions` (a symlink to `~/dev/pi/extensions`) first, then fall back to `node_modules`. Load `pi-config` for the repo layout, skill locations, prompt templates, and always-on files.
-- Editable sources live in `~/dev/pi/`: `extensions/`, `skills/`, `prompts/`, and `AGENTS.md`. Edit there, not through the symlinks, and commit in that repo.
+- Editable sources live in `~/dev/pi/`: `extensions/`, `skills/`, `prompts/`, `themes/`, and `AGENTS.md`. Edit there, not through the symlinks, and commit in that repo.
 - `~/dev/pi/skills/<name>/` is where new skills go. `~/dev/pi/prompts/<name>.md` is where new `/commands` go.
 - Run `/reload` after editing skills, prompt templates, settings, or instruction files.
 

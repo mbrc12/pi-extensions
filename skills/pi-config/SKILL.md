@@ -24,7 +24,7 @@ The editable sources live in the repo at `~/dev/pi/`, and the agent directory li
 | `~/.pi/agent/extensions` | `~/dev/pi/extensions` |
 | `~/.pi/agent/skills` | `~/dev/pi/skills` |
 | `~/.pi/agent/prompts` | `~/dev/pi/prompts` |
-| `~/.pi/agent/themes` | real directory, not in the repo |
+| `~/.pi/agent/themes` | `~/dev/pi/themes` |
 
 Edit files under `~/dev/pi`, never through the symlinks, and commit the change there.
 `~/.pi/agent/settings.json`, `auth.json`, and `mcp.json` stay in the agent directory.
