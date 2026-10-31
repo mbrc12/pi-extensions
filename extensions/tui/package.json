@@ -5,7 +5,6 @@
       "./code-block-box.ts",
       "./thinking-tail.ts",
       "./statusline.ts",
-      "./working-indicator.ts",
       "./prompt-prefix.ts",
       "./vscode-theme.ts",
       "./image-links.ts",

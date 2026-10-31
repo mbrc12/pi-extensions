@@ -15,7 +15,6 @@ symlink to this folder.
 | `tui/statusline` | Replaces the footer with cwd, tokens, speed, model, cost, and limits |
 | `tui/thinking-tail` | Shows only the last 5 displayed lines of long thinking blocks |
 | `tui/vscode-theme` | Switches theme inside a VS Code terminal without touching global settings |
-| `tui/working-indicator` | Ping-pong spinner with tool activity, elapsed time, and dry one-liners |
 | `tools/ask-question` | `ask_question` dialog: single-choice, multi-choice, or free text |
 | `tools/context` | `context_recall`: search and read messages hidden by compaction |
 | `tools/export-md` | `/export-md` writes the session branch as a Markdown transcript |
@@ -53,6 +52,7 @@ one, move it back into its topic folder and add it to that folder's `pi.extensio
 - `disabled/quiz.ts` — `quiz` tool that grades an inline answer.
 - `disabled/recap.ts` — "Now" and "Next" recap widget after 30s idle.
 - `disabled/style-guard.ts` — rewrites dense final answers through a second pass.
+- `disabled/working-indicator.ts` — ping-pong loader with tool activity and dry one-liners; the statusline now carries the spinner and elapsed time.
 - `disabled/todo-list.ts` — `todo` tool and `/todo-*` commands with optional per-turn injection.
 
 - `multiagent` tries the configured capability models in order. It retries a failed request only before the operator has used any tools; otherwise it reports the failure without replaying the assignment.

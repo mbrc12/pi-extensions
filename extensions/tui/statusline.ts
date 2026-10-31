@@ -11,6 +11,9 @@
  * instead of pi's "π - <name> - <cwd>".
  *
  * Toggle with /statusline
+ *
+ * The working spinner lives on line 2 with the elapsed turn time: pi's own
+ * indicator above the prompt is hidden so the footer is the only place it shows.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -158,6 +161,19 @@ function sanitize(text: string): string {
 
 function finiteNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Compress a provider id to its initials: `opencode-go` → `og`, `openai-codex` →
+ * `oc`, and a numeric tail survives whole (`openai-codex-2` → `oc2`).
+ */
+function providerInitials(provider: string): string {
+  const initials = provider
+    .split("-")
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? part : part[0]!))
+    .join("");
+  return initials || provider;
 }
 
 type TokenRates = {
@@ -348,6 +364,42 @@ export default function (pi: ExtensionAPI) {
   let lastSubagentDurationMs: number | undefined;
   let subagentTicker: ReturnType<typeof setInterval> | undefined;
   let requestFooterRender: (() => void) | undefined;
+
+  // ---- working spinner ----
+  // A single braille cell keeps the footer narrow; every frame is one column wide,
+  // so nothing shifts as it animates.
+  const WORKING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const WORKING_FRAME_MS = 110;
+  let workingStartedAt: number | undefined;
+  let workingFrame = 0;
+  let workingTicker: ReturnType<typeof setInterval> | undefined;
+
+  function stopWorkingTicker(): void {
+    if (workingTicker) clearInterval(workingTicker);
+    workingTicker = undefined;
+  }
+
+  function ensureWorkingTicker(): void {
+    if (!enabled || !requestFooterRender || workingStartedAt === undefined || workingTicker) return;
+    workingTicker = setInterval(() => {
+      workingFrame = (workingFrame + 1) % WORKING_FRAMES.length;
+      requestFooterRender?.();
+    }, WORKING_FRAME_MS);
+  }
+
+  pi.on("agent_start", () => {
+    workingStartedAt = Date.now();
+    workingFrame = 0;
+    stopWorkingTicker();
+    ensureWorkingTicker();
+    requestFooterRender?.();
+  });
+
+  pi.on("agent_settled", () => {
+    workingStartedAt = undefined;
+    stopWorkingTicker();
+    requestFooterRender?.();
+  });
 
   // ---- generation speed (tokens/sec) ----
   // A token-driven exponential moving average of output speed with a 20-second
@@ -571,11 +623,17 @@ export default function (pi: ExtensionAPI) {
     rateHalfLifeMs = RATE_HALF_LIFE_MS;
     charsPerToken = DEFAULT_CHARS_PER_TOKEN;
     resetStreamRate();
+    workingStartedAt = undefined;
+    stopWorkingTicker();
+    // The spinner moves to the footer, so pi's own indicator above the prompt goes away.
+    ctx.ui.setWorkingVisible(false);
     if (enabled) installFooter(ctx);
   });
 
   pi.on("session_shutdown", () => {
     resetSubagentTime();
+    workingStartedAt = undefined;
+    stopWorkingTicker();
     requestFooterRender = undefined;
   });
 
@@ -608,11 +666,16 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       enabled = !enabled;
       if (enabled) {
+        ctx.ui.setWorkingVisible(false);
         installFooter(ctx);
         ensureSubagentTicker();
+        ensureWorkingTicker();
         ctx.ui.notify("Custom statusline enabled", "info");
       } else {
+        // Hand the working indicator back to pi when the footer no longer shows it.
+        ctx.ui.setWorkingVisible(true);
         stopSubagentTicker();
+        stopWorkingTicker();
         ctx.ui.setFooter(undefined);
         ctx.ui.notify("Default footer restored", "info");
       }
@@ -626,12 +689,14 @@ export default function (pi: ExtensionAPI) {
       const renderFooter = () => tui.requestRender();
       requestFooterRender = renderFooter;
       ensureSubagentTicker();
+      ensureWorkingTicker();
       const unsub = footerData.onBranchChange(renderFooter);
 
       return {
         dispose() {
           unsub();
           stopSubagentTicker();
+          stopWorkingTicker();
           if (requestFooterRender === renderFooter) requestFooterRender = undefined;
         },
         invalidate() {},
@@ -700,13 +765,11 @@ export default function (pi: ExtensionAPI) {
           // ----- model + thinking level -----
           const modelId = ctx.model?.id ?? "—";
           const modelSource = ctx.model?.provider;
-          const modelDisplay = modelSource ? `${modelSource}/${modelId}` : modelId;
+          const modelDisplay = modelSource
+            ? `${providerInitials(modelSource)}/${modelId}`
+            : modelId;
           const reasoning = ctx.model?.reasoning;
-          const thinkPart = reasoning
-            ? currentThinkingLevel === "off"
-              ? "think:off"
-              : `think:${currentThinkingLevel}`
-            : null;
+          const thinkPart = reasoning ? currentThinkingLevel : null;
 
           // ----- build free-flowing segments (no column alignment) -----
           const sep = theme.fg("borderMuted", " \u00b7 ");
@@ -780,8 +843,16 @@ export default function (pi: ExtensionAPI) {
             .filter(Boolean)
             .join(sep);
 
-          // Line 2: provider/model spec · cost · generation rate
-          const line2 = [modelSeg, costSeg, rateSeg]
+          // Line 2: model · spinner and turn time · cost · speed
+          let workingSeg = "";
+          if (workingStartedAt !== undefined) {
+            workingSeg =
+              theme.fg("accent", WORKING_FRAMES[workingFrame] ?? WORKING_FRAMES[0]!) +
+              " " +
+              theme.fg("muted", formatDuration(Date.now() - workingStartedAt));
+          }
+
+          const line2 = [modelSeg, workingSeg, costSeg, rateSeg]
             .filter(Boolean)
             .join(sep);
 
