@@ -11,6 +11,8 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -30,6 +32,10 @@ const PyExploreParams = Type.Object({
   cwd: Type.Optional(Type.String({
     description: "Working directory for the Python process (defaults to the agent's cwd).",
   })),
+  venv: Type.Optional(Type.String({
+    description:
+      "Virtual environment to run the script with: either its directory (e.g. /path/to/project/.venv) or its python executable. Relative paths resolve against cwd. Defaults to the uv-managed interpreter, then the system python3.",
+  })),
 });
 
 const MAX_OUTPUT_BYTES = 200 * 1024;
@@ -38,7 +44,7 @@ const CONTENT_OUTPUT_BYTES = 50 * 1024;
 interface PythonCommand {
   command: string;
   args: string[];
-  source: "uv" | "system";
+  source: "uv" | "system" | "venv";
 }
 
 function resolveSystemPython(): PythonCommand {
@@ -47,6 +53,35 @@ function resolveSystemPython(): PythonCommand {
     args: [],
     source: "system",
   };
+}
+
+/**
+ * Turn a venv path (directory or interpreter) into the interpreter path.
+ * Throws a caller-facing message when the path does not look like a venv.
+ */
+function venvToPython(venv: string, cwd: string): string {
+  const target = resolvePath(cwd, venv);
+  const isWindows = process.platform === "win32";
+
+  if (!existsSync(target)) {
+    throw new Error(`venv path does not exist: ${target}`);
+  }
+
+  if (statSync(target).isFile()) {
+    return target;
+  }
+
+  const candidates = isWindows
+    ? [join(target, "Scripts", "python.exe")]
+    : [join(target, "bin", "python3"), join(target, "bin", "python")];
+
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error(
+      `no interpreter in venv directory ${target} (looked for ${candidates.join(", ")})`,
+    );
+  }
+  return found;
 }
 
 function collectCommandOutput(
@@ -94,7 +129,27 @@ function collectCommandOutput(
   });
 }
 
-async function resolvePython(cwd: string, signal?: AbortSignal): Promise<PythonCommand> {
+async function resolvePython(
+  cwd: string,
+  signal?: AbortSignal,
+  venv?: string,
+): Promise<PythonCommand> {
+  if (venv) {
+    const python = venvToPython(venv, cwd);
+    const validation = await collectCommandOutput(
+      python,
+      ["-c", "import sys"],
+      cwd,
+      signal,
+    );
+    if (validation.exitCode !== 0) {
+      throw new Error(
+        `venv interpreter ${python} failed to start: ${validation.stderr.trim() || `exit code ${validation.exitCode}`}`,
+      );
+    }
+    return { command: python, args: [], source: "venv" };
+  }
+
   try {
     const { stdout, exitCode } = await collectCommandOutput(
       "uv",
@@ -140,8 +195,9 @@ async function runPython(
   code: string,
   cwd: string,
   signal?: AbortSignal,
+  venv?: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number; python: PythonCommand }> {
-  const python = await resolvePython(cwd, signal);
+  const python = await resolvePython(cwd, signal, venv);
 
   return new Promise((resolve, reject) => {
     const child = spawn(python.command, [...python.args, "-c", code], {
@@ -249,12 +305,13 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
     name: "py_explore",
     label: "Python Explore",
     description:
-      "Run a read-only/exploratory Python script. The code is checked by a regex deny-list and a cheap LLM to ensure it does not write, delete, move, copy, or create files.",
+      "Run a read-only/exploratory Python script. The code is checked by a regex deny-list and a cheap LLM to ensure it does not write, delete, move, copy, or create files. Pass venv to run inside a specific virtual environment.",
     promptSnippet:
-      "Use py_explore (preferred) to run small read-only Python scripts (polars, pandas, numpy, inspection). Prefer it over python heredocs or python -c in bash. The code must not write files or spawn destructive subprocesses.",
+      "Use py_explore (preferred) to run small read-only Python scripts (polars, pandas, numpy, inspection). Prefer it over python heredocs or python -c in bash. The code must not write files or spawn destructive subprocesses. Pass venv when the script needs a specific virtual environment.",
     promptGuidelines: [
       "Use py_explore for quick data exploration, inspection, and transformation in Python.",
       "Prefer py_explore over running Python via bash heredocs or python -c for read-only/exploratory scripts.",
+      "Pass py_explore's venv parameter (a venv directory or its python executable) when the script needs packages from a specific environment, for example /Users/subwave/dev/tmp/random-tasks/.venv.",
       "Do not use py_explore for code that writes files, deletes files, moves/copies files, or runs subprocesses that do so.",
       "For heavy writes use the standard bash or write tools instead.",
     ],
@@ -283,7 +340,20 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         content: [{ type: "text", text: `Write gate passed (${check.source}). Resolving Python...` }],
       });
 
-      const { stdout, stderr, exitCode, python } = await runPython(code, cwd, signal);
+      let outcome: Awaited<ReturnType<typeof runPython>>;
+      try {
+        outcome = await runPython(code, cwd, signal, params.venv);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `py_explore could not start Python: ${message}` }],
+          details: { gate: check, code, venv: params.venv },
+          isError: true,
+        };
+      }
+
+      const { stdout, stderr, exitCode, python } = outcome;
 
       const output = stderr
         ? `[stdout]\n${stdout}\n\n[stderr]\n${stderr}`
