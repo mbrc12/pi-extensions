@@ -7,7 +7,7 @@
 
 ## Non-goals
 
-- Replacing `context_recall` for the current session's active branch.
+- Replacing Pi's own transcript with consult output; self mode reads the branch, it does not edit it.
 - Editing, deleting, resuming, or changing another session.
 - Semantic search, automatic context injection, or indexing private reasoning.
 
@@ -18,6 +18,7 @@
 - Keep parameter descriptions to one short clause because the direct tool declaration is present in every prompt.
 - The tool returns a page plus total `pages`; the model requests later pages by repeating the same parameters with a different `page`.
 - `last: true` reuses the last successful normalized query from the current branch and overlays supplied parameters.
+- `self: true` switches the same tool to this session's active branch, read from `ctx.sessionManager.getBranch()` in memory: no discovery, no disk scan, no cache. It supports `search` and `list` only; `summary` is rejected because the session is already in context.
 - Mark the tool read-only and idempotent. Never interpret retrieved session text as instructions.
 
 ## Sessions and indexing
@@ -30,7 +31,7 @@
 - Keyword search first filters metadata, sorts candidates by recency, then scans at most 300 files, 256 MiB of bytes, or 2.5 seconds. It lowercases each raw JSONL line and parses only lines that can match, so a miss costs a scan instead of a parse. Disclose `scanned N of M candidates` if a cap stops the scan.
 - Measured on 579 real sessions (3.6 GB): metadata for every session reads in about 100 ms, and a capped keyword search reads 22 files and returns in about 1.3 s.
 - Searchable text is user/assistant text blocks only, plus tool-call arguments and tool-result text when `includeToolCalls` is true. Skip thinking, system prompts, and images. Keep at most 20 hits per session and show a 240-character excerpt around the first match.
-- Exclude the current session by canonical path and ID; if directly targeted, return `CURRENT_SESSION` and point to `context_recall`.
+- Exclude the current session by canonical path and ID; if directly targeted without `self`, return `CURRENT_SESSION` and point at `self: true`.
 
 ## Commands and parameters
 
@@ -58,10 +59,22 @@
   | `page` | integer ≥ 1 | 1 | all | Select one result page. |
   | `pageChars` | integer, 2,000–12,000 characters | 8,000 characters | all | Set page body budget. |
   | `last` | boolean | false | all | Reuse prior query and overlay supplied parameters. |
+  | `self` | boolean | false | search, list | Read this session's active branch instead of other sessions. |
+  | `entryId` | string | none | list | Read one entry from a list result in full, instead of clipped. |
   | `instruction` | string, max 500 characters | none | summary | Focus the digest. |
 
 - A target is selected by `sessionId`, `path`, or `name`; ambiguous names are an error, never a guess.
 - `query` is limited to 200 characters; split on whitespace and require every term to occur.
+
+## Self mode
+
+- Entries come from the active branch, so pre-compaction history stays searchable while the compaction summary itself is not indexed.
+- Search covers user, assistant, `bashExecution`, and (opt-in) tool-result text. Thinking, system prompts, images, and consult's own tool results are skipped to avoid recall loops.
+- Search returns newest first with a 240-character excerpt; list returns chronological records clipped to 2,000 characters.
+- `entryId` returns one entry unclipped, and paging then acts as a character offset, which replaces the old read-with-offset call.
+- Compaction and branch-summary entries render as role `compactionSummary`, available through `role`.
+- No cache and no fingerprints: the branch is already in memory, and it changes on every turn.
+- Disk-only filters (`sessionId`, `path`, `name`, dates, `cwd`, `status`, `sort`) are rejected in self mode rather than ignored.
 
 ## Paging and truncation
 
@@ -157,6 +170,7 @@
 ## Failure modes
 
 - `NOT_FOUND`, `AMBIGUOUS_NAME`, `CURRENT_SESSION`, `MISSING_TARGET`, `NO_LAST_QUERY`, `INVALID_PAGE`, `PAGE_OUT_OF_RANGE`, `MODEL_UNAVAILABLE`, `SESSION_TOO_LARGE`, and `INVALID_ARGUMENT` use stable codes.
+- Self mode adds: unknown `entryId` is `NOT_FOUND`, disk filters are `INVALID_ARGUMENT`, and `summary` with `self` names `search` and `list` as the alternatives.
 - Ignore an incomplete final JSONL line; report skipped unreadable files and continue discovery.
 - If a file changes during reading, do not retain its result cache entry; use the next call to refresh.
 

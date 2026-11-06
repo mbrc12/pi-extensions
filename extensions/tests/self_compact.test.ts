@@ -130,7 +130,7 @@ describe("self_compact tool", () => {
 		expect(h.sent[0].options).toEqual({ triggerTurn: true });
 		expect(h.sent[0].message.customType).toBe("self_compact");
 		expect(h.sent[0].message.content).toContain("finish the parser");
-		expect(h.sent[0].message.content).toContain("context_recall");
+		expect(h.sent[0].message.content).toContain("consult");
 		expect(h.sent[0].message.details.status).toBe("compacted");
 	});
 

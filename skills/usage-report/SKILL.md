@@ -124,7 +124,7 @@ Timestamps are stored in UTC. Convert to `Asia/Kolkata` (constant `TZ` in
 | `tool_calls` / `tool_err_rate` | total tool calls; `100 * tool errors / tool calls` |
 | `edit_calls` / `edits_add` / `edits_del` | tool results with `details.diff`; diff lines starting `+` / `−`, excluding `+++` / `---` |
 | `switch_sessions` / `max_switches` | sessions with a `model_change` to a different `modelId`; most switches |
-| `ask` / `self_compact` / `recall` | counts of `ask_question`, `self_compact`, `context_recall` calls |
+| `ask` / `self_compact` / `recall` | counts of `ask_question`, `self_compact`, and history lookups (`consult` calls, plus legacy `context_recall` calls) |
 | `streak` | longest run of consecutive active calendar days |
 | `tools` | top 12 tools by calls, each with `err` = error percentage |
 | `weeks` | weekly `{w, rate, ctx}` (interruption rate and median context per week) |

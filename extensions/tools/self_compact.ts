@@ -124,7 +124,7 @@ export function buildNote(request: PendingRequest): string {
 		"",
 		request.message,
 		"",
-		"Details the summary dropped are still stored in the session. Use the context_recall tool to search them if you need them.",
+		"Details the summary dropped are still stored in the session. Use the consult tool with self=true to search them if you need them.",
 	].join("\n");
 }
 
@@ -297,7 +297,7 @@ export default function (pi: ExtensionAPI) {
 			`${MIN_COMPACT_PERCENT}% usage is strongly discouraged` +
 			", so check with `status: true` first and keep working while there is room. The conversation is summarized by Pi's " +
 			"normal compaction, and your note is delivered as the first message of the new context. Everything summarized away " +
-			"stays stored in the session and remains searchable with the context_recall tool, so the note only needs the goal, " +
+			"stays stored in the session and remains searchable with the consult tool in self mode, so the note only needs the goal, " +
 			"decisions, and next steps you need to keep acting. Do not compact in the middle of a step you cannot describe in " +
 			"the note.",
 		promptSnippet:
@@ -308,7 +308,7 @@ export default function (pi: ExtensionAPI) {
 			"Your note supplements Pi's conversation summary and retained recent messages; it is not your only context after compaction.",
 			"Keep the note focused on the current goal, decisions, unresolved risks, and next steps. Do not duplicate the full history.",
 			"Use readable bullets and normal word spacing. Shorten the content to fit the limit; do not join ordinary words together to save characters.",
-			"The full history stays available through the context_recall tool even after compaction.",
+			"The full history stays available through the consult tool with self=true even after compaction.",
 			"Pass `status: true` to read the current context usage percentage without compacting.",
 			"When a message warns that the context is nearly full, write your note and compact at your next natural boundary.",
 		],
@@ -366,7 +366,7 @@ export default function (pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: "Self-compaction scheduled for the end of this turn. After it finishes you will receive your note. The conversation history stays searchable with context_recall.",
+						text: "Self-compaction scheduled for the end of this turn. After it finishes you will receive your note. The conversation history stays searchable with consult self=true.",
 					},
 				],
 				details: { id, status: "scheduled" },

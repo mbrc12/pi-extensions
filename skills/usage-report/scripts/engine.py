@@ -205,7 +205,7 @@ def collect():
         "max_switches": max((s["switches"] for s in sessions), default=0),
         "ask": tool_tot.get("ask_question", 0),
         "self_compact": tool_tot.get("self_compact", 0),
-        "recall": tool_tot.get("context_recall", 0),
+        "recall": tool_tot.get("context_recall", 0) + tool_tot.get("consult", 0),
         "max_out": out_max, "streak": best_streak,
         "weeks": weeks, "tools": tools_top, "think_levels": think_levels,
     }

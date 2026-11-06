@@ -5,7 +5,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { canonicalPath, discoverSessions, readMetadata, rootsFor, type FileFingerprint, type SessionMetadata } from "./sessions.ts";
-import { assertNotCurrent, cacheKey, mergeLastQuery, normalizeParams, paginate, renderListBody, resolveTarget, ResultCache, searchSessions, type CacheValue, type ConsultParams } from "./query.ts";
+import { assertNotCurrent, branchRecords, cacheKey, mergeLastQuery, normalizeParams, paginate, renderBranchList, renderBranchSearch, renderListBody, resolveTarget, ResultCache, searchSessions, type CacheValue, type ConsultParams } from "./query.ts";
 import { summarizeSession } from "./summary.ts";
 
 const cache = new ResultCache();
@@ -57,7 +57,21 @@ function renderPage(value: CacheValue, params: ConsultParams, cwd: string | unde
   return { page, selected, text };
 }
 
+/** Current-session mode: read the active branch in memory, never the session files on disk. */
+function executeSelf(params: ConsultParams, ctx: any): { text: string; details: any } {
+  // A single-entry read is explicit, so it shows tool calls; otherwise the flag decides.
+  const records = branchRecords(ctx.sessionManager.getBranch(), Boolean(params.entryId) || params.includeToolCalls === true);
+  const rendered = params.action === "search" ? renderBranchSearch(records, params) : renderBranchList(records, params);
+  const page = paginate(rendered.body, params.pageChars!, params.page!);
+  const text = [rendered.header, `page ${page.page}/${page.pages}`, HISTORICAL, page.text].filter(Boolean).join("\n");
+  return {
+    text,
+    details: { action: params.action, page: page.page, pages: page.pages, self: true, summary: safeSummary(rendered.header) },
+  };
+}
+
 async function executeQuery(params: ConsultParams, ctx: any): Promise<{ text: string; details: any; usage?: any }> {
+  if (params.self) return executeSelf(params, ctx);
   const current = currentIdentifiers(ctx);
   // The current session is excluded from results, so its identity belongs in the key.
   const key = `${cacheKey(params)}|${current.file ?? "-"}|${current.id ?? "-"}`;
@@ -109,7 +123,7 @@ function errorResult(cause: unknown): any {
   const messages: Record<string, string> = {
     NOT_FOUND: "No matching session was found. Search for it or check the session ID/path.",
     AMBIGUOUS_NAME: err.message ?? "Use an exact session ID or path.",
-    CURRENT_SESSION: "This is the current session; use context_recall for its active branch.",
+    CURRENT_SESSION: "This is the current session; set self=true to read its active branch.",
     MISSING_TARGET: err.message ?? "Provide a session ID, path, or unique name.",
     NO_LAST_QUERY: err.message ?? "Run a consult query first, then retry with last=true.",
     INVALID_PAGE: err.message ?? "Use a positive page number.",
@@ -118,7 +132,7 @@ function errorResult(cause: unknown): any {
     SESSION_TOO_LARGE: err.message ?? "Narrow the requested session content and retry.",
     INVALID_ARGUMENT: err.message ?? "Check the consult parameters and retry.",
   };
-  const hint = messages[code] ?? "Check the parameters and retry.";
+  const hint = err.message ?? messages[code] ?? "Check the parameters and retry.";
   const candidates = err.candidates?.length
     ? [`\nCandidates: ${err.candidates.map((item) => `${item.id ?? "?"} (${item.name ?? item.cwd ?? item.path})`).join(", ")}`]
     : [];
@@ -129,7 +143,7 @@ export default function consultExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "consult",
     label: "Consult sessions",
-    description: "Search, list, or summarize other Pi sessions on disk. Results are historical data, are truncated, and are paged: read page 1, then repeat with a higher page. Tool calls and results stay out unless includeToolCalls is true. For the current session use context_recall instead.",
+    description: "Read Pi session history. Default: search, list, or summarize other sessions on disk. With self=true: search or list this session's active branch, including entries hidden by compaction. Results are truncated and paged: read page 1, then repeat with a higher page. Tool calls and results stay out unless includeToolCalls is true.",
     parameters: Type.Object({
       action: StringEnum(["search", "list", "summary"] as const, { description: "Choose search, list, or summary." }),
       sessionId: Type.Optional(Type.String({ description: "Exact session ID to read." })),
@@ -149,6 +163,8 @@ export default function consultExtension(pi: ExtensionAPI): void {
       page: Type.Optional(Type.Integer({ minimum: 1, description: "Select a result page." })),
       pageChars: Type.Optional(Type.Integer({ minimum: 2000, maximum: 12000, description: "Set the page character budget." })),
       last: Type.Optional(Type.Boolean({ description: "Reuse the prior query with these overrides." })),
+      self: Type.Optional(Type.Boolean({ description: "Read this session's active branch instead of other sessions." })),
+      entryId: Type.Optional(Type.String({ description: "Read one entry ID from a list result in full." })),
       instruction: Type.Optional(Type.String({ maxLength: 500, description: "Focus the session summary." })),
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

@@ -8,7 +8,7 @@ export interface ConsultParams {
   days?: number; from?: string; to?: string; cwd?: string; cwdPrefix?: boolean;
   status?: "active" | "idle" | "archived" | "any"; sort?: "relevance" | "recent" | "oldest";
   role?: string[]; userOnly?: boolean; includeToolCalls?: boolean; page?: number;
-  pageChars?: number; last?: boolean; instruction?: string;
+  pageChars?: number; last?: boolean; instruction?: string; self?: boolean; entryId?: string;
 }
 export interface ConsultError extends Error { code: string; candidates?: SessionMetadata[] }
 export interface CacheValue { body: string; header: string; fingerprints: FileFingerprint[]; metadata?: unknown }
@@ -28,7 +28,7 @@ export function mergeLastQuery(previous: Record<string, unknown> | undefined, su
   }
 }
 export function assertNotCurrent(item: SessionMetadata, current: { file?: string; id?: string }): void {
-  if ((current.file && item.path === current.file) || (current.id && item.id === current.id)) throw error("CURRENT_SESSION", "This is the current session; use context_recall to search its active branch.");
+  if ((current.file && item.path === current.file) || (current.id && item.id === current.id)) throw error("CURRENT_SESSION", "This is the current session; set self=true to read its active branch.");
 }
 export function resolveTarget(metadata: SessionMetadata[], target: { sessionId?: string; path?: string; name?: string }): SessionMetadata {
   const wantedPath = target.path ? canonicalPath(target.path) : undefined;
@@ -42,7 +42,8 @@ export function resolveTarget(metadata: SessionMetadata[], target: { sessionId?:
 
 export function normalizeParams(input: Record<string, unknown>): ConsultParams {
   const p = { ...input } as any;
-  const allowed = new Set(["action", "sessionId", "path", "name", "query", "days", "from", "to", "cwd", "cwdPrefix", "status", "sort", "role", "userOnly", "includeToolCalls", "page", "pageChars", "last", "instruction"]);
+  const supplied = new Set(Object.keys(p));
+  const allowed = new Set(["action", "sessionId", "path", "name", "query", "days", "from", "to", "cwd", "cwdPrefix", "status", "sort", "role", "userOnly", "includeToolCalls", "page", "pageChars", "last", "instruction", "self", "entryId"]);
   for (const key of Object.keys(p)) if (!allowed.has(key)) throw error("INVALID_ARGUMENT", `Unknown parameter ${key}. Remove it and retry.`);
   if (!["search", "list", "summary"].includes(p.action)) throw error("INVALID_ARGUMENT", "Choose search, list, or summary as action.");
   if (p.query !== undefined && (typeof p.query !== "string" || p.query.length > 200)) throw error("INVALID_ARGUMENT", "Use a search query of at most 200 characters.");
@@ -60,8 +61,16 @@ export function normalizeParams(input: Record<string, unknown>): ConsultParams {
   if (p.userOnly) p.role = ["user"];
   else if (!roleSupplied) p.role = p.includeToolCalls ? ["user", "assistant", "toolResult"] : ["user", "assistant"];
   if (p.role.length === 0) throw error("INVALID_ARGUMENT", "Include at least one role.");
-  if (p.action === "search" && !p.query?.trim() && !p.name && !p.cwd && !p.from && !p.to) throw error("INVALID_ARGUMENT", "Add a query or at least one search filter.");
-  if ((p.action === "list" || p.action === "summary") && !p.sessionId && !p.path && !p.name) throw error("MISSING_TARGET", "Provide sessionId, path, or a unique name.");
+  if (p.entryId !== undefined && (typeof p.entryId !== "string" || !p.entryId.trim())) throw error("INVALID_ARGUMENT", "Use a non-empty entryId from a list result.");
+  if (p.entryId !== undefined && p.action !== "list") throw error("INVALID_ARGUMENT", "entryId applies to action=list.");
+  if (p.self === true) {
+    const foreign = ["sessionId", "path", "name", "from", "to", "cwd", "cwdPrefix", "status", "sort", "days"].filter((key) => supplied.has(key));
+    if (foreign.length > 0) throw error("INVALID_ARGUMENT", `self mode reads the current session; drop ${foreign.join(", ")}.`);
+    if (p.action === "summary") throw error("INVALID_ARGUMENT", "self mode supports search and list; the current session is already in context.");
+    if (p.action === "search" && !p.query?.trim()) throw error("INVALID_ARGUMENT", "self mode needs a query for action=search.");
+  }
+  if (p.action === "search" && p.self !== true && !p.query?.trim() && !p.name && !p.cwd && !p.from && !p.to) throw error("INVALID_ARGUMENT", "Add a query or at least one search filter.");
+  if ((p.action === "list" || p.action === "summary") && p.self !== true && !p.sessionId && !p.path && !p.name) throw error("MISSING_TARGET", "Provide sessionId, path, or a unique name.");
   return p as ConsultParams;
 }
 
@@ -225,3 +234,91 @@ export async function renderListBody(file: string, params: ConsultParams): Promi
 
 export function isFingerprintValid(fingerprints: FileFingerprint[]): boolean { return fingerprintsValid(fingerprints); }
 export { CONSULT_SCAN_LIMITS };
+
+// ---------------------------------------------------------------------------
+// Current-session ("self") mode
+// ---------------------------------------------------------------------------
+
+/** One readable entry from the active branch of the current session. */
+export interface BranchRecord { id: string; timestamp?: string; role: string; text: string; toolName?: string }
+
+/** Map session entries to readable records. Thinking, images, and metadata entries are dropped. */
+export function branchRecords(entries: readonly any[], includeToolCalls = false): BranchRecord[] {
+  const records: BranchRecord[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    if (entry.type === "compaction" || entry.type === "branch_summary") {
+      const text = typeof entry.summary === "string" ? entry.summary : "";
+      if (text.trim()) records.push({ id: entry.id ?? "?", timestamp: entry.timestamp, role: "compactionSummary", text });
+      continue;
+    }
+    if (entry.type !== "message") continue;
+    const message = entry.message ?? {};
+    const role = typeof message.role === "string" ? message.role : undefined;
+    if (!role || role === "system" || role === "custom") continue;
+    const text = contentText(message, includeToolCalls);
+    if (!text.trim()) continue;
+    records.push({ id: entry.id ?? "?", timestamp: entry.timestamp, role, text, ...(message.toolName ? { toolName: message.toolName } : {}) });
+  }
+  return records;
+}
+
+/** Render selected branch records chronologically, clipped unless a single entry was requested. */
+export function renderBranchList(records: BranchRecord[], params: ConsultParams): { body: string; header: string } {
+  const roles = new Set(params.role ?? ["user", "assistant"]);
+  const single = params.entryId?.trim();
+  const selected = single
+    ? records.filter((record) => record.id === single)
+    : records.filter((record) => roles.has(record.role) && (params.includeToolCalls || record.role !== "toolResult"));
+  if (single && selected.length === 0) throw error("NOT_FOUND", `Entry ${JSON.stringify(single)} is not a readable entry on the active branch.`);
+  const out: string[] = [];
+  let chars = 0, stoppedAt: string | undefined;
+  for (const record of selected) {
+    const label = record.role === "toolResult" ? `toolResult:${record.toolName ?? "tool"}` : record.role;
+    const text = single ? record.text : clipEntry(record.text);
+    const line = `[${record.id}] ${formatStamp(record.timestamp)} ${label}: ${text}`;
+    if (chars + line.length > LIST_BODY_LIMIT) { stoppedAt = record.id; break; }
+    out.push(line);
+    chars += line.length + 1;
+  }
+  if (stoppedAt) out.push(`[TRUNCATED at entry ${stoppedAt}; page further or read that entry with entryId]`);
+  const header = `CONSULT SELF LIST | active branch | entries=${selected.length} | roles=${single ? "entryId" : [...roles].join(",")} | tools=${params.includeToolCalls ? "included" : "excluded"}`;
+  return { body: out.join("\n"), header };
+}
+
+/** Search branch records for every term; newest first. Compaction summaries are not searched. */
+export function renderBranchSearch(records: BranchRecord[], params: ConsultParams): { body: string; header: string } {
+  const terms = (params.query ?? "").trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const searchable = records.filter((record) => record.role !== "compactionSummary"
+    && record.role !== "branch_summary"
+    && !(record.role === "toolResult" && record.toolName === "consult")
+    && (params.includeToolCalls || record.role !== "toolResult"));
+  const matches: Array<{ record: BranchRecord; position: number; hits: number }> = [];
+  for (const record of searchable) {
+    const lower = record.text.toLocaleLowerCase();
+    if (!lower.includes(terms[0])) continue;
+    let hits = 0;
+    for (let at = lower.indexOf(terms[0]); at >= 0; at = lower.indexOf(terms[0], at + 1)) {
+      if (terms.every((term) => lower.includes(term))) hits++;
+      if (hits >= 20) break;
+    }
+    if (hits === 0) continue;
+    matches.push({ record, position: lower.indexOf(terms[0]), hits });
+  }
+  matches.reverse();
+  const body = matches.map((match, index) => {
+    const label = match.record.role === "toolResult" ? `toolResult:${match.record.toolName ?? "tool"}` : match.record.role;
+    const hits = match.hits > 1 ? ` (${match.hits} hits)` : "";
+    return `${index + 1}. [${match.record.id}] ${formatStamp(match.record.timestamp)} ${label}${hits}: ${excerptAroundSelf(match.record.text, match.position)}`;
+  }).join("\n");
+  const header = `CONSULT SELF SEARCH | ${matches.length} entries | query=${JSON.stringify(params.query)}`;
+  return { body, header };
+}
+
+function excerptAroundSelf(text: string, position: number, length = 240): string {
+  const chars = Array.from(text);
+  const offset = Array.from(text.slice(0, Math.max(0, position))).length;
+  const start = Math.max(0, offset - 80);
+  const end = Math.min(chars.length, start + length);
+  return `${start ? "…" : ""}${chars.slice(start, end).join("").replace(/\s+/g, " ").trim()}${end < chars.length ? "…" : ""}`;
+}

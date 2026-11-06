@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { assertNotCurrent, cacheKey, mergeLastQuery, normalizeParams, paginate, renderListBody, resolveTarget, ResultCache, searchSessions } from "../tools/consult/query.ts";
+import { assertNotCurrent, branchRecords, cacheKey, mergeLastQuery, normalizeParams, paginate, renderBranchList, renderBranchSearch, renderListBody, resolveTarget, ResultCache, searchSessions } from "../tools/consult/query.ts";
 import { scanKeywords, type SessionMetadata } from "../tools/consult/sessions.ts";
 
 const tempFiles: string[] = [];
@@ -53,7 +53,7 @@ describe("consult session query", () => {
   test("ambiguous names error and current session is refused", () => {
     const candidates = [metadata("/a", "one"), metadata("/b", "two")];
     expect(() => resolveTarget(candidates, { name: "shared name" })).toThrow(/matches 2/);
-    expect(() => assertNotCurrent(candidates[0], { id: "one" })).toThrow(/context_recall/);
+    expect(() => assertNotCurrent(candidates[0], { id: "one" })).toThrow(/self=true/);
   });
   test("last merges supplied parameters and revalidates", () => {
     const prior = normalizeParams({ action: "search", query: "cache", days: 60, page: 1 });
@@ -116,5 +116,65 @@ describe("consult session query", () => {
   test("a bad override reports its own error instead of blaming the stored query", () => {
     const prior = normalizeParams({ action: "search", query: "cache" });
     expect(() => mergeLastQuery(prior as any, { last: true, page: 0 })).toThrow(/positive integer/);
+  });
+});
+
+function branchMessage(id: string, role: string, content: any, extra: Record<string, unknown> = {}): any {
+  return { type: "message", id, parentId: null, timestamp: "2026-01-01T00:00:00Z", message: { role, content, timestamp: 0, ...extra } };
+}
+
+describe("consult self mode", () => {
+  const branch = [
+    branchMessage("u1", "user", "I prefer polars tables"),
+    { type: "compaction", id: "c1", parentId: "u1", timestamp: "2026-01-01T00:00:00Z", summary: "summary invented phrase", firstKeptEntryId: "u2", tokensBefore: 10 },
+    branchMessage("u2", "user", "continue the parser work"),
+    branchMessage("a1", "assistant", [{ type: "thinking", thinking: "private phrase" }, { type: "text", text: "visible phrase" }]),
+    branchMessage("t1", "toolResult", [{ type: "text", text: "tool output phrase" }], { toolName: "bash" }),
+    branchMessage("t2", "toolResult", [{ type: "text", text: "recall loop phrase" }], { toolName: "consult" }),
+  ];
+  const records = branchRecords(branch);
+
+  test("search reads entries hidden by compaction but not the compaction summary", () => {
+    const old = renderBranchSearch(records, normalizeParams({ action: "search", self: true, query: "POLARS" }));
+    expect(old.body).toContain("[u1]");
+    expect(old.body).toContain("polars");
+    const summary = renderBranchSearch(records, normalizeParams({ action: "search", self: true, query: "invented phrase" }));
+    expect(summary.body).toBe("");
+    // Thinking blocks stay out of the index; visible text does not.
+    expect(renderBranchSearch(records, normalizeParams({ action: "search", self: true, query: "private phrase" })).body).toBe("");
+    expect(renderBranchSearch(records, normalizeParams({ action: "search", self: true, query: "visible phrase" })).body).toContain("[a1]");
+    // Tool-call arguments follow includeToolCalls, not the branch default.
+    const withCalls = branchRecords([branchMessage("a2", "assistant", [{ type: "text", text: "running" }, { type: "toolCall", name: "bash", arguments: { command: "secret-arg" } }])]);
+    expect(withCalls[0].text).toBe("running");
+    expect(branchRecords([branchMessage("a2", "assistant", [{ type: "toolCall", name: "bash", arguments: { command: "secret-arg" } }])], true)[0].text).toContain("secret-arg");
+  });
+
+  test("search skips its own tool results and tool results are opt-in", () => {
+    expect(renderBranchSearch(records, normalizeParams({ action: "search", self: true, query: "tool output phrase" })).body).toBe("");
+    expect(renderBranchSearch(records, normalizeParams({ action: "search", self: true, query: "tool output phrase", includeToolCalls: true })).body).toContain("[t1]");
+    expect(renderBranchSearch(records, normalizeParams({ action: "search", self: true, query: "recall loop phrase", includeToolCalls: true })).body).toBe("");
+  });
+
+  test("list keeps roles in order, excludes tool results, and reads one entry in full", () => {
+    const listed = renderBranchList(records, normalizeParams({ action: "list", self: true }));
+    expect(listed.body).toContain("[u1]");
+    expect(listed.body).toContain("[u2]");
+    expect(listed.body).not.toContain("[t1]");
+    expect(listed.body).not.toContain("summary invented phrase");
+    const summary = renderBranchList(records, normalizeParams({ action: "list", self: true, role: ["compactionSummary"] }));
+    expect(summary.body).toContain("summary invented phrase");
+    const long = branchMessage("u3", "user", "x".repeat(5000));
+    const full = renderBranchList(branchRecords([long]), normalizeParams({ action: "list", self: true, entryId: "u3" }));
+    expect(full.body).toContain("x".repeat(5000));
+    expect(() => renderBranchList(records, normalizeParams({ action: "list", self: true, entryId: "nope" }))).toThrow(/not a readable entry/);
+  });
+
+  test("self rejects disk filters and unsupported actions", () => {
+    expect(() => normalizeParams({ action: "search", self: true, query: "x", sessionId: "abc" })).toThrow(/drop sessionId/);
+    expect(() => normalizeParams({ action: "list", self: true, days: 7 })).toThrow(/drop days/);
+    expect(() => normalizeParams({ action: "summary", self: true })).toThrow(/already in context/);
+    expect(() => normalizeParams({ action: "search", self: true })).toThrow(/needs a query/);
+    expect(() => normalizeParams({ action: "search", self: true, query: "x", entryId: "u1" })).toThrow(/entryId applies to action=list/);
+    expect(normalizeParams({ action: "list", self: true }).self).toBe(true);
   });
 });

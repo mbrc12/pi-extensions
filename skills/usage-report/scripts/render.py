@@ -99,7 +99,7 @@ def trends():
                                 bb["ask"] += 1
                             elif nm == "self_compact":
                                 bb["compact"] += 1
-                            elif nm == "context_recall":
+                            elif nm == "context_recall" or (nm == "consult" and isinstance(a, dict) and a.get("self")):
                                 bb["recall"] += 1
                 u = m.get("usage")
                 if u and bb:

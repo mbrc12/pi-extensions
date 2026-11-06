@@ -2,8 +2,7 @@
   "pi": {
     "extensions": [
       "./ask-question.ts",
-      "./context.ts",
-      "./consult/index.ts",
+        "./consult/index.ts",
       "./self_compact.ts",
       "./export-md.ts",
       "./permissions/index.ts",
