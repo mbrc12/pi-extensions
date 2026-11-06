@@ -18,12 +18,14 @@ that kind of work.
 | Creating or editing `.ipynb` notebooks | `notebooks` |
 | Math in a document written to disk | `latex-writing` |
 | Writing Python, `deal` contracts, pandas→polars, scratch venvs | `python-style` |
+| Dealing with bend or bend-2, a language for checkable code | `bend` |
 
 ## Documents
 
 - **Prefer bullet point lists in all documents.** Plans, reports, design notes, READMEs, runbooks, summaries, and anything else written to disk use bullets and short nested bullets as the default structure. Prose paragraphs connect or explain bullets; they do not carry the whole document. Keep each bullet to one idea.
 - Use LaTeX for math in documents written to disk, and never in terminal or chat replies. Load `latex-writing` before writing any math.
 - When you create an `.html` or `.md` file, give the user both a `http://localhost:1002/...` URL and the raw path. Load `local-server` for the exact pattern.
+- The user runs pi in a terminal and cannot see inline images. When showing an image, use the `read` tool on its absolute path so the `tui/image-links` extension renders a clickable `file://` link. Do not rely on Markdown links to bare absolute paths or on image attachments.
 
 ## Code
 
@@ -35,7 +37,8 @@ that kind of work.
 
 ## Running commands
 
-- **Always set a `timeout`** on potentially long-running commands: downloads, pulls, builds, inference, network calls, file scans over large trees. Default to 30–60s; allow 600s only when clearly warranted. A hung command burns the whole turn, so failing fast is better.
+- **Always set a `timeout`** on potentially long-running commands: downloads, pulls, builds, inference, network calls, file scans over large trees. Default to 30–60s; use longer limits when clearly warranted. A hung command burns the whole turn, so failing fast is better.
+- The user's internet connection is about **10 MB/s** (megabytes per second). Estimate download time from file size and this baseline, then allow a generous margin for slower servers and retries. Do not set a total timeout shorter than a plausible transfer; use connection and stalled-transfer timeouts separately.
 - Run work that outlasts a foreground timeout with `task_start` in a detached tmux session, then continue with independent work.
 - **Never busy-wait.** Do not poll task status, logs, files, processes, or clocks, and do not run no-op commands or `sleep` loops. Do independent work once; if none remains, stop and wait for the notification. Check intermediate status only when the user asks or a decision needs it.
 

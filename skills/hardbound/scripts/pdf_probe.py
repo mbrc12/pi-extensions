@@ -135,6 +135,8 @@ def main() -> None:
     p.add_argument("page", type=int)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--dpi", type=int, default=200)
+    p.add_argument("--frac", help="optional x0,y0,x1,y1 as fractions of the page")
+    p.add_argument("--points", help="optional x0,y0,x1,y1 in PDF points")
 
     c = sub.add_parser("crop", help="render one region of a page")
     c.add_argument("pdf", type=Path)
