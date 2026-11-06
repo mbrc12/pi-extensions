@@ -15,6 +15,7 @@ a set of symlinks into it.
 | `prompts/<name>.md` | Prompt templates, exposed as slash commands such as `/commit` and `/multiagent` |
 | `agents/<name>.md` | Subagent definitions: `scout`, `data-explorer`, `worker`, `planner`, `reviewer`, `markdown-linter`, `image-describer` |
 | `themes/<name>.json` | Colour themes; `tokyo-rain` is active, `melange-light` is the alternative |
+| `docs/` | Refactor plans and notes that outlive one session: currently [`extension-simplification.md`](docs/extension-simplification.md) |
 
 The full extension list, with one line per extension, lives in
 [`extensions/README.md`](extensions/README.md). Do not duplicate it here.
