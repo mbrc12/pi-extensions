@@ -5,6 +5,7 @@
       "./provider-status.ts",
       "./fast.ts",
       "./codex-account-alias.ts",
+      "./opencode-go-account-alias.ts",
       "./tool-summary.ts"
     ]
   }

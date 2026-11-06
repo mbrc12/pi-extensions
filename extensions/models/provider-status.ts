@@ -153,8 +153,9 @@ const OPENCODE_GO_WINDOWS: ReadonlyArray<{ key: string; label: string }> = [
   { key: "monthly", label: "30d" },
 ];
 
+/** Match the built-in provider and account aliases such as `opencode-go-2`. */
 function isOpencodeGoProvider(provider: string): boolean {
-  return provider === "opencode-go";
+  return /^opencode-go(-\d+)?$/.test(provider);
 }
 
 /**
