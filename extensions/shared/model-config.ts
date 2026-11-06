@@ -7,6 +7,7 @@ type Model = PiModel<any>;
 
 export const MODEL_CONFIG_PURPOSES = [
   "recapGeneration",
+  "explainGeneration",
   "toolSummaryGeneration",
   "subagentProgressSummary",
   "wiseCompacter",
@@ -60,6 +61,14 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
     "opencode-go/kimi-k2.6",
     "opencode-go/deepseek-v4-pro",
     "openai-codex-2/gpt-5.6-luna",
+  ],
+  explainGeneration: [
+    // /explain must read a whole transcript sample, so it gets a stronger model
+    // than the recap lists, with the cheap flash models as fallbacks.
+    "openai-codex/gpt-6-luna",
+    "opencode-go/deepseek-v4.1-flash",
+    "openai-codex-2/gpt-6-luna",
+    "opencode-go-2/deepseek-v4.1-flash",
   ],
   toolSummaryGeneration: [
     "opencode-go/deepseek-v4-flash",
