@@ -229,7 +229,7 @@ export default function (pi: ExtensionAPI) {
 		pi.setActiveTools([...active, TOOL_NAME]);
 	});
 
-	pi.registerMessageRenderer(CUSTOM_TYPE, (message, { outputPad }, theme) => {
+	pi.registerMessageRenderer(CUSTOM_TYPE, (message, { expanded, outputPad }, theme) => {
 		const details = message.details as NoteDetails | undefined;
 		const status = details?.status;
 		const heading =
@@ -241,6 +241,14 @@ export default function (pi: ExtensionAPI) {
 		const headingLine = theme.fg(warn ? "warning" : "accent", theme.bold(heading));
 		const body = stringContent(message.content);
 		const box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
+		if (!expanded) {
+			// Notes can be long; keep the row readable and leave the full text behind Ctrl+O.
+			const flat = body.replace(/\s+/g, " ").trim();
+			const clipped = flat.length > 240;
+			const preview = clipped ? `${flat.slice(0, 239)}…` : flat;
+			box.addChild(new Text(`${headingLine}\n${preview}${clipped ? theme.fg("dim", " (Ctrl+O to expand)") : ""}`, 1, 0));
+			return box;
+		}
 		box.addChild(new Text(`${headingLine}\n${body}`, 1, 0));
 		return box;
 	});

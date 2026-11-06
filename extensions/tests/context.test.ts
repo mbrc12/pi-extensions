@@ -1,11 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
+import { typeboxStub } from "./typebox-stub.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
 // Pi resolves these packages when it loads extensions. Mock them for a standalone Bun test.
 mock.module("@earendil-works/pi-ai", () => ({ StringEnum: () => ({}) }));
 mock.module("@earendil-works/pi-coding-agent", () => ({ keyHint: (_action: string, label: string) => `ctrl+o ${label}` }));
 mock.module("@earendil-works/pi-tui", () => ({ Text: class Text { constructor(public text: string) {} } }));
-mock.module("typebox", () => ({ Type: { Object: () => ({}), String: () => ({}), Integer: () => ({}), Optional: () => ({}) } }));
+mock.module("typebox", () => typeboxStub);
 const { recall, default: registerContext } = await import("../tools/context.ts");
 
 function user(id: string, content: string): SessionEntry {

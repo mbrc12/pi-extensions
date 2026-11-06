@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { typeboxStub } from "./typebox-stub.ts";
 
 const children: any[] = [];
 const commands: any[][] = [];
@@ -26,7 +27,7 @@ mock.module("node:child_process", () => ({ spawn: (_command: string, args: strin
 } }));
 mock.module("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => "/tmp/multiagent-test", getMarkdownTheme: () => ({}), keyHint: (_action: string, label: string) => `Ctrl+O ${label}` }));
 mock.module("@earendil-works/pi-ai", () => ({ StringEnum: (values: unknown) => ({ values }) }));
-mock.module("typebox", () => ({ Type: { Object: (value: unknown) => value, String: (value: unknown) => value, Optional: (value: unknown) => value } }));
+mock.module("typebox", () => typeboxStub);
 mock.module("@earendil-works/pi-tui", () => ({ Container: class { children: any[] = []; addChild(child: unknown) { this.children.push(child); } }, Box: class { children: any[] = []; constructor(..._args: any[]) {} addChild(child: unknown) { this.children.push(child); } }, Markdown: class { constructor(public text: string, ..._args: any[]) {} }, ScrollView: class {}, Key: { escape: "escape" }, matchesKey: (a: string, b: string) => a === b, Spacer: class {}, Text: class { constructor(public text: string, ..._args: any[]) {} } }));
 mock.module("../agents/subagent/agents.ts", () => ({ discoverAgents: (_cwd: string, scope: string) => ({ agents: scope === "project" || scope === "both" ? [{ name: "scout", source: "project", capability: "high", tools: ["read"], systemPrompt: "project prompt", filePath: "/tmp/project/scout" }] : [{ name: "scout", source: "user", capability: "low", tools: [], systemPrompt: "user prompt", filePath: "/tmp/user/scout" }] }) }));
 mock.module("../shared/model-config.ts", () => ({ getSubagentModelFallbacks: () => configuredModels }));

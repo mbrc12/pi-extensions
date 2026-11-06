@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { typeboxStub } from "./typebox-stub.ts";
 import { testEventBus } from "./event-bus.ts";
 
 mock.module("@earendil-works/pi-coding-agent", () => ({}));
@@ -11,9 +12,7 @@ mock.module("@earendil-works/pi-tui", () => ({
 	matchesKey: () => false,
 }));
 const wrap = (value: unknown) => value;
-mock.module("typebox", () => ({ Type: {
-	Object: wrap, String: wrap, Optional: wrap, Boolean: wrap, Number: wrap,
-} }));
+mock.module("typebox", () => typeboxStub);
 const { default: register } = await import("../tools/task-backgrounder/index.ts");
 const { default: registerSelfCompact } = await import("../tools/self_compact.ts");
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));

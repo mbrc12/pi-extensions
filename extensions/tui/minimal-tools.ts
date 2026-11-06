@@ -37,6 +37,25 @@ function compressCommand(cmd: string, maxLen: number = 60): string {
 	return `${cmd.substring(0, 35)}...${cmd.slice(-20)}`;
 }
 
+/** Nonblank lines of a result, with trailing whitespace removed. */
+function resultLines(text: string): string[] {
+	return text.replace(/\s+$/, "").split("\n");
+}
+
+/** Lines from the front plus a marker line naming what stayed hidden. */
+function headLines(text: string, limit: number): string[] {
+	const lines = resultLines(text);
+	if (lines.length <= limit) return lines;
+	return [...lines.slice(0, limit), `… ${lines.length - limit} more lines`];
+}
+
+/** Lines from the end plus a marker line, because failures land at the bottom. */
+function tailLines(text: string, limit: number): string[] {
+	const lines = resultLines(text);
+	if (lines.length <= limit) return lines;
+	return [`… ${lines.length - limit} earlier lines`, ...lines.slice(-limit)];
+}
+
 interface BashRenderState {
 	startedAt?: number;
 }
@@ -115,8 +134,7 @@ export default function (pi: ExtensionAPI) {
 			text += theme.fg("dim", ` ${lineCount} lines`);
 
 			if (expanded && output) {
-				const lines = output.split("\n").slice(0, 15);
-				for (const line of lines) {
+				for (const line of tailLines(output, 20)) {
 					text += `\n${theme.fg("dim", line)}`;
 				}
 			}
@@ -174,6 +192,12 @@ export default function (pi: ExtensionAPI) {
 				text += theme.fg("warning", " (truncated)");
 			}
 
+			if (expanded) {
+				for (const line of headLines(content.text, 40)) {
+					text += `\n${theme.fg("dim", line)}`;
+				}
+			}
+
 			return new Text(text, 0, 0);
 		},
 	});
@@ -226,14 +250,18 @@ export default function (pi: ExtensionAPI) {
 			let text = theme.fg("success", `✓ +${additions}`) + theme.fg("dim", " / ") + theme.fg("error", `-${removals}`);
 
 			if (expanded) {
-				for (const line of diffLines.slice(0, 20)) {
-					if (line.startsWith("+") && !line.startsWith("+++")) {
-						text += `\n${theme.fg("success", line)}`;
-					} else if (line.startsWith("-") && !line.startsWith("---")) {
-						text += `\n${theme.fg("error", line)}`;
-					}
+				const lines = resultLines(details.diff).filter((line) => !line.startsWith("+++") && !line.startsWith("---"));
+				const shown = lines.slice(0, 40);
+				for (const line of shown) {
+					const color = line.startsWith("+") ? "success" : line.startsWith("-") ? "error" : "dim";
+					text += `\n${theme.fg(color, line)}`;
+				}
+				if (lines.length > shown.length) {
+					text += `\n${theme.fg("dim", `… ${lines.length - shown.length} more diff lines`)}`;
 				}
 			}
+
+			return new Text(text, 0, 0);
 
 			return new Text(text, 0, 0);
 		},
@@ -263,7 +291,7 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "writing..."), 0, 0);
 
 			const content = result.content[0];
@@ -271,7 +299,15 @@ export default function (pi: ExtensionAPI) {
 				return new Text(theme.fg("error", "✗ " + content.text.split("\n")[0]), 0, 0);
 			}
 
-			return new Text(theme.fg("success", "✓ written"), 0, 0);
+			let text = theme.fg("success", "✓ written");
+			const written = typeof context.args?.content === "string" ? context.args.content : "";
+			if (expanded && written) {
+				for (const line of headLines(written, 40)) {
+					text += `\n${theme.fg("dim", line)}`;
+				}
+			}
+
+			return new Text(text, 0, 0);
 		},
 	});
 
@@ -309,8 +345,7 @@ export default function (pi: ExtensionAPI) {
 			let text = theme.fg("success", `✓ ${count} files`);
 
 			if (expanded && count > 0) {
-				const lines = textContent.text.trim().split("\n").slice(0, 10);
-				for (const line of lines) {
+				for (const line of headLines(textContent.text.trim(), 10)) {
 					text += `\n${theme.fg("dim", shortenPath(line))}`;
 				}
 			}
@@ -354,8 +389,7 @@ export default function (pi: ExtensionAPI) {
 			let text = theme.fg("success", `✓ ${count} matches`);
 
 			if (expanded && count > 0) {
-				const lines = textContent.text.trim().split("\n").slice(0, 10);
-				for (const line of lines) {
+				for (const line of headLines(textContent.text.trim(), 10)) {
 					text += `\n${theme.fg("dim", line)}`;
 				}
 			}
@@ -397,8 +431,7 @@ export default function (pi: ExtensionAPI) {
 			let text = theme.fg("success", `✓ ${count} entries`);
 
 			if (expanded && count > 0) {
-				const lines = textContent.text.trim().split("\n").slice(0, 15);
-				for (const line of lines) {
+				for (const line of headLines(textContent.text.trim(), 15)) {
 					text += `\n${theme.fg("dim", line)}`;
 				}
 			}

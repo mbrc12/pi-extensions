@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { testEventBus } from "./event-bus.ts";
+import { typeboxStub } from "./typebox-stub.ts";
+
+
 
 const execute = mock(async () => ({
 	content: [{ type: "text", text: "Found the answer." }],
@@ -23,10 +26,7 @@ mock.module("@earendil-works/pi-tui", () => ({
 mock.module("../agents/subagent/agents.ts", () => ({
 	discoverAgents: () => ({ agents: [{ name: "scout", source: "user", filePath: "/tmp/scout.md" }], projectAgentsDir: null }),
 }));
-const wrap = (value: unknown) => value;
-mock.module("typebox", () => ({ Type: {
-	Object: wrap, String: wrap, Optional: wrap, Boolean: wrap, Union: wrap, Literal: wrap,
-} }));
+mock.module("typebox", () => typeboxStub);
 const { default: register } = await import("../agents/background-subagent/index.ts");
 const { default: registerSelfCompact } = await import("../tools/self_compact.ts");
 
@@ -219,10 +219,46 @@ describe("background subagents", () => {
 		const theme = { fg: (_color: string, text: string) => text };
 		const compact = render(result, { expanded: false }, theme).children.map((item: any) => item.text).join("\n");
 		const expanded = render(result, { expanded: true }, theme).children.map((item: any) => item.text).join("\n");
-		expect(compact).toContain("[tool] read: path = "); expect(compact).toContain("…"); expect(compact).not.toContain(path);
+		expect(compact).not.toContain("[tool]");
+		expect(compact).toContain("Last activity: Finished read: ");
+		expect(compact).not.toContain(path);
 		expect(expanded).toContain("[tool] read result: ");
 		expect(expanded).not.toContain(`[tool] read result: ${path}`);
 		expect(expanded).not.toContain(`[tool] read: path = "${path}"`);
+		resolve({ content: [{ type: "text", text: "Done" }] }); await tick(); h.handlers.get("session_shutdown")();
+	});
+
+	test("keeps the transcript out of collapsed status and list output", async () => {
+		let update!: (result: any) => void;
+		let resolve!: (result: any) => void;
+		execute.mockImplementationOnce((_id: any, _params: any, _signal: any, onUpdate: any) => {
+			update = onUpdate;
+			return new Promise((done) => { resolve = done; });
+		});
+		const h = harness(); h.handlers.get("session_start")(undefined, h.ctx);
+		const started = await h.tools.get("background_subagent").execute("id", { name: "chatty", agent: "scout", task: "Explore" }, undefined, undefined, h.ctx);
+		const messages = Array.from({ length: 40 }, (_unused, index) => [
+			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: `CALL-${index}` } }] },
+			{ role: "toolResult", toolName: "read", isError: false, content: [{ type: "text", text: `RESULT-TEXT-${index}` }] },
+		]).flat().concat([{ role: "assistant", content: [{ type: "text", text: "LATEST-TEXT" }] }]);
+		update({ details: { results: [{ usage: { turns: 12, cost: 0.5 }, messages }] } });
+		const status = await h.tools.get("background_subagent_status").execute("id", { name: started.details.name });
+		const list = await h.tools.get("background_subagent_status").execute("id", {});
+		const render = h.tools.get("background_subagent_status").renderResult;
+		const theme = { fg: (_color: string, text: string) => text };
+		const compact = render(status, { expanded: false }, theme).children.map((item: any) => item.text).join("\n");
+		const listed = render(list, { expanded: false }, theme).children.map((item: any) => item.text).join("\n");
+		for (const text of [status.content[0].text, list.content[0].text, compact, listed]) {
+			expect(text).not.toContain("[tool]");
+			expect(text).not.toContain("RESULT-TEXT-0");
+			expect(text.length).toBeLessThan(1500);
+		}
+		expect(list.content[0].text.split("\n")).toHaveLength(1);
+		expect(status.content[0].text).toContain("LATEST-TEXT");
+		expect(status.content[0].text).toContain("RESULT-TEXT-39");
+		const opened = render(status, { expanded: true }, theme).children.map((item: any) => item.text).join("\n");
+		expect(opened).toContain("[tool] read result: RESULT-TEXT-0");
+		expect(opened).toContain("LATEST-TEXT");
 		resolve({ content: [{ type: "text", text: "Done" }] }); await tick(); h.handlers.get("session_shutdown")();
 	});
 
@@ -273,9 +309,10 @@ describe("background subagents", () => {
 			{ role: "assistant", content: [{ type: "text", text: "Investigating the parser" }] },
 		] }] } });
 		const status = await h.tools.get("background_subagent_status").execute("id", { name });
-		expect(status.content[0].text).toContain("[tool] read result: Found relevant code");
-		expect(status.content[0].text).toContain("Investigating the parser");
+		expect(status.content[0].text).toContain("Last activity: Finished read: Found relevant code");
+		expect(status.content[0].text).toContain("Assistant:\nInvestigating the parser");
 		expect(status.content[0].text).toContain("Turns: 2 · Cost: $0.0300");
+		expect(status.content[0].text).not.toContain("[tool]");
 		expect(status.content[0].text).not.toContain("private thought");
 		expect(h.sent).toHaveLength(0);
 		const list = await h.tools.get("background_subagent_status").execute("id", {});

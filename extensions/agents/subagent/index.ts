@@ -54,7 +54,7 @@ import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 
 const MAX_PARALLEL_TASKS = 16;
 const MAX_CONCURRENCY = 16;
-const COLLAPSED_ITEM_COUNT = 10;
+const COLLAPSED_ITEM_COUNT = 3;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
 type SubagentStrength = Exclude<SubagentCapability, "image">;
@@ -1520,6 +1520,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 						if (r.errorMessage)
 							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 						if (displayItems.length > 0) container.addChild(new Text(renderDisplayItems(r.messages), 0, 0));
+						else if (resultState(r) === "running") container.addChild(new Text(theme.fg("muted", "(running...)"), 0, 0));
 
 						const stepUsage = usageLine(r.usage, { tier: rowTier(r) });
 						if (stepUsage) container.addChild(new Text(stepUsage, 0, 0));
@@ -1542,7 +1543,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step} ─── `)}${agentHeader(r)}`;
 					if (displayItems.length === 0) {
 						text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
-					} else text += `\n${renderDisplayItems(r.messages, 5)}`;
+					} else text += `\n${renderDisplayItems(r.messages, COLLAPSED_ITEM_COUNT)}`;
 				}
 				const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });
 				if (usageStr) text += `\n\n${usageStr}`;
@@ -1559,7 +1560,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 					? `${settled}/${details.results.length} settled, ${running} running`
 					: `${okCount(details.results)}/${details.results.length} tasks`;
 
-				if (expanded && !isRunning) {
+				if (expanded) {
 					const container = new Container();
 					container.addChild(new Text(groupHeader("parallel", status, details.results), 0, 0));
 
@@ -1574,6 +1575,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 						if (r.errorMessage)
 							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 						if (displayItems.length > 0) container.addChild(new Text(renderDisplayItems(r.messages), 0, 0));
+						else if (resultState(r) === "running") container.addChild(new Text(theme.fg("muted", "(running...)"), 0, 0));
 
 						const taskUsage = usageLine(r.usage, { tier: rowTier(r) });
 						if (taskUsage) container.addChild(new Text(taskUsage, 0, 0));
@@ -1596,7 +1598,7 @@ export function createSubagentTool(pi: ExtensionAPI) {
 					text += `\n\n${theme.fg("muted", "─── ")}${agentHeader(r)}`;
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", resultState(r) === "running" ? "(running...)" : "(no output)")}`;
-					else text += `\n${renderDisplayItems(r.messages, 5)}`;
+					else text += `\n${renderDisplayItems(r.messages, COLLAPSED_ITEM_COUNT)}`;
 				}
 				if (!isRunning) {
 					const usageStr = usageLine(aggregateUsage(details.results), { prefix: "total" });

@@ -597,14 +597,25 @@ export default function (pi: ExtensionAPI) {
 
 		// --- Custom TUI rendering of the tool call / result ---
 
-		renderCall(args, theme, _context) {
+		renderCall(args, theme, context) {
+			const question = typeof args.question === "string" ? args.question : "";
+			const opts = Array.isArray(args.options) ? (args.options as ToolOption[]) : [];
 			let text = theme.fg("toolTitle", theme.bold("ask_question "));
 			text += theme.fg("muted", args.selection_mode ?? "single");
-			text += " " + theme.fg("text", args.question);
-			const opts = Array.isArray(args.options) ? (args.options as ToolOption[]) : [];
+			if (context?.expanded) {
+				text += " " + theme.fg("text", question);
+				if (opts.length) {
+					const labels = opts.map((o, i) => `${i + 1}. ${o.label}`);
+					text += `\n${theme.fg("dim", "  Options: " + labels.join("   "))}`;
+				}
+				return new Text(text, 0, 0);
+			}
+			// Collapsed: one readable line; the full question and options sit behind Ctrl+O.
+			const preview = question.replace(/\s+/g, " ").trim();
+			const flat = preview.length > 120 ? `${preview.slice(0, 119)}…` : preview;
+			text += " " + theme.fg("text", flat);
 			if (opts.length) {
-				const labels = opts.map((o, i) => `${i + 1}. ${o.label}`);
-				text += `\n${theme.fg("dim", "  Options: " + labels.join("   "))}`;
+				text += theme.fg("dim", ` · ${opts.length} option${opts.length === 1 ? "" : "s"} (Ctrl+O to expand)`);
 			}
 			return new Text(text, 0, 0);
 		},

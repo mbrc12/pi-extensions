@@ -32,7 +32,9 @@ export function buildOperatorViewerEntries(document: OperatorViewerDocument): Op
   return getSessionDisplayEntries(document.messages ?? [], { expanded: true }).map((entry) => ({
     role: entry.type,
     content: entry.type === "tool" ? `${entry.label}${entry.body ? `: ${entry.body}` : ""}` : entry.body,
-    alwaysCompact: entry.fixed,
+    // Tool entries expand with the viewer; the compact 200-character form is
+    // only for the collapsed state.
+    alwaysCompact: false,
   }));
 }
 

@@ -75,15 +75,30 @@ function progressFromUpdate(update: Progress): Pick<Job, "phase" | "activity" | 
 	};
 }
 
-function formatJob(job: Job, expanded: boolean): string {
-	const lines = [`${job.name} (${job.agent}): ${job.status} · ${elapsed(job.startedAt, job.finishedAt)}`];
+type JobFormat = "list" | "detail" | "expanded";
+
+/**
+ * List rows stay on one line, detail adds bounded live activity, and expanded
+ * adds the transcript. Transcripts never leak into the collapsed views.
+ */
+function formatJob(job: Job, mode: JobFormat): string {
+	const summary = `${job.name} (${job.agent}): ${job.status} · ${elapsed(job.startedAt, job.finishedAt)}`;
+	if (mode === "list") {
+		if (job.status !== "running") return summary;
+		const extra = [job.phase && `phase ${job.phase}`, job.turns !== undefined && `${job.turns} turns`]
+			.filter(Boolean).join(" · ");
+		return extra ? `${summary} · ${extra}` : summary;
+	}
+
+	const expanded = mode === "expanded";
+	const lines = [summary];
 	if (job.status === "running") {
 		lines.push(`Phase: ${job.phase ?? "starting"}`);
 		if (job.model) lines.push(`Model: ${job.model}`);
 		if (job.turns || job.cost) lines.push(`Turns: ${job.turns ?? 0} · Cost: $${(job.cost ?? 0).toFixed(4)}`);
-		if (job.messages?.length) lines.push(...formatTranscript(job.messages, expanded));
+		if (expanded && job.messages?.length) lines.push("", ...formatTranscript(job.messages));
 		else lines.push(...renderSessionActivity({ activity: job.activity, draft: job.draft }, expanded));
-	} else if (job.messages?.length) lines.push("", ...formatTranscript(job.messages, expanded));
+	} else if (expanded && job.messages?.length) lines.push("", ...formatTranscript(job.messages));
 	else if (job.output) lines.push("", expanded ? job.output : lastText(job.output, 199));
 	return lines.join("\n");
 }
@@ -106,8 +121,8 @@ function jobRow(job: Job): string {
 	return `${job.name} (${job.agent}) · ${job.status} · ${elapsed(job.startedAt, job.finishedAt)}`;
 }
 
-function formatTranscript(messages: readonly unknown[], expanded: boolean): string[] {
-	const transcript = formatSessionDisplay(messages, { expanded });
+function formatTranscript(messages: readonly unknown[]): string[] {
+	const transcript = formatSessionDisplay(messages, { expanded: true });
 	return transcript ? [transcript] : [];
 }
 
@@ -344,18 +359,18 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 		async execute(_id, { name }) {
 			if (!name) {
 				const ordered = orderedJobs(jobs.values());
-				const tracked = ordered.map((job) => formatJob(job, false)).join("\n\n");
+				const tracked = ordered.map((job) => formatJob(job, "list")).join("\n");
 				return { content: [{ type: "text" as const, text: tracked || "No background subagents tracked." }], details: { jobs: ordered.map((job) => ({ ...job })) } };
 			}
 			const job = jobs.get(name);
 			if (!job) return { content: [{ type: "text" as const, text: `Unknown job ${name}. Tracked: ${[...jobs.keys()].join(", ") || "none"}.` }], details: {} };
-			return { content: [{ type: "text" as const, text: formatJob(job, false) }], details: { job: { ...job } } };
+			return { content: [{ type: "text" as const, text: formatJob(job, "detail") }], details: { job: { ...job } } };
 		},
 		renderResult(result, { expanded }, theme) {
 			const details = result.details as { job?: Job; jobs?: Job[] } | undefined;
-			if (details?.job) return coloredReport(formatJob(details.job, expanded), theme);
+			if (details?.job) return coloredReport(formatJob(details.job, expanded ? "expanded" : "detail"), theme);
 			if (details?.jobs) {
-				const text = details.jobs.map((job) => formatJob(job, expanded)).join("\n\n");
+				const text = details.jobs.map((job) => formatJob(job, expanded ? "expanded" : "list")).join(expanded ? "\n\n" : "\n");
 				return coloredReport(text || "No background subagents tracked.", theme);
 			}
 			const first = result.content[0];
@@ -386,7 +401,7 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 				return;
 			}
 			if (ctx.mode !== "tui") {
-				ctx.ui.notify(formatJob(job, false), "info");
+				ctx.ui.notify(formatJob(job, "detail"), "info");
 				return;
 			}
 			const selectedJob = job;

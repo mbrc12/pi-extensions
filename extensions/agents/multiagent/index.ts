@@ -75,6 +75,11 @@ function formatTranscript(messages: any[]): string {
  return renderSessionActivity(activity, true, { activityLimit: 10, draftChars: 3000 }).join("\n") || "(No text or tool activity in transcript.)";
 }
 function transcript(op: Operator): string { return formatTranscript(sessionMessages(op.sessionFile)); }
+/** Keep a notification readable; the full report belongs in the TUI viewer. */
+function boundedReport(text: string, max = 1200): string {
+ if (text.length <= max) return text;
+ return `${text.slice(0, max)}…\n[Report truncated. Run /operators in the TUI for the full transcript.]`;
+}
 const Params = Type.Object({ action: StringEnum(["start", "send", "list", "inspect", "stop", "restart"] as const), name: Type.Optional(Type.String({ description: "Operator name" })), agent: Type.Optional(Type.String({ description: "Agent definition name for start/restart" })), task: Type.Optional(Type.String({ description: "Assignment for start/send/restart" })), agentScope: Type.Optional(StringEnum(["user", "project", "both"] as const, { default: "user" })), cwd: Type.Optional(Type.String({ description: "Operator working directory" })) });
 
 export default function(pi: any) {
@@ -284,7 +289,7 @@ export default function(pi: any) {
    return { name: selected.name, agent: selected.agent, status: selected.status, model: selected.model ?? "not started", cwd: selected.cwd, sessionPath: selected.sessionFile, messages: transcript };
   };
   if (ctx.mode === "tui") await ctx.ui.custom(createOperatorViewer(loadReport, { heightFraction: 0.6 }));
-  else ctx.ui.notify(inspectText(selected), "info");
+  else ctx.ui.notify(boundedReport(inspectText(selected)), "info");
  } });
  pi.registerTool({ name: "multiagent", label: "Multiagent", description: "Manage persistent Pi operators. Actions: start, send, list, inspect, stop, restart. Operators retain separate sessions and resume on demand.", parameters: Params,
   renderCall(args: any, theme: any) {

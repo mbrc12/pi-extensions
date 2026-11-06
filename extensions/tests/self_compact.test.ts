@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { typeboxStub } from "./typebox-stub.ts";
 import { testEventBus } from "./event-bus.ts";
 
 // Pi resolves these packages when it loads extensions. Mock them for a standalone Bun test.
@@ -16,7 +17,7 @@ mock.module("@earendil-works/pi-tui", () => ({
 	},
 }));
 const wrap = (value: unknown) => value;
-mock.module("typebox", () => ({ Type: { Object: wrap, String: wrap, Optional: wrap, Boolean: wrap } }));
+mock.module("typebox", () => typeboxStub);
 
 const {
 	buildFailureNote,
@@ -272,6 +273,18 @@ describe("self_compact tool", () => {
 		h.handlers.get("session_start")({}, h.ctx);
 		h.handlers.get("turn_end")({ outcome: "completed" }, h.ctx);
 		expect(h.sent).toHaveLength(2);
+	});
+
+	test("collapses a long note until the view is expanded", () => {
+		const h = harness();
+		const theme = { bold: (text: string) => text, fg: (_c: string, text: string) => text, bg: (_c: string, text: string) => text };
+		const body = "word ".repeat(200).trim();
+		const collapsed = h.renderers.get("self_compact")({ content: body }, { outputPad: 0, expanded: false }, theme).children[0].text;
+		const expanded = h.renderers.get("self_compact")({ content: body }, { outputPad: 0, expanded: true }, theme).children[0].text;
+		expect(collapsed.length).toBeLessThan(400);
+		expect(collapsed).toContain("Ctrl+O to expand");
+		expect(collapsed).toContain("self_compact note");
+		expect(expanded).toContain(body);
 	});
 
 	test("renders the alert heading in the warning colour", () => {

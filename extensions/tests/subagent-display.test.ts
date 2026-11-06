@@ -41,3 +41,34 @@ describe("subagent compact session display", () => {
     });
   }
 });
+
+describe("subagent collapsed transcript bound", () => {
+  const long = {
+    agent: "scout", task: "Look", exitCode: 0, usage,
+    messages: Array.from({ length: 6 }, (_unused, index) => ({
+      role: "assistant", content: [{ type: "text", text: `ENTRY-${index}` }],
+    })),
+  };
+
+  test("keeps only the last three entries collapsed and shows all when expanded", () => {
+    const tool = createSubagentTool({} as any);
+    const rendered = { content: [{ type: "text", text: "Done." }], details: { mode: "single", results: [long] } };
+    const compact = tool.renderResult(rendered as any, { expanded: false } as any, theme as any, {} as any).render(500).join("\n");
+    const expanded = tool.renderResult(rendered as any, { expanded: true } as any, theme as any, {} as any).render(500).join("\n");
+    expect(compact).toContain("ENTRY-5");
+    expect(compact).toContain("ENTRY-3");
+    expect(compact).not.toContain("ENTRY-2");
+    expect(compact).toContain("... 3 earlier items");
+    expect(expanded).toContain("ENTRY-0");
+    expect(expanded).toContain("ENTRY-5");
+  });
+
+  test("honors expanded while a parallel run is still running", () => {
+    const tool = createSubagentTool({} as any);
+    const running = { ...long, exitCode: -1, startedAt: Date.now() };
+    const rendered = { content: [{ type: "text", text: "" }], details: { mode: "parallel", results: [running] } };
+    const expanded = tool.renderResult(rendered as any, { expanded: true } as any, theme as any, {} as any).render(500).join("\n");
+    expect(expanded).toContain("ENTRY-0");
+    expect(expanded).toContain("─── ");
+  });
+});
