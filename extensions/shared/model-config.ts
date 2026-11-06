@@ -13,6 +13,7 @@ export const MODEL_CONFIG_PURPOSES = [
   "wiseCompacter",
   "sessionRename",
   "webSummarization",
+  "consultSummary",
   "permissionClassification",
   "pythonWriteClassification",
 ] as const;
@@ -93,6 +94,14 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   ],
   sessionRename: [
     "opencode-go/deepseek-v4.1-flash",
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna",
+  ],
+  consultSummary: [
+    "opencode-go/mimo-v2.6-flash",
+    "opencode-go-2/mimo-v2.6-flash",
+    "opencode-go/deepseek-v4.1-flash",
+    "opencode-go-2/deepseek-v4.1-flash",
     "openai-codex/gpt-6-luna",
     "openai-codex-2/gpt-6-luna",
   ],

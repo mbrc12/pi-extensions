@@ -17,6 +17,7 @@ symlink to this folder.
 | `tui/vscode-theme` | Switches theme inside a VS Code terminal without touching global settings |
 | `tools/ask-question` | `ask_question` dialog: single-choice, multi-choice, or free text |
 | `tools/context` | `context_recall`: search and read messages hidden by compaction |
+| `tools/consult` | `consult`: search, list, and summarize other Pi sessions |
 | `tools/export-md` | `/export-md` writes the session branch as a Markdown transcript |
 | `tools/memory-store` | Persistent memory in SQLite with FTS5 search plus LLM rerank |
 | `tools/permissions` | Classifies and approves tool calls (`allow`, `classify`, `ask`) |
