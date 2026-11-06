@@ -36,12 +36,22 @@ export function resolveTarget(metadata: SessionMetadata[], target: { sessionId?:
     : wantedPath ? item.path === wantedPath
     : target.name ? item.name?.toLocaleLowerCase() === target.name.toLocaleLowerCase() : false);
   if (!found.length) throw error("NOT_FOUND", "No matching session was found. Search for it or check the session ID/path.");
-  if (found.length > 1) throw Object.assign(error("AMBIGUOUS_NAME", `Name matches ${found.length} sessions. Retry with an exact sessionId or path.`), { candidates: found.slice(0, 8) });
+  if (found.length > 1) throw Object.assign(error("AMBIGUOUS_NAME", `Name matches ${found.length} sessions. Retry with an exact session_id or path.`), { candidates: found.slice(0, 8) });
   return found[0];
 }
 
+/** The model-facing schema uses snake_case; internals and stored queries stay camelCase. */
+const PARAM_ALIASES: Record<string, string> = {
+  session_id: "sessionId", cwd_prefix: "cwdPrefix", user_only: "userOnly",
+  include_tool_calls: "includeToolCalls", page_chars: "pageChars", entry_id: "entryId",
+};
+const PARAM_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(PARAM_ALIASES).map(([snake, camel]) => [camel, snake]),
+);
+
 export function normalizeParams(input: Record<string, unknown>): ConsultParams {
-  const p = { ...input } as any;
+  const p: any = {};
+  for (const [key, value] of Object.entries(input)) p[PARAM_ALIASES[key] ?? key] = value;
   const supplied = new Set(Object.keys(p));
   const allowed = new Set(["action", "sessionId", "path", "name", "query", "days", "from", "to", "cwd", "cwdPrefix", "status", "sort", "role", "userOnly", "includeToolCalls", "page", "pageChars", "last", "instruction", "self", "entryId"]);
   for (const key of Object.keys(p)) if (!allowed.has(key)) throw error("INVALID_ARGUMENT", `Unknown parameter ${key}. Remove it and retry.`);
@@ -49,28 +59,29 @@ export function normalizeParams(input: Record<string, unknown>): ConsultParams {
   if (p.query !== undefined && (typeof p.query !== "string" || p.query.length > 200)) throw error("INVALID_ARGUMENT", "Use a search query of at most 200 characters.");
   if (p.instruction !== undefined && (typeof p.instruction !== "string" || p.instruction.length > 500)) throw error("INVALID_ARGUMENT", "Keep the summary instruction within 500 characters.");
   if (p.page !== undefined && (!Number.isSafeInteger(p.page) || p.page < 1)) throw error("INVALID_PAGE", "Use a positive integer page number.");
-  if (p.pageChars !== undefined && (!Number.isSafeInteger(p.pageChars) || p.pageChars < 2000 || p.pageChars > 12000)) throw error("INVALID_ARGUMENT", "Set pageChars between 2,000 and 12,000.");
+  if (p.pageChars !== undefined && (!Number.isSafeInteger(p.pageChars) || p.pageChars < 2000 || p.pageChars > 12000)) throw error("INVALID_ARGUMENT", "Set page_chars between 2,000 and 12,000.");
   if (p.days !== undefined && (!Number.isSafeInteger(p.days) || p.days < 1 || p.days > 3650)) throw error("INVALID_ARGUMENT", "Set days between 1 and 3,650.");
   if (p.from !== undefined && !Number.isFinite(Date.parse(p.from))) throw error("INVALID_ARGUMENT", "Use an ISO date for from.");
   if (p.to !== undefined && !Number.isFinite(Date.parse(p.to))) throw error("INVALID_ARGUMENT", "Use an ISO date for to.");
   if (p.role !== undefined && (!Array.isArray(p.role) || p.role.some((r: unknown) => !["user", "assistant", "compactionSummary", "bashExecution", "toolResult"].includes(r as string)))) throw error("INVALID_ARGUMENT", "Choose supported roles for role.");
-  if (p.userOnly === true && p.role !== undefined && !(p.role.length === 1 && p.role[0] === "user")) throw error("INVALID_ARGUMENT", "Use userOnly or a role filter, not conflicting values.");
+  if (p.userOnly === true && p.role !== undefined && !(p.role.length === 1 && p.role[0] === "user")) throw error("INVALID_ARGUMENT", "Use user_only or a role filter, not conflicting values.");
   const roleSupplied = p.role !== undefined;
   p.page ??= 1; p.pageChars ??= 8000; p.days ??= 30; p.status ??= "any"; p.sort ??= "relevance";
   p.cwdPrefix ??= false; p.userOnly ??= false; p.includeToolCalls ??= false;
   if (p.userOnly) p.role = ["user"];
   else if (!roleSupplied) p.role = p.includeToolCalls ? ["user", "assistant", "toolResult"] : ["user", "assistant"];
   if (p.role.length === 0) throw error("INVALID_ARGUMENT", "Include at least one role.");
-  if (p.entryId !== undefined && (typeof p.entryId !== "string" || !p.entryId.trim())) throw error("INVALID_ARGUMENT", "Use a non-empty entryId from a list result.");
-  if (p.entryId !== undefined && p.action !== "list") throw error("INVALID_ARGUMENT", "entryId applies to action=list.");
+  if (p.entryId !== undefined && (typeof p.entryId !== "string" || !p.entryId.trim())) throw error("INVALID_ARGUMENT", "Use a non-empty entry_id from a list result.");
+  if (p.entryId !== undefined && p.action !== "list") throw error("INVALID_ARGUMENT", "entry_id applies to action=list.");
   if (p.self === true) {
-    const foreign = ["sessionId", "path", "name", "from", "to", "cwd", "cwdPrefix", "status", "sort", "days"].filter((key) => supplied.has(key));
+    const foreign = ["sessionId", "path", "name", "from", "to", "cwd", "cwdPrefix", "status", "sort", "days"]
+      .filter((key) => supplied.has(key)).map((key) => PARAM_LABELS[key] ?? key);
     if (foreign.length > 0) throw error("INVALID_ARGUMENT", `self mode reads the current session; drop ${foreign.join(", ")}.`);
     if (p.action === "summary") throw error("INVALID_ARGUMENT", "self mode supports search and list; the current session is already in context.");
     if (p.action === "search" && !p.query?.trim()) throw error("INVALID_ARGUMENT", "self mode needs a query for action=search.");
   }
   if (p.action === "search" && p.self !== true && !p.query?.trim() && !p.name && !p.cwd && !p.from && !p.to) throw error("INVALID_ARGUMENT", "Add a query or at least one search filter.");
-  if ((p.action === "list" || p.action === "summary") && p.self !== true && !p.sessionId && !p.path && !p.name) throw error("MISSING_TARGET", "Provide sessionId, path, or a unique name.");
+  if ((p.action === "list" || p.action === "summary") && p.self !== true && !p.sessionId && !p.path && !p.name) throw error("MISSING_TARGET", "Provide session_id, path, or a unique name.");
   return p as ConsultParams;
 }
 

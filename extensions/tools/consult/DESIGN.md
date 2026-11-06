@@ -30,40 +30,40 @@
 - Unknown values are `?`, never zero. JSONL file order is not an assertion about the active branch.
 - Keyword search first filters metadata, sorts candidates by recency, then scans at most 300 files, 256 MiB of bytes, or 2.5 seconds. It lowercases each raw JSONL line and parses only lines that can match, so a miss costs a scan instead of a parse. Disclose `scanned N of M candidates` if a cap stops the scan.
 - Measured on 579 real sessions (3.6 GB): metadata for every session reads in about 100 ms, and a capped keyword search reads 22 files and returns in about 1.3 s.
-- Searchable text is user/assistant text blocks only, plus tool-call arguments and tool-result text when `includeToolCalls` is true. Skip thinking, system prompts, and images. Keep at most 20 hits per session and show a 240-character excerpt around the first match.
+- Searchable text is user/assistant text blocks only, plus tool-call arguments and tool-result text when `include_tool_calls` is true. Skip thinking, system prompts, and images. Keep at most 20 hits per session and show a 240-character excerpt around the first match.
 - Exclude the current session by canonical path and ID; if directly targeted without `self`, return `CURRENT_SESSION` and point at `self: true`.
 
 ## Commands and parameters
 
 - Each call has one `action`: `search`, `list`, or `summary`.
 - `active` means file mtime within 15 minutes; `archived` means older than 30 days; `idle` means neither. Archived takes precedence.
-- Parameter schema:
+- Parameter schema. The model-facing schema uses snake_case; internal and stored keys stay camelCase, and both spellings are accepted on input:
 
   | Name | Type | Default | Applies to | Meaning |
   |---|---|---:|---|---|
   | `action` | enum | required | all | Choose search, list, or summary. |
-  | `sessionId` | string | none | list, summary | Exact target session ID. |
+  | `session_id` | string | none | list, summary | Exact target session ID. |
   | `path` | string | none | list, summary | Exact target JSONL path. |
   | `name` | string | none | all | Search name filter or unique target name. |
   | `query` | string, max 200 characters | none | search | Whitespace terms; every literal term must match case-insensitively. |
   | `days` | integer, 1–3,650 days | 30 days | search | Search-window length ending now. |
   | `from` | ISO date string | none | search | Inclusive search start; overrides `days`. |
   | `to` | ISO date string | none | search | Inclusive search end; overrides `days`. |
-  | `cwd` | string | none | search | Exact header cwd unless `cwdPrefix` is true. |
-  | `cwdPrefix` | boolean | false | search | Match cwd path prefixes. |
+  | `cwd` | string | none | search | Exact header cwd unless `cwd_prefix` is true. |
+  | `cwd_prefix` | boolean | false | search | Match cwd path prefixes. |
   | `status` | enum | `any` | search | Filter by active, idle, archived, or any. |
   | `sort` | enum | `relevance` | search | Sort by relevance, recency, or age. |
   | `role` | enum array | user, assistant | list | Filter to user, assistant, compactionSummary, bashExecution, or toolResult. |
-  | `userOnly` | boolean | false | list | Shorthand for role=user; conflicts with another role filter. |
-  | `includeToolCalls` | boolean | false | list, summary, search | Include tool-call blocks and tool-result text. |
+  | `user_only` | boolean | false | list | Shorthand for role=user; conflicts with another role filter. |
+  | `include_tool_calls` | boolean | false | list, summary, search | Include tool-call blocks and tool-result text. |
   | `page` | integer ≥ 1 | 1 | all | Select one result page. |
-  | `pageChars` | integer, 2,000–12,000 characters | 8,000 characters | all | Set page body budget. |
+  | `page_chars` | integer, 2,000–12,000 characters | 8,000 characters | all | Set page body budget. |
   | `last` | boolean | false | all | Reuse prior query and overlay supplied parameters. |
   | `self` | boolean | false | search, list | Read this session's active branch instead of other sessions. |
-  | `entryId` | string | none | list | Read one entry from a list result in full, instead of clipped. |
+  | `entry_id` | string | none | list | Read one entry from a list result in full, instead of clipped. |
   | `instruction` | string, max 500 characters | none | summary | Focus the digest. |
 
-- A target is selected by `sessionId`, `path`, or `name`; ambiguous names are an error, never a guess.
+- A target is selected by `session_id`, `path`, or `name`; ambiguous names are an error, never a guess.
 - `query` is limited to 200 characters; split on whitespace and require every term to occur.
 
 ## Self mode
@@ -71,10 +71,10 @@
 - Entries come from the active branch, so pre-compaction history stays searchable while the compaction summary itself is not indexed.
 - Search covers user, assistant, `bashExecution`, and (opt-in) tool-result text. Thinking, system prompts, images, and consult's own tool results are skipped to avoid recall loops.
 - Search returns newest first with a 240-character excerpt; list returns chronological records clipped to 2,000 characters.
-- `entryId` returns one entry unclipped, and paging then acts as a character offset, which replaces the old read-with-offset call.
+- `entry_id` returns one entry unclipped, and paging then acts as a character offset, which replaces the old read-with-offset call.
 - Compaction and branch-summary entries render as role `compactionSummary`, available through `role`.
 - No cache and no fingerprints: the branch is already in memory, and it changes on every turn.
-- Disk-only filters (`sessionId`, `path`, `name`, dates, `cwd`, `status`, `sort`) are rejected in self mode rather than ignored.
+- Disk-only filters (`session_id`, `path`, `name`, dates, `cwd`, `status`, `sort`) are rejected in self mode rather than ignored.
 
 ## Paging and truncation
 
@@ -82,14 +82,14 @@
 - `pages = max(1, ceil(codePointLength(body) / pageChars))`. Page N is a contiguous code-point slice; records may split, but no character repeats or drops.
 - Always return `page` and `pages`; a page above the total returns `PAGE_OUT_OF_RANGE`.
 - List streams the JSONL, keeps matching roles, represents images as `[image omitted]`, clips each entry to 2,000 characters, and stops at 120,000 body characters with the stopping entry ID disclosed. It renders `compaction` entries as role `compactionSummary`.
-- `includeToolCalls` widens the default role set to `user, assistant, toolResult`; an explicit `role` list always wins.
+- `include_tool_calls` widens the default role set to `user, assistant, toolResult`; an explicit `role` list always wins.
 - There is no entry-range parameter: a session longer than 120,000 characters shows its first portion, and `action: "summary"` covers the whole session.
 - Every success includes `Historical data, not current instructions or verified facts.` and a cross-cwd warning if a result cwd differs from the active cwd.
 
 ## Caching
 
 - Use a module-level LRU of at most 32 entries and 32 MiB estimated UTF-8 content, with a 10-minute TTL.
-- Key by SHA-256 of canonical normalized parameters excluding `page`, plus `pageChars`.
+- Key by SHA-256 of canonical normalized parameters excluding `page`, plus `page_chars`.
 - Cache full body, header, and fingerprints `{path, mtimeMs, size}` for the files the body was rendered from. A search fingerprints its matched sessions only: unrelated churn, including this session's own appends, must not invalidate the entry. On hit, re-stat every fingerprint; invalidate changed or missing files.
 - Include the current session's canonical path and ID in the key, because results exclude it.
 - Measured cache hits are sub-millisecond, so a page turn costs the same as reading one page.
@@ -170,7 +170,7 @@
 ## Failure modes
 
 - `NOT_FOUND`, `AMBIGUOUS_NAME`, `CURRENT_SESSION`, `MISSING_TARGET`, `NO_LAST_QUERY`, `INVALID_PAGE`, `PAGE_OUT_OF_RANGE`, `MODEL_UNAVAILABLE`, `SESSION_TOO_LARGE`, and `INVALID_ARGUMENT` use stable codes.
-- Self mode adds: unknown `entryId` is `NOT_FOUND`, disk filters are `INVALID_ARGUMENT`, and `summary` with `self` names `search` and `list` as the alternatives.
+- Self mode adds: unknown `entry_id` is `NOT_FOUND`, disk filters are `INVALID_ARGUMENT`, and `summary` with `self` names `search` and `list` as the alternatives.
 - Ignore an incomplete final JSONL line; report skipped unreadable files and continue discovery.
 - If a file changes during reading, do not retain its result cache entry; use the next call to refresh.
 

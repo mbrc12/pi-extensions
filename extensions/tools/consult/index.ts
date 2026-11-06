@@ -143,10 +143,10 @@ export default function consultExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "consult",
     label: "Consult sessions",
-    description: "Read Pi session history. Default: search, list, or summarize other sessions on disk. With self=true: search or list this session's active branch, including entries hidden by compaction. Results are truncated and paged: read page 1, then repeat with a higher page. Tool calls and results stay out unless includeToolCalls is true.",
+    description: "Read Pi session history. Default: search, list, or summarize other sessions on disk. With self=true: search or list this session's active branch, including entries hidden by compaction. Results are truncated and paged: read page 1, then repeat with a higher page. Tool calls and results stay out unless include_tool_calls is true.",
     parameters: Type.Object({
       action: StringEnum(["search", "list", "summary"] as const, { description: "Choose search, list, or summary." }),
-      sessionId: Type.Optional(Type.String({ description: "Exact session ID to read." })),
+      session_id: Type.Optional(Type.String({ description: "Exact session ID to read." })),
       path: Type.Optional(Type.String({ description: "Exact session JSONL path to read." })),
       name: Type.Optional(Type.String({ description: "Session name or search-name filter." })),
       query: Type.Optional(Type.String({ description: "Whitespace-separated literal search terms." })),
@@ -154,23 +154,23 @@ export default function consultExtension(pi: ExtensionAPI): void {
       from: Type.Optional(Type.String({ description: "Inclusive ISO search start date." })),
       to: Type.Optional(Type.String({ description: "Inclusive ISO search end date." })),
       cwd: Type.Optional(Type.String({ description: "Filter by working directory." })),
-      cwdPrefix: Type.Optional(Type.Boolean({ description: "Match cwd path prefixes." })),
+      cwd_prefix: Type.Optional(Type.Boolean({ description: "Match cwd path prefixes." })),
       status: Type.Optional(StringEnum(["active", "idle", "archived", "any"] as const, { description: "Filter by file age status." })),
       sort: Type.Optional(StringEnum(["relevance", "recent", "oldest"] as const, { description: "Order matching sessions." })),
       role: Type.Optional(Type.Array(StringEnum(["user", "assistant", "compactionSummary", "bashExecution", "toolResult"] as const), { description: "Message roles to include." })),
-      userOnly: Type.Optional(Type.Boolean({ description: "Include only user messages." })),
-      includeToolCalls: Type.Optional(Type.Boolean({ description: "Include tool calls and results." })),
+      user_only: Type.Optional(Type.Boolean({ description: "Include only user messages." })),
+      include_tool_calls: Type.Optional(Type.Boolean({ description: "Include tool calls and results." })),
       page: Type.Optional(Type.Integer({ minimum: 1, description: "Select a result page." })),
-      pageChars: Type.Optional(Type.Integer({ minimum: 2000, maximum: 12000, description: "Set the page character budget." })),
+      page_chars: Type.Optional(Type.Integer({ minimum: 2000, maximum: 12000, description: "Set the page character budget." })),
       last: Type.Optional(Type.Boolean({ description: "Reuse the prior query with these overrides." })),
       self: Type.Optional(Type.Boolean({ description: "Read this session's active branch instead of other sessions." })),
-      entryId: Type.Optional(Type.String({ description: "Read one entry ID from a list result in full." })),
+      entry_id: Type.Optional(Type.String({ description: "Read one entry ID from a list result in full." })),
       instruction: Type.Optional(Type.String({ maxLength: 500, description: "Focus the session summary." })),
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     renderCall(args: any, theme: any) {
       const action = String(args.action ?? "search");
-      const subject = action === "search" ? args.query : args.sessionId ?? args.name ?? args.path;
+      const subject = action === "search" ? args.query : args.session_id ?? args.name ?? args.path;
       const clipped = subject ? ` ${JSON.stringify(String(subject).slice(0, 80))}` : "";
       return new Text(theme.fg("toolTitle", theme.bold("consult ")) + theme.fg("accent", action) + theme.fg("muted", clipped), 0, 0);
     },

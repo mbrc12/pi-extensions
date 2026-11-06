@@ -170,11 +170,31 @@ describe("consult self mode", () => {
   });
 
   test("self rejects disk filters and unsupported actions", () => {
-    expect(() => normalizeParams({ action: "search", self: true, query: "x", sessionId: "abc" })).toThrow(/drop sessionId/);
+    expect(() => normalizeParams({ action: "search", self: true, query: "x", session_id: "abc" })).toThrow(/drop session_id/);
     expect(() => normalizeParams({ action: "list", self: true, days: 7 })).toThrow(/drop days/);
     expect(() => normalizeParams({ action: "summary", self: true })).toThrow(/already in context/);
     expect(() => normalizeParams({ action: "search", self: true })).toThrow(/needs a query/);
-    expect(() => normalizeParams({ action: "search", self: true, query: "x", entryId: "u1" })).toThrow(/entryId applies to action=list/);
+    expect(() => normalizeParams({ action: "search", self: true, query: "x", entryId: "u1" })).toThrow(/entry_id applies to action=list/);
     expect(normalizeParams({ action: "list", self: true }).self).toBe(true);
+  });
+});
+
+describe("consult parameter names", () => {
+  test("the model-facing snake_case names map onto the internal ones", () => {
+    const p = normalizeParams({ action: "list", session_id: "abc", page_chars: 4000, include_tool_calls: true, entry_id: "e1" });
+    expect(p.sessionId).toBe("abc");
+    expect(p.pageChars).toBe(4000);
+    expect(p.includeToolCalls).toBe(true);
+    expect(p.entryId).toBe("e1");
+    expect(p.role).toEqual(["user", "assistant", "toolResult"]);
+    expect(normalizeParams({ action: "list", path: "/x", cwd_prefix: true, user_only: true }).role).toEqual(["user"]);
+  });
+  test("self mode names the field the caller actually sent", () => {
+    expect(() => normalizeParams({ action: "search", self: true, query: "x", session_id: "abc" })).toThrow(/drop session_id/);
+    expect(() => normalizeParams({ action: "search", self: true, query: "x", cwd_prefix: true })).toThrow(/drop cwd_prefix/);
+  });
+  test("stored camelCase queries from before the rename still merge", () => {
+    const stored = { action: "list", sessionId: "abc", pageChars: 4000 };
+    expect(mergeLastQuery(stored as any, { last: true, page: 2 }).sessionId).toBe("abc");
   });
 });

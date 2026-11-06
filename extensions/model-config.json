@@ -92,10 +92,10 @@
     "openai-codex-2/gpt-6-luna"
   ],
   "consultSummary": [
-    "opencode-go/mimo-v2.6-flash",
-    "opencode-go-2/mimo-v2.6-flash",
     "opencode-go/deepseek-v4.1-flash",
     "opencode-go-2/deepseek-v4.1-flash",
+    "opencode-go/mimo-v2.6-flash",
+    "opencode-go-2/mimo-v2.6-flash",
     "openai-codex/gpt-6-luna",
     "openai-codex-2/gpt-6-luna"
   ],
