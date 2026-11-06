@@ -34,3 +34,4 @@ The user does not know pandas, so write all data analysis in polars.
 - Put temporary scripts and generated scratch files in `/tmp`, but run them with `/Users/subwave/dev/tmp/random-tasks/.venv/bin/python` or `uv` targeting that environment. Do not use the system Python.
 - Keep project-specific Python work in the project's own environment.
 - Use `py_explore` for read-only exploration. Use bash or write tools for anything that writes files.
+- `py_explore` requires `timeoutSeconds` and `memoryLimitMb`. Start with 60 and 2048; raise them only when the data genuinely needs more. The process group is killed when either limit is exceeded.

@@ -6,11 +6,15 @@
  *   1. Fast regex deny-list for obvious writes/deletes.
  *   2. Cheap LLM failsafe that answers "does this code write/delete anything?"
  *
+ * Callers must pass `timeoutSeconds` and `memoryLimitMb`. The script runs in
+ * its own process group; the group is killed when either limit is exceeded,
+ * and the tool reports which limit was hit.
+ *
  * Also registers `/py-explore-test` to tune the LLM prompt against a suite of
  * safe/unsafe Python snippets.
  */
 
-import { spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -29,6 +33,16 @@ const PyExploreParams = Type.Object({
     description:
       "Python code to run. Must be read-only/exploratory (no writes, deletes, moves, copies, or subprocesses that do so).",
   }),
+  timeoutSeconds: Type.Number({
+    minimum: 0.1,
+    description:
+      "Required. Wall-clock limit in seconds. The Python process group is killed when it is exceeded.",
+  }),
+  memoryLimitMb: Type.Number({
+    minimum: 1,
+    description:
+      "Required. Resident-memory limit in MiB for the Python process and its children. The process group is killed when total RSS exceeds it.",
+  }),
   cwd: Type.Optional(Type.String({
     description: "Working directory for the Python process (defaults to the agent's cwd).",
   })),
@@ -40,11 +54,95 @@ const PyExploreParams = Type.Object({
 
 const MAX_OUTPUT_BYTES = 200 * 1024;
 const CONTENT_OUTPUT_BYTES = 50 * 1024;
+const MEMORY_SAMPLE_INTERVAL_MS = 200;
 
 interface PythonCommand {
   command: string;
   args: string[];
   source: "uv" | "system" | "venv";
+}
+
+interface RunLimits {
+  timeoutMs: number;
+  memoryLimitBytes: number;
+}
+
+type TerminationKind = "timeout" | "memory" | "output";
+
+interface Termination {
+  kind: TerminationKind;
+  message: string;
+}
+
+const SIGNAL_EXIT_CODES: Record<string, number> = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGKILL: 137,
+  SIGSEGV: 139,
+  SIGTERM: 143,
+};
+
+function exitCodeFor(code: number | null, signal: string | null): number {
+  if (code !== null) return code;
+  if (signal && SIGNAL_EXIT_CODES[signal] !== undefined) return SIGNAL_EXIT_CODES[signal];
+  return 1;
+}
+
+/**
+ * Kill the Python process and everything it spawned. The child is spawned as a
+ * session leader, so signaling its process group reaches subprocesses too.
+ */
+function killProcessGroup(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === "win32") {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Process already gone.
+    }
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Process already gone.
+    }
+  }
+}
+
+/** Total resident memory in KiB for a process group, or null when unknown. */
+function processGroupRssKb(pgid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile("ps", ["-A", "-o", "pgid=,rss="], { timeout: 5000 }, (error, stdout) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+      let total = 0;
+      let found = false;
+      for (const rawLine of stdout.split("\n")) {
+        const match = rawLine.trim().match(/^(\d+)\s+(\d+)$/);
+        if (!match) continue;
+        if (Number(match[1]) !== pgid) continue;
+        found = true;
+        total += Number(match[2]);
+      }
+      resolve(found ? total : null);
+    });
+  });
+}
+
+function formatMiB(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MiB`;
+}
+
+function formatSeconds(ms: number): string {
+  const seconds = ms / 1000;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)} s`;
 }
 
 function resolveSystemPython(): PythonCommand {
@@ -194,9 +292,16 @@ function truncateOutput(text: string, bytes: number): string {
 async function runPython(
   code: string,
   cwd: string,
+  limits: RunLimits,
   signal?: AbortSignal,
   venv?: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number; python: PythonCommand }> {
+): Promise<{
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  python: PythonCommand;
+  termination: Termination | null;
+}> {
   const python = await resolvePython(cwd, signal, venv);
 
   return new Promise((resolve, reject) => {
@@ -204,42 +309,100 @@ async function runPython(
       cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
 
     let stdout = "";
     let stderr = "";
+    let termination: Termination | null = null;
+    let samplingMemory = false;
 
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-      if (Buffer.byteLength(stdout, "utf8") > MAX_OUTPUT_BYTES) {
-        child.kill("SIGTERM");
-      }
-    });
+    const terminate = (kind: TerminationKind, message: string) => {
+      if (termination) return;
+      termination = { kind, message };
+      killProcessGroup(child);
+    };
 
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-      if (Buffer.byteLength(stderr, "utf8") > MAX_OUTPUT_BYTES) {
-        child.kill("SIGTERM");
+    const timeoutTimer = setTimeout(() => {
+      terminate(
+        "timeout",
+        `py_explore killed the Python process: it ran longer than the ${formatSeconds(
+          limits.timeoutMs,
+        )} timeout (timeoutSeconds).`,
+      );
+    }, limits.timeoutMs);
+
+    const memoryTimer = setInterval(async () => {
+      if (samplingMemory || termination || child.pid === undefined) return;
+      samplingMemory = true;
+      try {
+        const rssKb = await processGroupRssKb(child.pid);
+        if (rssKb === null || termination) return;
+        const rssBytes = rssKb * 1024;
+        if (rssBytes > limits.memoryLimitBytes) {
+          terminate(
+            "memory",
+            `py_explore killed the Python process: resident memory reached ${formatMiB(
+              rssBytes,
+            )}, above the ${formatMiB(limits.memoryLimitBytes)} limit (memoryLimitMb).`,
+          );
+        }
+      } finally {
+        samplingMemory = false;
       }
-    });
+    }, MEMORY_SAMPLE_INTERVAL_MS);
 
     const abortHandler = () => {
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!child.killed) child.kill("SIGKILL");
-      }, 5000);
+      killProcessGroup(child);
+    };
+
+    const stopTimers = () => {
+      clearTimeout(timeoutTimer);
+      clearInterval(memoryTimer);
+      signal?.removeEventListener("abort", abortHandler);
     };
 
     signal?.addEventListener("abort", abortHandler, { once: true });
 
+    const checkOutputBudget = () => {
+      const bytes = Math.max(
+        Buffer.byteLength(stdout, "utf8"),
+        Buffer.byteLength(stderr, "utf8"),
+      );
+      if (bytes > MAX_OUTPUT_BYTES) {
+        terminate(
+          "output",
+          `py_explore killed the Python process: it produced more than ${
+            MAX_OUTPUT_BYTES / 1024
+          } KiB of output.`,
+        );
+      }
+    };
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      checkOutputBudget();
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      checkOutputBudget();
+    });
+
     child.on("error", (error) => {
-      signal?.removeEventListener("abort", abortHandler);
+      stopTimers();
       reject(error);
     });
 
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", abortHandler);
-      resolve({ stdout, stderr, exitCode: code ?? 0, python });
+    child.on("close", (code, signalName) => {
+      stopTimers();
+      resolve({
+        stdout,
+        stderr,
+        exitCode: exitCodeFor(code, signalName),
+        python,
+        termination,
+      });
     });
   });
 }
@@ -305,12 +468,13 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
     name: "py_explore",
     label: "Python Explore",
     description:
-      "Run a read-only/exploratory Python script. The code is checked by a regex deny-list and a cheap LLM to ensure it does not write, delete, move, copy, or create files. Pass venv to run inside a specific virtual environment.",
+      "Run a read-only/exploratory Python script. The code is checked by a regex deny-list and a cheap LLM to ensure it does not write, delete, move, copy, or create files. Requires timeoutSeconds and memoryLimitMb; the process group is killed when either limit is exceeded. Pass venv to run inside a specific virtual environment.",
     promptSnippet:
-      "Use py_explore (preferred) to run small read-only Python scripts (polars, pandas, numpy, inspection). Prefer it over python heredocs or python -c in bash. The code must not write files or spawn destructive subprocesses. Pass venv when the script needs a specific virtual environment.",
+      "Use py_explore (preferred) to run small read-only Python scripts (polars, pandas, numpy, inspection). Prefer it over python heredocs or python -c in bash. The code must not write files or spawn destructive subprocesses. Always pass timeoutSeconds and memoryLimitMb; the process group is killed when either limit is exceeded. Pass venv when the script needs a specific virtual environment.",
     promptGuidelines: [
       "Use py_explore for quick data exploration, inspection, and transformation in Python.",
       "Prefer py_explore over running Python via bash heredocs or python -c for read-only/exploratory scripts.",
+      "Always pass py_explore's required timeoutSeconds (wall clock) and memoryLimitMb (resident memory). Start with 60 and 2048 unless the task needs more; the process group is killed when either is exceeded.",
       "Pass py_explore's venv parameter (a venv directory or its python executable) when the script needs packages from a specific environment, for example /Users/subwave/dev/tmp/random-tasks/.venv.",
       "Do not use py_explore for code that writes files, deletes files, moves/copies files, or runs subprocesses that do so.",
       "For heavy writes use the standard bash or write tools instead.",
@@ -320,6 +484,23 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const code = params.code ?? "";
       const cwd = params.cwd ?? ctx.cwd ?? process.cwd();
+      const limits: RunLimits = {
+        timeoutMs: Math.round(params.timeoutSeconds * 1000),
+        memoryLimitBytes: Math.round(params.memoryLimitMb * 1024 * 1024),
+      };
+
+      if (!(limits.timeoutMs > 0) || !(limits.memoryLimitBytes > 0)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "py_explore requires positive timeoutSeconds and memoryLimitMb values.",
+            },
+          ],
+          details: { code, limits },
+          isError: true,
+        };
+      }
 
       onUpdate?.({
         content: [{ type: "text", text: "Checking code for write/delete operations..." }],
@@ -337,40 +518,58 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
       }
 
       onUpdate?.({
-        content: [{ type: "text", text: `Write gate passed (${check.source}). Resolving Python...` }],
+        content: [
+          {
+            type: "text",
+            text: `Write gate passed (${check.source}). Resolving Python (limits: ${formatSeconds(
+              limits.timeoutMs,
+            )} timeout, ${formatMiB(limits.memoryLimitBytes)} memory)...`,
+          },
+        ],
       });
 
       let outcome: Awaited<ReturnType<typeof runPython>>;
       try {
-        outcome = await runPython(code, cwd, signal, params.venv);
+        outcome = await runPython(code, cwd, limits, signal, params.venv);
       } catch (error) {
         if (signal?.aborted) throw error;
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: "text", text: `py_explore could not start Python: ${message}` }],
-          details: { gate: check, code, venv: params.venv },
+          details: { gate: check, code, venv: params.venv, limits },
           isError: true,
         };
       }
 
-      const { stdout, stderr, exitCode, python } = outcome;
+      const { stdout, stderr, exitCode, python, termination } = outcome;
 
       const output = stderr
         ? `[stdout]\n${stdout}\n\n[stderr]\n${stderr}`
         : stdout;
       const truncated = truncateOutput(output, CONTENT_OUTPUT_BYTES);
 
+      if (termination) {
+        const text = truncated.trim()
+          ? `${termination.message}\n\n${truncated}`
+          : termination.message;
+        return {
+          content: [{ type: "text", text }],
+          details: { stdout, stderr, exitCode, gate: check, code, python, limits, termination },
+          isError: true,
+        };
+      }
+
       if (exitCode !== 0) {
         return {
           content: [{ type: "text", text: truncated }],
-          details: { stdout, stderr, exitCode, gate: check, code, python },
+          details: { stdout, stderr, exitCode, gate: check, code, python, limits, termination: null },
           isError: true,
         };
       }
 
       return {
         content: [{ type: "text", text: truncated }],
-        details: { stdout, stderr, exitCode, gate: check, code, python },
+        details: { stdout, stderr, exitCode, gate: check, code, python, limits, termination: null },
       };
     },
 
@@ -387,6 +586,8 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         exitCode?: number;
         gate?: { allowed: boolean; source: string; reason: string };
         python?: PythonCommand;
+        limits?: RunLimits;
+        termination?: Termination | null;
       } | undefined;
 
       if (isPartial) {
@@ -395,9 +596,11 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
 
       if (!expanded) {
         const status = result.isError
-          ? details?.exitCode !== undefined
-            ? `py_explore failed (exit code ${details.exitCode})`
-            : "py_explore failed"
+          ? details?.termination
+            ? `py_explore killed (${details.termination.kind} limit)`
+            : details?.exitCode !== undefined
+              ? `py_explore failed (exit code ${details.exitCode})`
+              : "py_explore failed"
           : "py_explore finished";
         const icon = result.isError
           ? theme.fg("error", "✗ ")
@@ -435,6 +638,25 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         container.addChild(
           new Text(theme.fg("dim", `Python: ${details.python.source} (${details.python.command})`), 0, 0),
         );
+      }
+
+      if (details.limits) {
+        container.addChild(
+          new Text(
+            theme.fg(
+              "dim",
+              `Limits: ${formatSeconds(details.limits.timeoutMs)} timeout, ${formatMiB(
+                details.limits.memoryLimitBytes,
+              )} memory`,
+            ),
+            0,
+            0,
+          ),
+        );
+      }
+
+      if (details.termination) {
+        container.addChild(new Text(theme.fg("error", details.termination.message), 0, 0));
       }
 
       container.addChild(new Spacer(1));

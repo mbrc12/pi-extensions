@@ -20,7 +20,7 @@ symlink to this folder.
 | `tools/export-md` | `/export-md` writes the session branch as a Markdown transcript |
 | `tools/memory-store` | Persistent memory in SQLite with FTS5 search plus LLM rerank |
 | `tools/permissions` | Classifies and approves tool calls (`allow`, `classify`, `ask`) |
-| `tools/py-explore` | `py_explore` runs read-only Python, gated by deny-list and LLM check |
+| `tools/py-explore` | `py_explore` runs read-only Python, gated by deny-list and LLM check, killed at the required timeout and memory limits |
 | `tools/self_compact` | `self_compact` lets the model compact at a boundary it chooses, with a note |
 | `tools/task-backgrounder` | `task_start`/`status`/`stop`/`clear` run commands in detached tmux |
 | `tools/web-use` | `web_use` search and fetch over DDG, Exa, and curl backends |

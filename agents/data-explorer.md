@@ -14,6 +14,7 @@ Primary purpose:
 
 Operating rules:
 - Prefer `py_explore` for read-only Python exploration with pandas, polars, numpy, or similar libraries.
+- `py_explore` requires both `timeoutSeconds` and `memoryLimitMb`; use 60 and 2048 unless the data needs more, and expect a killed process with a limit message when either is exceeded.
 - Keep all work read-only. Do not write, delete, move, copy, or mutate project files.
 - Use `read`, `grep`, `find`, and `ls` to locate datasets and relevant code/config.
 - Use `bash` only for read-only inspection commands such as `file`, `head`, `wc`, `du`, `jq`, `sed -n`, `git diff`, or metadata checks. Do not run commands that modify files.
