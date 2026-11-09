@@ -17,6 +17,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createNotificationGate } from "../../shared/notification-gate.ts";
+import { foldedResult } from "../../shared/result-fold.ts";
 import { access, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { Type, type Static } from "typebox";
 import { Container, Key, matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
@@ -1147,14 +1148,10 @@ export default function taskBackgrounderExtension(pi: ExtensionAPI): void {
 		},
 		renderResult(result, options, theme) {
 			const details = result.details as { name?: string; status?: TaskStatus; output?: string } | undefined;
-			// Never return undefined: pi's tool component stores the renderer's
-			// return value directly, so undefined would crash the TUI render
-			// (Box.render -> child.render on an undefined child). Fall back to
-			// the raw text output for results without usable details (execution
-			// errors, blocked calls, or the no-task-selected path).
+			// Results without usable details are execution errors, blocked calls, or
+			// the no-task-selected path. Fold them to one row instead of dumping text.
 			if (!details || typeof details.name !== "string") {
-				const text = result.content[0];
-				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+				return foldedResult(result, theme, { expanded: options.expanded });
 			}
 			return new TaskStatusResultComponent(
 				details.name,

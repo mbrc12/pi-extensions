@@ -21,12 +21,18 @@ beforeAll(async () => {
 
 /** Render a captured tool result, the way pi calls the renderer. */
 function render(tool: string, result: any, expanded: boolean, args: any = {}) {
-	const component = tools.get(tool).renderResult(result, { expanded, isPartial: false }, theme, { args });
+	const component = tools.get(tool).renderResult(result, { expanded, isPartial: false }, theme, {
+		args,
+		isError: (result as { isError?: boolean }).isError === true,
+	});
 	// Another test file may have replaced the Text component with a stub that has no render().
 	return typeof component.render === "function" ? component.render(200).join("\n") : String(component.text ?? "");
 }
 
 const textResult = (text: string) => ({ content: [{ type: "text", text }], details: {} });
+
+/** A failed call: pi sends the error message as content and sets isError. */
+const failedResult = (text: string, details: unknown = {}) => ({ content: [{ type: "text", text }], details, isError: true });
 
 describe("minimal tool renderers", () => {
 	test("read shows file content only when expanded", () => {
@@ -67,6 +73,44 @@ describe("minimal tool renderers", () => {
 		expect(collapsed).not.toContain(" keep");
 		expect(expanded).toContain(" keep");
 		expect(expanded).toContain("more diff lines");
+	});
+
+	test("a failed read stays on one row until expanded", () => {
+		const error = `ENOENT: no such file or directory, open '/tmp/missing' ${"detail ".repeat(30)}tail-of-error`;
+		const collapsed = render("read", failedResult(error), false);
+		const expanded = render("read", failedResult(error), true);
+		expect(collapsed).toContain("✗");
+		expect(collapsed).toContain("ENOENT");
+		expect(collapsed.split("\n")).toHaveLength(1);
+		expect(collapsed).toContain("…");
+		expect(collapsed).toContain("to expand");
+		expect(collapsed).not.toContain("tail-of-error");
+		expect(expanded).toContain("tail-of-error");
+	});
+
+	test("a failing command reports its exit code without dumping output", () => {
+		const output = ["out-0", "out-1", "Command exited with code 3"].join("\n");
+		const collapsed = render("bash", failedResult(output), false);
+		expect(collapsed).toContain("✗ 3");
+		expect(collapsed).not.toContain("out-0");
+		expect(render("bash", failedResult(output), true)).toContain("out-0");
+	});
+
+	test("a timeout without an exit code still reads as a failure", () => {
+		const collapsed = render("bash", failedResult("Command timed out after 5 seconds"), false);
+		expect(collapsed).toContain("✗");
+		expect(collapsed).not.toContain("✓");
+	});
+
+	test("failed find, grep, and ls stay folded", () => {
+		const error = `Error: ripgrep is not installed ${"hint ".repeat(30)}last-hint`;
+		for (const tool of ["find", "grep", "ls"]) {
+			const collapsed = render(tool, failedResult(error), false);
+			expect(collapsed).toContain("✗");
+			expect(collapsed.split("\n")).toHaveLength(1);
+			expect(collapsed).not.toContain("last-hint");
+			expect(render(tool, failedResult(error), true)).toContain("last-hint");
+		}
 	});
 
 	test("find, grep, and ls report what the expanded view cut", () => {

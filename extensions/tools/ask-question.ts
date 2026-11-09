@@ -19,6 +19,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { foldedResult } from "../shared/result-fold.ts";
 import { promptWait } from "../session/notify-on-idle";
 import {
 	Editor,
@@ -620,11 +621,14 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, _options, theme, _context) {
+		renderResult(result, options, theme, _context) {
 			const details = result.details as AskDetails | undefined;
-			if (!details) {
-				const text = result.content[0];
-				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+			// A failed call carries no answers: pi sends `details: {}` for a
+			// validation error and nothing at all for a thrown one. Fold either
+			// to one row; reading `answers` unguarded would throw and drop the
+			// whole result into pi's generic preview.
+			if (!Array.isArray(details?.answers)) {
+				return foldedResult(result, theme, { expanded: options.expanded });
 			}
 			if (details.cancelled) {
 				return new Text(theme.fg("warning", "✗ Cancelled"), 0, 0);

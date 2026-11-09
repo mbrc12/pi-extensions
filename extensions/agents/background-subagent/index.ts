@@ -7,6 +7,7 @@ import { createOperatorViewer } from "../multiagent/viewer.ts";
 import { createSubagentTool } from "../subagent/index.ts";
 import { discoverAgents } from "../subagent/agents.ts";
 import { createNotificationGate } from "../../shared/notification-gate.ts";
+import { foldedResult } from "../../shared/result-fold.ts";
 import { compactActivityText, extractSessionActivity, formatDuration, renderSessionActivity } from "../shared/session-activity.ts";
 import { formatSessionDisplay } from "../shared/session-display.ts";
 
@@ -373,8 +374,7 @@ export default function backgroundSubagent(pi: ExtensionAPI): void {
 				const text = details.jobs.map((job) => formatJob(job, expanded ? "expanded" : "list")).join(expanded ? "\n\n" : "\n");
 				return coloredReport(text || "No background subagents tracked.", theme);
 			}
-			const first = result.content[0];
-			return new Text(first?.type === "text" ? first.text : "", 0, 0);
+			return foldedResult(result, theme, { expanded });
 		},
 	});
 

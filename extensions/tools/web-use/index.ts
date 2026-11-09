@@ -4,6 +4,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { completeWithModelFallback } from "../../shared/model-config.ts";
+import { foldedResult } from "../../shared/result-fold.ts";
 import { curlFetchFull, runFetch, runSearch } from "./web.ts";
 
 const WebUseParams = Type.Object({
@@ -237,6 +238,8 @@ export function createWebUseTool() {
     renderResult(result, { expanded }, theme, _context) {
       // Collapsed: show minimal summary
       if (!expanded) {
+        // A failed call has no usable details; keep its message to one row.
+        if (result.isError) return foldedResult(result, theme, {});
         const details = result.details as Record<string, unknown> | undefined;
         if (details?.mode === "fetch") {
           const title = String(details.page_title ?? "");

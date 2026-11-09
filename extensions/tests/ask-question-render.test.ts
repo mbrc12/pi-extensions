@@ -47,3 +47,35 @@ describe("ask_question call row", () => {
 		expect(text).toContain("3. DuckDB");
 	});
 });
+
+describe("ask_question failed result", () => {
+	// pi sends `details: {}` for a validation error and nothing at all for a
+	// thrown one. Reading `answers` unguarded would throw and lose the fold.
+	const failure = (error: string, details?: unknown) => ({ content: [{ type: "text", text: error }], details, isError: true });
+
+	test("collapsed keeps the error on one row", () => {
+		const error = `ask_question failed: ${"reason ".repeat(40)}tail-of-error`;
+		const text = plain(tool().renderResult(failure(error), { expanded: false }, theme, {}));
+		expect(text).toContain("✗");
+		expect(text).toContain("ask_question failed");
+		expect(text.split("\n")).toHaveLength(1);
+		expect(text).toContain("to expand");
+		expect(text).not.toContain("tail-of-error");
+	});
+
+	test("expanded shows the whole error", () => {
+		const error = `ask_question failed: ${"reason ".repeat(40)}tail-of-error`;
+		const text = plain(tool().renderResult(failure(error), { expanded: true }, theme, {}));
+		expect(text).toContain("tail-of-error");
+	});
+
+	test("an empty details object folds instead of throwing", () => {
+		const error = `Validation failed for tool "ask_question": ${"detail ".repeat(30)}tail-of-error`;
+		const collapsed = plain(tool().renderResult(failure(error, {}), { expanded: false }, theme, {}));
+		expect(collapsed).toContain("✗");
+		expect(collapsed).toContain("Validation failed");
+		expect(collapsed.split("\n")).toHaveLength(1);
+		expect(collapsed).not.toContain("tail-of-error");
+		expect(plain(tool().renderResult(failure(error, {}), { expanded: true }, theme, {}))).toContain("tail-of-error");
+	});
+});

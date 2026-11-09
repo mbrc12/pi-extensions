@@ -20,6 +20,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { keyHint } from "@earendil-works/pi-coding-agent";
+import { foldedResult } from "../../shared/result-fold.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { loadConfig, type MemoryStoreConfig } from "./config.js";
@@ -284,8 +285,7 @@ export default function (pi: ExtensionAPI) {
         | undefined;
 
       if (!details || !Array.isArray(details.results)) {
-        const text = result?.content?.[0];
-        return new Text(text?.type === "text" ? text.text : "", 0, 0);
+        return foldedResult(result, theme, { expanded });
       }
 
       const count = details.count ?? details.results.length;
@@ -402,9 +402,8 @@ export default function (pi: ExtensionAPI) {
       const details = result?.details as
         | { ok?: boolean; duplicate?: boolean; id?: number; content?: string }
         | undefined;
-      if (!details) {
-        const text = result?.content?.[0];
-        return new Text(text?.type === "text" ? text.text : "", 0, 0);
+      if (!details || typeof details.ok !== "boolean") {
+        return foldedResult(result, theme, { expanded });
       }
       if (!details.ok) {
         return new Text(theme.fg("error", "Error: content cannot be empty"), 0, 0);
@@ -447,11 +446,10 @@ export default function (pi: ExtensionAPI) {
         0,
       );
     },
-    renderResult(result, _options, theme, _context) {
+    renderResult(result, options, theme, _context) {
       const details = result?.details as { removed?: number } | undefined;
       if (!details || typeof details.removed !== "number") {
-        const text = result?.content?.[0];
-        return new Text(text?.type === "text" ? text.text : "", 0, 0);
+        return foldedResult(result, theme, { expanded: options?.expanded ?? false });
       }
       return new Text(
         details.removed > 0
@@ -487,11 +485,10 @@ export default function (pi: ExtensionAPI) {
         0,
       );
     },
-    renderResult(result, _options, theme, _context) {
+    renderResult(result, options, theme, _context) {
       const details = result?.details as { replaced?: number } | undefined;
       if (!details || typeof details.replaced !== "number") {
-        const text = result?.content?.[0];
-        return new Text(text?.type === "text" ? text.text : "", 0, 0);
+        return foldedResult(result, theme, { expanded: options?.expanded ?? false });
       }
       return new Text(
         details.replaced > 0

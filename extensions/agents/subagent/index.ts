@@ -43,6 +43,7 @@ import {
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { subagentEnvironment } from "../../shared/fast-mode.ts";
+import { foldedResult } from "../../shared/result-fold.ts";
 import { formatDuration } from "../shared/session-activity.ts";
 import { getSessionDisplayEntries } from "../shared/session-display.ts";
 import {
@@ -1223,11 +1224,11 @@ export function createSubagentTool(pi: ExtensionAPI) {
 
 		renderResult(result, { expanded }, theme, _context) {
 			const details = result.details as SubagentDetails | undefined;
-			if (!details || details.results.length === 0) {
-				const text = result.content[0];
-				const value = text?.type === "text" ? text.text : "(no output)";
-				const compact = value.replace(/\s+/g, " ");
-				return new Text(expanded ? value : compact.length > 200 ? `${compact.slice(0, 199)}…` : compact, 0, 0);
+			// A validation error arrives with `details: {}`, so check the array
+			// before reading it; otherwise the renderer throws into pi's fallback.
+			if (!Array.isArray(details?.results) || details.results.length === 0) {
+				// Failures and plain replies stay on one row until the user expands.
+				return foldedResult(result, theme, { expanded, maxColumns: 200 });
 			}
 
 			const sep = theme.fg("dim", " · ");

@@ -14,6 +14,7 @@ import type { BashToolDetails, EditToolDetails, ExtensionAPI, ReadToolDetails } 
 import { createBashTool, createEditTool, createReadTool, createWriteTool, createFindTool, createGrepTool, createLsTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "os";
+import { foldedResult } from "../shared/result-fold.ts";
 
 function shortenPath(path: string): string {
 	const home = homedir();
@@ -116,20 +117,23 @@ export default function (pi: ExtensionAPI) {
 			return new Text(theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", compressed) + startedAtSuffix + timeoutSuffix, 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "running..."), 0, 0);
 
 			const content = result.content[0];
 			const output = content?.type === "text" ? content.text : "";
-			const exitMatch = output.match(/exit code: (\d+)/);
+			// The shell reports a non-zero exit in the status line; pi also flags
+			// timeouts and aborts as errors without any exit code.
+			const exitMatch = output.match(/exit(?:ed with)? code[: ]+(\d+)/);
 			const exitCode = exitMatch ? parseInt(exitMatch[1], 10) : null;
+			const failed = context.isError === true || (exitCode !== null && exitCode !== 0);
 			const lineCount = output.split("\n").filter((l) => l.trim()).length;
 
 			let text = "";
-			if (exitCode === 0 || exitCode === null) {
+			if (!failed) {
 				text += theme.fg("success", "✓");
 			} else {
-				text += theme.fg("error", `✗ ${exitCode}`);
+				text += theme.fg("error", exitCode === null ? "✗" : `✗ ${exitCode}`);
 			}
 			text += theme.fg("dim", ` ${lineCount} lines`);
 
@@ -171,8 +175,10 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "reading..."), 0, 0);
+			// A failed read carries the error message in content; fold it.
+			if (context.isError) return foldedResult(result, theme, { expanded });
 
 			const details = result.details as ReadToolDetails | undefined;
 			const content = result.content[0];
@@ -224,15 +230,11 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "editing..."), 0, 0);
+			if (context.isError) return foldedResult(result, theme, { expanded });
 
 			const details = result.details as EditToolDetails | undefined;
-			const content = result.content[0];
-
-			if (content?.type === "text" && content.text.startsWith("Error")) {
-				return new Text(theme.fg("error", "✗ " + content.text.split("\n")[0]), 0, 0);
-			}
 
 			if (!details?.diff) {
 				return new Text(theme.fg("success", "✓ applied"), 0, 0);
@@ -293,11 +295,7 @@ export default function (pi: ExtensionAPI) {
 
 		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "writing..."), 0, 0);
-
-			const content = result.content[0];
-			if (content?.type === "text" && content.text.startsWith("Error")) {
-				return new Text(theme.fg("error", "✗ " + content.text.split("\n")[0]), 0, 0);
-			}
+			if (context.isError) return foldedResult(result, theme, { expanded });
 
 			let text = theme.fg("success", "✓ written");
 			const written = typeof context.args?.content === "string" ? context.args.content : "";
@@ -333,8 +331,9 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
+			if (context.isError) return foldedResult(result, theme, { expanded });
 
 			const textContent = result.content.find((c) => c.type === "text");
 			if (!textContent?.type || textContent.type !== "text") {
@@ -377,8 +376,9 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
+			if (context.isError) return foldedResult(result, theme, { expanded });
 
 			const textContent = result.content.find((c) => c.type === "text");
 			if (!textContent?.type || textContent.type !== "text") {
@@ -419,8 +419,9 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme, _context) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "listing..."), 0, 0);
+			if (context.isError) return foldedResult(result, theme, { expanded });
 
 			const textContent = result.content.find((c) => c.type === "text");
 			if (!textContent?.type || textContent.type !== "text") {
