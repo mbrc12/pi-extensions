@@ -34,6 +34,26 @@ const textResult = (text: string) => ({ content: [{ type: "text", text }], detai
 /** A failed call: pi sends the error message as content and sets isError. */
 const failedResult = (text: string, details: unknown = {}) => ({ content: [{ type: "text", text }], details, isError: true });
 
+describe("bash timeout requirement", () => {
+	test("the schema lists timeout as required", () => {
+		const bash = tools.get("bash");
+		expect(bash.parameters.required).toEqual(["command", "timeout"]);
+		expect(bash.parameters.properties.timeout.description).toContain("Required");
+	});
+
+	test("the description states the requirement instead of calling it optional", () => {
+		const description: string = tools.get("bash").description;
+		expect(description).toContain("A timeout in seconds is required.");
+		expect(description).not.toContain("Optionally provide a timeout");
+	});
+
+	test("execute refuses a call without a positive timeout", async () => {
+		const bash = tools.get("bash");
+		await expect(bash.execute("id", { command: "true" }, undefined, undefined)).rejects.toThrow("positive timeout");
+		await expect(bash.execute("id", { command: "true", timeout: 0 }, undefined, undefined)).rejects.toThrow("positive timeout");
+	});
+});
+
 describe("minimal tool renderers", () => {
 	test("read shows file content only when expanded", () => {
 		const file = Array.from({ length: 60 }, (_unused, index) => `line-${index}`).join("\n");

@@ -83,16 +83,50 @@ const tools = {
 	ls: createLsTool(cwd),
 };
 
+/**
+ * The built-in schema lets a command run without a timeout, which hangs the
+ * turn on a wedged command. This override makes `timeout` required.
+ */
+const bashParameters = {
+	...tools.bash.parameters,
+	required: ["command", "timeout"],
+	properties: {
+		...tools.bash.parameters.properties,
+		timeout: {
+			type: "number",
+			description: "Timeout in seconds. Required for every command; keep it as short as the work allows.",
+		},
+	},
+} as typeof tools.bash.parameters;
+
+/** Built-in description with the optional timeout replaced by the requirement. */
+const BASH_DESCRIPTION = (() => {
+	const optional = /Optionally provide a timeout in seconds\.$/;
+	return optional.test(tools.bash.description)
+		? tools.bash.description.replace(optional, "A timeout in seconds is required.")
+		: `${tools.bash.description} A timeout in seconds is required.`;
+})();
+
 export default function (pi: ExtensionAPI) {
 	// Bash tool with compressed display
 	pi.registerTool({
 		name: "bash",
 		label: "bash",
-		description: tools.bash.description,
-		parameters: tools.bash.parameters,
+		description: BASH_DESCRIPTION,
+		parameters: bashParameters,
 		renderShell: "self",
+		promptSnippet: tools.bash.promptSnippet,
+		promptGuidelines: [
+			...tools.bash.promptGuidelines,
+			"Pass a timeout to bash on every call; never omit it.",
+		],
 
 		async execute(toolCallId, params, signal, onUpdate) {
+			// Schema validation already rejects a missing timeout; this keeps the
+			// contract explicit for any path that reaches execute unvalidated.
+			if (typeof params.timeout !== "number" || !Number.isFinite(params.timeout) || params.timeout <= 0) {
+				throw new Error("bash requires a positive timeout in seconds.");
+			}
 			return tools.bash.execute(toolCallId, params, signal, onUpdate);
 		},
 
