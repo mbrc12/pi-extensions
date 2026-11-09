@@ -134,7 +134,7 @@ function engineSuffix(details: Record<string, unknown> | undefined, extra?: stri
 
 /**
  * The web_use tool definition. Shared so that an extension which runs tools itself,
- * such as /explain, calls the same implementation instead of a copy.
+ * such as /btw, calls the same implementation instead of a copy.
  */
 export function createWebUseTool() {
   return defineTool({

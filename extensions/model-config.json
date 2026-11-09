@@ -73,10 +73,10 @@
     "opencode-go-2/deepseek-v4-pro",
     "openai-codex-2/gpt-6-luna"
   ],
-  "explainGeneration": [
-    "openai-codex/gpt-6-luna",
+  "btwGeneration": [
     "opencode-go/deepseek-v4.1-flash",
     "opencode-go-2/deepseek-v4.1-flash",
+    "openai-codex/gpt-6-luna",
     "openai-codex-2/gpt-6-luna"
   ],
   "toolSummaryGeneration": [

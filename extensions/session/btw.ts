@@ -1,5 +1,5 @@
 /**
- * /explain — say what is happening in the current session, or answer a question about it.
+ * /btw — say what is happening in the current session, or answer a question about it.
  *
  * The command sends the session's active context to a configured model and opens
  * an ephemeral terminal view of the answer. The view closes on Esc: the answer is
@@ -19,11 +19,11 @@ import { getSessionDisplayEntries, type SessionDisplayEntry } from "../agents/sh
 import { createConsultTool } from "../tools/consult/index.ts";
 import { createWebUseTool } from "../tools/web-use/index.ts";
 import { completeWithModel, selectConfiguredModelsWithAuth } from "../shared/model-config.ts";
-import { createExplanationView, type ExplanationViewDocument } from "./explain-view.ts";
+import { createBtwView, type BtwViewDocument } from "./btw-view.ts";
 
-const COMMAND_NAME = "explain";
-/** Purpose key in extensions/model-config.json that lists the explain models. */
-const MODEL_PURPOSE = "explainGeneration" as const;
+const COMMAND_NAME = "btw";
+/** Purpose key in extensions/model-config.json that lists the btw models. */
+const MODEL_PURPOSE = "btwGeneration" as const;
 
 // The active context goes out whole. These limits only apply to a session too
 // large for the model's window, or to one tool result that floods the budget.
@@ -41,12 +41,12 @@ const MAX_ANSWER_TOKENS = 3_000;
 const ANSWER_WORD_BUDGET = 250;
 const VIEW_MAX_HEIGHT_FRACTION = 0.8;
 
-const PROGRESS_WIDGET_ID = "explain-progress";
+const PROGRESS_WIDGET_ID = "btw-progress";
 const PROGRESS_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const PROGRESS_INTERVAL_MS = 90;
 const PROGRESS_LABEL = "Reading the active session…";
 
-export const EXPLAIN_SYSTEM_PROMPT = [
+export const BTW_SYSTEM_PROMPT = [
 	"You explain an ongoing Pi coding-agent session to the person who is running it.",
 	"",
 	"The user message carries the session's active context: the messages the main agent is working from, oldest first, in full. It usually answers the question on its own.",
@@ -180,7 +180,7 @@ export function describeTask(question: string | undefined): string {
 }
 
 /** Build the user message. The transcript is data, so it sits in its own tags. */
-export function buildExplainPrompt(
+export function buildBtwPrompt(
 	question: string | undefined,
 	transcript: string,
 	omitted = 0,
@@ -273,7 +273,7 @@ function startProgress(ctx: ExtensionCommandContext): {
 }
 
 /** A tool definition from either pi's built-ins or an extension, seen structurally. */
-interface ExplainTool {
+interface BtwTool {
 	name: string;
 	description: string;
 	parameters: unknown;
@@ -287,15 +287,15 @@ interface ExplainTool {
 }
 
 /**
- * The read-only tools /explain may call. The session's active tools filter the
+ * The read-only tools /btw may call. The session's active tools filter the
  * list, so a tool the user turned off stays off here too.
  */
-export function explainTools(pi: ExtensionAPI, ctx: ExtensionCommandContext): ExplainTool[] {
+export function btwTools(pi: ExtensionAPI, ctx: ExtensionCommandContext): BtwTool[] {
 	const candidates = [
 		...createReadOnlyTools(ctx.cwd ?? process.cwd()),
 		createWebUseTool(),
 		createConsultTool(pi),
-	] as unknown as ExplainTool[];
+	] as unknown as BtwTool[];
 
 	let active: string[] = [];
 	try {
@@ -309,7 +309,7 @@ export function explainTools(pi: ExtensionAPI, ctx: ExtensionCommandContext): Ex
 }
 
 /** The declarations sent to the model, in pi-ai's tool shape. */
-export function toolSchemas(tools: readonly ExplainTool[]): Array<Record<string, unknown>> {
+export function toolSchemas(tools: readonly BtwTool[]): Array<Record<string, unknown>> {
 	return tools.map((tool) => ({
 		name: tool.name,
 		description: tool.description,
@@ -319,7 +319,7 @@ export function toolSchemas(tools: readonly ExplainTool[]): Array<Record<string,
 
 /** Run one call and turn any outcome into a result message the model can read. */
 async function runToolCall(
-	tool: ExplainTool | undefined,
+	tool: BtwTool | undefined,
 	call: { id: string; name: string; arguments?: unknown },
 	signal: AbortSignal | undefined,
 	ctx: ExtensionCommandContext,
@@ -383,7 +383,7 @@ async function runRounds(
 	ctx: ExtensionCommandContext,
 	model: any,
 	conversation: any[],
-	toolByName: Map<string, ExplainTool>,
+	toolByName: Map<string, BtwTool>,
 	schemas: Array<Record<string, unknown>>,
 	progress: { setLabel(text: string): void },
 	onCost: (cost: number) => void,
@@ -395,7 +395,7 @@ async function runRounds(
 			ctx,
 			model,
 			{
-				systemPrompt: EXPLAIN_SYSTEM_PROMPT,
+				systemPrompt: BTW_SYSTEM_PROMPT,
 				messages: conversation,
 				...(offerTools ? { tools: schemas } : {}),
 			},
@@ -445,12 +445,12 @@ async function requestExplanation(
 	});
 	if (candidates.length === 0) return { failure: `No usable model available for ${MODEL_PURPOSE}` };
 
-	const tools = explainTools(pi, ctx);
+	const tools = btwTools(pi, ctx);
 	const toolByName = new Map(tools.map((tool) => [tool.name, tool]));
 	const schemas = toolSchemas(tools);
 	const userMessage = (transcript: string, omitted: number) => ({
 		role: "user",
-		content: [{ type: "text", text: buildExplainPrompt(question, transcript, omitted) }],
+		content: [{ type: "text", text: buildBtwPrompt(question, transcript, omitted) }],
 		timestamp: Date.now(),
 	});
 
@@ -480,7 +480,7 @@ async function requestExplanation(
 	return { failure, cost, omitted };
 }
 
-export default function explainExtension(pi: ExtensionAPI): void {
+export default function btwExtension(pi: ExtensionAPI): void {
 	pi.registerCommand(COMMAND_NAME, {
 		description: `Explain what is happening in this session, or answer a question about it: /${COMMAND_NAME} [question]`,
 		handler: async (args, ctx) => {
@@ -500,10 +500,10 @@ export default function explainExtension(pi: ExtensionAPI): void {
 			}
 
 			if (!explanation.answer) {
-				ctx.ui.notify(`/explain failed: ${explanation.failure ?? "the model returned no text"}`, "error");
+				ctx.ui.notify(`/btw failed: ${explanation.failure ?? "the model returned no text"}`, "error");
 				return;
 			}
-			const document: ExplanationViewDocument = {
+			const document: BtwViewDocument = {
 				answer: explanation.answer,
 				question,
 				model: explanation.model,
@@ -517,7 +517,7 @@ export default function explainExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			await ctx.ui.custom(
-				createExplanationView(document, { maxHeightFraction: VIEW_MAX_HEIGHT_FRACTION }),
+				createBtwView(document, { maxHeightFraction: VIEW_MAX_HEIGHT_FRACTION }),
 				{ overlay: true, overlayOptions: { width: "92%", maxHeight: "90%", margin: 1 } },
 			);
 		},

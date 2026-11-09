@@ -1,5 +1,5 @@
 /**
- * Ephemeral viewer for one `/explain` answer.
+ * Ephemeral viewer for one `/btw` answer.
  *
  * The view is drawn as a centred overlay over the transcript, not as a
  * replacement screen, so the conversation stays visible around it. The panel
@@ -10,7 +10,7 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Box, Key, Markdown, matchesKey, ScrollView, truncateToWidth } from "@earendil-works/pi-tui";
 
-export interface ExplanationViewDocument {
+export interface BtwViewDocument {
 	answer: string;
 	/** User question, absent for the default "what is happening" explanation. */
 	question?: string;
@@ -22,7 +22,7 @@ export interface ExplanationViewDocument {
 	omitted?: number;
 }
 
-export interface ExplanationViewOptions {
+export interface BtwViewOptions {
 	/** Largest fraction of terminal rows the panel may use. Default: 0.8. */
 	maxHeightFraction?: number;
 }
@@ -42,7 +42,7 @@ function clip(text: string, max: number): string {
 }
 
 /** Header metadata: the model and the cost of the request. */
-export function describeExplanation(document: ExplanationViewDocument): string {
+export function describeBtwView(document: BtwViewDocument): string {
 	return [document.model, document.cost].filter(Boolean).join(" · ");
 }
 
@@ -52,9 +52,9 @@ export function describeExplanation(document: ExplanationViewDocument): string {
  * it reads as a distinct card instead of more transcript. The header carries the
  * model and cost, the footer the scroll position and the close key.
  */
-export function createExplanationView(
-	document: ExplanationViewDocument,
-	options: ExplanationViewOptions = {},
+export function createBtwView(
+	document: BtwViewDocument,
+	options: BtwViewOptions = {},
 ) {
 	return (tui: any, theme: any, _keybindings: any, done: () => void) => {
 		const body = new Markdown(document.answer || "*(The model returned no text.)*", 0, 0, getMarkdownTheme());
@@ -64,10 +64,10 @@ export function createExplanationView(
 		const maxHeightFraction = options.maxHeightFraction ?? DEFAULT_MAX_HEIGHT_FRACTION;
 
 		const headerLines = (width: number): string[] => {
-			const meta = describeExplanation(document);
+			const meta = describeBtwView(document);
 			const lines = [
 				truncateToWidth(
-					`${theme.fg("accent", ACCENT_MARK)} ${theme.fg("accent", theme.bold("explain"))}${meta ? `  ${theme.fg("dim", meta)}` : ""}`,
+					`${theme.fg("accent", ACCENT_MARK)} ${theme.fg("accent", theme.bold("btw"))}${meta ? `  ${theme.fg("dim", meta)}` : ""}`,
 					width,
 				),
 			];

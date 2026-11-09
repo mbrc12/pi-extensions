@@ -3,7 +3,7 @@
     "extensions": [
       "./cleanup.ts",
       "./exit-alias.ts",
-      "./explain.ts",
+      "./btw.ts",
       "./notify-on-idle.ts",
       "./rename.ts"
     ]

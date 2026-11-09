@@ -33,7 +33,7 @@ symlink to this folder.
 | `models/provider-status` | Adds Codex and opencode-go usage limits to the statusline |
 | `models/tool-summary` | One muted `Tool: <summary>` line after each tool turn |
 | `session/cleanup` | `/cleanup` tells the model to stop and clean up session resources |
-| `session/explain` | `/explain [question]` explains recent work, or answers a question about it, in an Esc-dismissable overlay that stays out of the model context. It sends the whole active session context and may call `read`, `grep`, `find`, `ls`, `web_use`, and `consult` when the context is not enough |
+| `session/btw` | `/btw [question]` explains recent work, or answers a question about it, in an Esc-dismissable overlay that stays out of the model context. It sends the whole active session context and may call `read`, `grep`, `find`, `ls`, `web_use`, and `consult` when the context is not enough |
 | `session/exit-alias` | `/exit` alias for `/quit` |
 | `session/notify-on-idle` | Desktop notification when a turn ends, on shutdown, or on `prompt_wait` |
 | `session/rename` | `/rename [hint]` proposes session names from broadest to narrowest and asks you to pick one |
