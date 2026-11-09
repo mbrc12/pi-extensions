@@ -59,3 +59,18 @@ test("retains expanded multiline user content and renders manually supplied entr
 	assert.equal(entries[0].body, "alpha\nbeta");
 	assert.equal(renderSessionDisplayEntries(entries), "[user] alpha\nbeta");
 });
+
+test("expandTools lifts the tool cap for consumers that feed a model", () => {
+	const long = "x".repeat(250);
+	const messages = [
+		{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: long } }] },
+		{ role: "toolResult", toolName: "read", content: [{ type: "text", text: long }] },
+	];
+	const expanded = getSessionDisplayEntries(messages, { expandTools: true });
+	assert.ok(expanded[0].body.length > 250);
+	assert.equal(expanded[1].body, long);
+	assert.equal(expanded[0].fixed, false);
+	assert.equal(expanded[1].fixed, false);
+	// Drawing consumers keep the compact rows.
+	assert.equal(getSessionDisplayEntries(messages, { expanded: true })[1].body.length, 200);
+});

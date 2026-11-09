@@ -1,5 +1,6 @@
 import type { UserMessage } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { completeWithModelFallback } from "../../shared/model-config.ts";
@@ -131,8 +132,12 @@ function engineSuffix(details: Record<string, unknown> | undefined, extra?: stri
   return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
-export default function webUseExtension(pi: ExtensionAPI) {
-  pi.registerTool({
+/**
+ * The web_use tool definition. Shared so that an extension which runs tools itself,
+ * such as /explain, calls the same implementation instead of a copy.
+ */
+export function createWebUseTool() {
+  return defineTool({
     name: "web_use",
     label: "Web Use",
     description: "Search the web, fetch a URL and extract important text, or fetch the full HTML of a page.",
@@ -264,4 +269,8 @@ export default function webUseExtension(pi: ExtensionAPI) {
       return new Text(`\n${output}`, 0, 0);
     },
   });
+}
+
+export default function webUseExtension(pi: ExtensionAPI): void {
+  pi.registerTool(createWebUseTool());
 }

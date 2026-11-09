@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getAgentDir, keyHint } from "@earendil-works/pi-coding-agent";
+import { defineTool, getAgentDir, keyHint } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -139,8 +139,12 @@ function errorResult(cause: unknown): any {
   return { content: [{ type: "text", text: [`CONSULT ERROR [${code}]`, hint, ...candidates].join("\n") }], details: { code }, isError: true };
 }
 
-export default function consultExtension(pi: ExtensionAPI): void {
-  pi.registerTool({
+/**
+ * The consult tool definition. Shared so that an extension which runs tools itself,
+ * such as /explain, calls the same implementation instead of a copy.
+ */
+export function createConsultTool(pi: ExtensionAPI) {
+  return defineTool({
     name: "consult",
     label: "Consult sessions",
     description: "Read Pi session history. Default: search, list, or summarize other sessions on disk. With self=true: search or list this session's active branch, including entries hidden by compaction. Results are truncated and paged: read page 1, then repeat with a higher page. Tool calls and results stay out unless include_tool_calls is true.",
@@ -195,4 +199,8 @@ export default function consultExtension(pi: ExtensionAPI): void {
       } catch (cause) { return errorResult(cause); }
     },
   });
+}
+
+export default function consultExtension(pi: ExtensionAPI): void {
+  pi.registerTool(createConsultTool(pi));
 }

@@ -475,6 +475,15 @@ export async function selectConfiguredModelWithAuth(
   return (await getConfiguredModelsWithAuth(ctx, purpose, options))[0];
 }
 
+/** Every usable candidate in configured order, for callers that keep their own loop. */
+export async function selectConfiguredModelsWithAuth(
+  ctx: ModelCompletionContext,
+  purpose: ModelConfigPurpose,
+  options: SelectConfiguredModelOptions = {},
+): Promise<Array<{ model: Model; auth: any }>> {
+  return getConfiguredModelsWithAuth(ctx, purpose, options);
+}
+
 function responseHasText(response: any): boolean {
   return Array.isArray(response?.content)
     && response.content.some((part: any) => part?.type === "text" && typeof part.text === "string" && part.text.trim());
@@ -489,6 +498,24 @@ function responseFailure(response: any): Error | undefined {
   }
   if (!responseHasText(response)) return new Error("Model returned no text");
   return undefined;
+}
+
+/**
+ * Complete one request against an already-selected model, applying the same
+ * provider session headers as the fallback path. Callers that run a multi-round
+ * loop, such as a tool loop, select once and stay on that model.
+ */
+export async function completeWithModel(
+  ctx: ModelCompletionContext,
+  model: Model,
+  request: any,
+  completionOptions: Record<string, any> = {},
+): Promise<any> {
+  const options = withSessionHeaders(
+    completionOptions,
+    opencodeSessionHeaders(model, completionSessionId(ctx)),
+  );
+  return ctx.modelRegistry.complete(model, request, options);
 }
 
 /**

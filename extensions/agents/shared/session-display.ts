@@ -14,6 +14,11 @@ export interface SessionDisplayEntry {
 export interface SessionDisplayOptions {
 	/** Show full messages; tool calls and results always remain capped at 200 characters. */
 	expanded?: boolean;
+	/**
+	 * Show tool calls and results in full too. For consumers that feed the text to a
+	 * model rather than draw it, where a 200-character cap would hide the content.
+	 */
+	expandTools?: boolean;
 }
 
 /**
@@ -34,14 +39,14 @@ export function getSessionDisplayEntries(messages: readonly unknown[], options: 
 					if (part.text.trim()) entries.push(makeEntry(role, role, part.text, options.expanded));
 				} else if (role === "assistant" && part.kind === "toolCall") {
 					const args = isRecord(part.arguments) ? Object.entries(part.arguments).map(([key, value]) => `${key} = ${jsonValue(value)}`).join(", ") : jsonValue(part.arguments);
-					entries.push({ ...makeEntry("tool", part.name || "tool", args, false), fixed: true });
+					entries.push({ ...makeEntry("tool", part.name || "tool", args, options.expandTools), fixed: !options.expandTools });
 				}
 			}
 		} else if (role === "toolResult") {
 			const result = contentParts(item.content).filter((part) => part.kind === "text").map((part) => part.text).filter((text) => text.trim()).join("\n");
 			const name = typeof item.toolName === "string" && item.toolName ? item.toolName : "tool";
 			const body = `${item.isError === true ? "Error: " : ""}${result}`;
-			entries.push({ ...makeEntry("tool", `${name} result`, body, false), fixed: true });
+			entries.push({ ...makeEntry("tool", `${name} result`, body, options.expandTools), fixed: !options.expandTools });
 		}
 	}
 	return entries;
