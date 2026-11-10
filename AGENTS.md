@@ -39,6 +39,8 @@ that kind of work.
 
 - **Always set a `timeout`** on potentially long-running commands: downloads, pulls, builds, inference, network calls, file scans over large trees. Default to 30–60s; use longer limits when clearly warranted. A hung command burns the whole turn, so failing fast is better.
 - The user's internet connection is about **10 MB/s** (megabytes per second). Estimate download time from file size and this baseline, then allow a generous margin for slower servers and retries. Do not set a total timeout shorter than a plausible transfer; use connection and stalled-transfer timeouts separately.
+- **Never run long work in the foreground.** Anything that may take more than about a minute — notebook or test-suite execution, model training, data conversion, batch rendering, builds, downloads after unpacking, scans over large trees — must go through `task_start` in a detached tmux session. The agent stays responsive, the user can inspect the log at any point, and an interrupted turn does not leave a half-run job.
+- Use the foreground only for fast, cheap commands: reading a file, `git status`, a syntax check, a single small query. If in doubt, use a task.
 - Run work that outlasts a foreground timeout with `task_start` in a detached tmux session, then continue with independent work.
 - **Never busy-wait.** Do not poll task status, logs, files, processes, or clocks, and do not run no-op commands or `sleep` loops. Do independent work once; if none remains, stop and wait for the notification. Check intermediate status only when the user asks or a decision needs it.
 
