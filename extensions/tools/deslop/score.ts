@@ -28,6 +28,19 @@ export interface Metrics {
 	abstractOpenerShare: number;
 	headingCount: number;
 	paragraphCount: number;
+	listItems: number;
+	tableRows: number;
+	boldCount: number;
+	italicCount: number;
+	codeBlocks: number;
+	mediumKinds: number;
+	parallelParagraphs: number;
+	numericParagraphs: number;
+	definitions: number;
+	listMissed: number;
+	tableMissed: number;
+	boldMissing: number;
+	italicMissing: number;
 }
 
 export interface RuleHit {
@@ -67,13 +80,13 @@ const PRESENCE = 0.35;
  * Calibration curve. Fitted by least squares in log space over the anchor set in
  * deslop.test.ts, not chosen by hand:
  *
- *   tiny slop (17 words)  25      bad.md   40      links.md  65
- *   ok.md                 85      good.md  97
+ *   tiny slop 25 · bad 35 · links 50 · wall 70 · ok 82 · good 93 · mixed 95
  *
- * Fit residual is 6% RMS. Refit with the same five anchors if the rule pack
- * changes; never tune these by eye.
+ * Fit residual is 2.7% RMS, and the fitted exponent lands on 1.0, so the curve is
+ * linear: a document loses 1.65 points per point of weighted penalty. Refit with
+ * the same anchors if the rule pack changes; never tune these by eye.
  */
-export const CURVE = { k: 1.93, g: 0.6 };
+export const CURVE = { k: 1.65, g: 1.0 };
 
 /**
  * A rule only carries weight when the text could break it. Rules that need
@@ -84,8 +97,15 @@ export function applicable(rule: Rule, metrics: Metrics, profile: Profile): bool
 		case "heading_echo":
 		case "section_length":
 			return metrics.headingCount >= 1;
-		case "bullet_shortfall":
-			return metrics.words >= 300 && profile.minBulletShare > 0;
+		case "medium_variety":
+			return metrics.words >= 120;
+		case "bold_missing":
+			return metrics.words >= 150;
+		case "list_opportunity":
+		case "table_opportunity":
+			return metrics.words >= 100;
+		case "italic_terms":
+			return metrics.definitions >= 1;
 		case "duplicate_phrases":
 			return metrics.words >= 150;
 		case "sentence_rhythm":
@@ -102,6 +122,24 @@ export function applicable(rule: Rule, metrics: Metrics, profile: Profile): bool
 			return true;
 	}
 }
+
+/**
+ * Only content defects can cap a score. Missing bold or a missed table is a
+ * missed opportunity, not a reason to fail the document.
+ */
+const CAP_RULES = new Set([
+	"not_x_but_y",
+	"one_line_closer",
+	"deep_saying",
+	"staged_runup",
+	"arguing_with_no_one",
+	"ai_vocabulary",
+	"inflated_significance",
+	"borrowed_authority",
+	"chat_residue",
+	"paragraph_length",
+	"medium_variety",
+]);
 
 const HEDGES =
 	/\b(?:possibly|perhaps|potentially|arguably|somewhat|presumably|seemingly|in some cases|to some extent|generally speaking|tends? to|seems? to|appears? to)\b/gi;
@@ -151,7 +189,19 @@ function firstWord(sentence: string): string {
 	return (sentence.match(/[A-Za-z']+/) ?? [""])[0].toLowerCase();
 }
 
-function computeMetrics(masked: string, profile: Profile): Metrics {
+function countBlocks(original: string): { listItems: number; tableRows: number; boldCount: number; italicCount: number; codeBlocks: number } {
+	const lines = original.split("\n");
+	const listItems = lines.filter((line) => /^\s{0,3}(?:[-*+]|\d+\.)\s+\S/.test(line)).length;
+	const tableRows = original
+		.split("\n")
+		.filter((line) => /^\s*\|.*\|\s*$/.test(line) || /[│┃]/.test(line)).length;
+	const boldCount = (original.match(/\*\*[^*\n]{1,80}\*\*/g) ?? []).length;
+	const italics = (original.match(/(?<![*_\w])(?:\*[^*\n]{1,80}\*|_[^_\n]{1,80}_)(?![*_\w])/g) ?? []).length;
+	const codeBlocks = Math.floor(((original.match(/^\s*```/gm) ?? []).length) / 2);
+	return { listItems, tableRows, boldCount, italicCount: italics, codeBlocks };
+}
+
+function computeMetrics(masked: string, original: string, profile: Profile): Metrics {
 	const prose = proseView(masked);
 	const tokens = words(prose);
 	const list = sentences(prose);
@@ -206,6 +256,27 @@ function computeMetrics(masked: string, profile: Profile): Metrics {
 		}
 	}
 
+	const blocks = countBlocks(original);
+
+	// A paragraph of parallel statements or of compared numbers wants a list or a
+	// table. Detect the opportunity only when none was taken.
+	let parallelParagraphs = 0;
+	let numericParagraphs = 0;
+	for (const block of masked.split(/\n\s*\n/)) {
+		const prose = proseView(block);
+		const list = sentences(prose);
+		if (list.length < 3) continue;
+		const withNumbers = list.filter((sentence) => /\d/.test(sentence)).length;
+		const labelled = list.filter((sentence) => /^[A-Z][^.:\n]{0,40}:\s/.test(sentence)).length;
+		if (withNumbers >= 3 || labelled >= 2) parallelParagraphs += 1;
+		const numbersInBlock = (prose.match(/\d+(?:[.,]\d+)*/g) ?? []).length;
+		if (numbersInBlock >= 4) numericParagraphs += 1;
+	}
+
+	const definitions = sentences(prose).filter((sentence) =>
+		/(?:^|[.!?]\s+)[A-Za-z][\w-]{1,20}\s+(?:is|are)\s+(?:a|an|the)\s/i.test(sentence),
+	).length;
+
 	const headingEchoShare = computeHeadingEcho(masked);
 	const abstractOpeners = list.filter((sentence) =>
 		/^(?:it|there|this|that|these|those|one)\s+(?:is|are|was|were|has|have|had|can|may|might|will|would|should)\b/i.test(sentence),
@@ -232,6 +303,22 @@ function computeMetrics(masked: string, profile: Profile): Metrics {
 		abstractOpenerShare: round(abstractOpeners / Math.max(1, sentenceCount)),
 		headingCount: (masked.match(/^\s{0,3}#{1,6}\s+\S/gm) ?? []).length,
 		paragraphCount: paragraphSentences.length,
+		...blocks,
+		mediumKinds: [
+			(masked.match(/^\s{0,3}#{1,6}\s+\S/gm) ?? []).length > 0,
+			blocks.listItems > 0,
+			blocks.tableRows > 0,
+			blocks.codeBlocks > 0,
+			blocks.boldCount > 0,
+			blocks.italicCount > 0,
+		].filter(Boolean).length,
+		parallelParagraphs,
+		numericParagraphs,
+		definitions,
+		listMissed: wordCount >= 100 && blocks.listItems === 0 ? round(Math.min(1, parallelParagraphs / 2)) : 0,
+		tableMissed: wordCount >= 100 && blocks.tableRows === 0 ? round(Math.min(1, numericParagraphs / 2)) : 0,
+		boldMissing: wordCount >= 150 && blocks.boldCount === 0 ? 1 : 0,
+		italicMissing: definitions >= 1 && blocks.italicCount === 0 ? 1 : 0,
 	};
 }
 
@@ -298,7 +385,7 @@ export function analyze(text: string, profileName: string | Profile = "general")
 	const profile = resolveProfile(profileName);
 	const { masked } = maskProtected(text);
 	const prose = proseView(masked);
-	const metrics = computeMetrics(masked, profile);
+	const metrics = computeMetrics(masked, text, profile);
 	const hits: RuleHit[] = [];
 
 	for (const rule of RULES) {
@@ -375,6 +462,7 @@ export function analyze(text: string, profileName: string | Profile = "general")
 	let cap = 100;
 	let capReason: string | undefined;
 	for (const hit of hits) {
+		if (!CAP_RULES.has(hit.id)) continue;
 		const rule = RULES.find((candidate) => candidate.id === hit.id);
 		if (!rule) continue;
 		const ceiling = hit.penalty >= 0.85 && rule.weight >= 8 ? 74 : hit.penalty >= 0.8 ? 79 : 100;

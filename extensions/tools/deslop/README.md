@@ -61,11 +61,33 @@ cannot drift apart.
 
 - **Plain (30%)** — sentence length, reading grade, nominalizations, passive voice, stacked hedges, filler openers.
 - **Human (30%)** — the five strongest tells first (not X but Y, one-line closer, deep saying, staged run-up, arguing with no one), then AI vocabulary with a concrete substitution table, inflated significance, borrowed authority, sales talk, chat residue.
-- **Structured (25%)** — paragraph and section length, bullet shortfall, heading echoed in the first sentence, listicle stems, emoji, bold as decoration.
+- **Structured (25%)** — does the document use the medium it has? Paragraph and section length, medium variety, missed lists, missed tables, missing bold, unitalicised terms, heading echoed in the first sentence, listicle stems, emoji, bold on everything.
 - **Dense (15%)** — sentence-length variance, repeated openers, duplicated phrases, hedge density, sentences that start with nothing.
 
 Variables are only reported, never scored: an LLM cannot be trusted to grade the
 same text the same way twice.
+
+## Using the medium
+
+Formatting is part of the writing, not decoration, and the structured axis scores
+it as content:
+
+| Signal | What fires it |
+|---|---|
+| `medium_variety` | fewer than two formats in a document of 120+ words: headers, lists, tables, code, bold, italics |
+| `list_opportunity` | a paragraph of three or more parallel or labelled statements and no bullet list anywhere |
+| `table_opportunity` | a paragraph with four or more numbers compared and no table anywhere |
+| `bold_missing` | 150+ words with nothing bolded |
+| `italic_terms` | a term defined ("X is a …") and no italics |
+| `bold_density` | bold on everything, above 9 per 100 words |
+| `paragraph_length` | more sentences in one paragraph than the profile allows |
+
+The rewriter is told the same rules, so the loop does not just reword, it
+restructures: prose lists become bullets, prose comparisons become a table, the
+one number that matters gets bold, a defined term gets italics.
+
+Measured on `wall.md` → `mixed.md`, the same facts with and without the medium:
+**74 C → 96 A**. Rewriting `wall.md` in one pass reaches **98**.
 
 ## Guards
 
@@ -92,14 +114,26 @@ by a test:
   sentences, bullet rules under 300 words.
 - **Opportunity.** The denominator scales with `words / 250`, floored at 20%.
   Three tells in seventeen words means every opportunity was used.
-- **Severity caps.** One violation at 80% or more caps the total at 79; a strong
-  tell (weight 8+) caps it at 74. Averaging ten rules per axis would otherwise
-  let one serious defect disappear.
+- **Severity caps.** A content defect at 80% or more caps the total at 79; a
+  strong tell or a wall of prose caps it at 74. Only curated content rules can
+  cap: a missed table or missing bold is an opportunity, not a failure. Averaging
+  ten rules per axis would otherwise let one serious defect disappear.
 
-The curve `100 · max(0, 1 − 1.93·x)^0.6` is fitted by least squares over five
-anchors: tiny slop 25, `bad.md` 40, `links.md` 65, `ok.md` 85, `good.md` 97.
-Residual 6% RMS. Refit (`CURVE` in `score.ts`) if the rule pack changes; do not
-tune it by eye.
+The curve is fitted by least squares over seven anchors, residual 2.7% RMS:
+
+| Anchor | Score |
+|---|---|
+| tiny slop, 17 words | 25 |
+| `bad.md` | 35 |
+| `links.md` | 50 |
+| `wall.md` (clean prose, no formatting) | 70 |
+| `ok.md` | 82 |
+| `good.md` | 93 |
+| `mixed.md` (same facts, full medium) | 95 |
+
+The fitted exponent lands on 1.0, so the curve is linear: `100 · max(0, 1 −
+1.65·x)`. Refit (`CURVE` in `score.ts`) if the rule pack changes; do not tune it
+by eye.
 
 The reading grade is Flesch–Kincaid, which rewards short sentences more than
 simple ideas. A technical note with 11-word sentences reads as grade 4 even when

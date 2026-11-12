@@ -13,18 +13,21 @@ const bad = readFileSync(join(fixtures, "bad.md"), "utf8");
 const good = readFileSync(join(fixtures, "good.md"), "utf8");
 const ok = readFileSync(join(fixtures, "ok.md"), "utf8");
 const links = readFileSync(join(fixtures, "links.md"), "utf8");
+const wall = readFileSync(join(fixtures, "wall.md"), "utf8");
+const mixed = readFileSync(join(fixtures, "mixed.md"), "utf8");
 const tiny = "In today's fast-paced world, it's not just a tool, it's a paradigm shift. Let that sink in.";
 
 describe("score", () => {
 	test("lands on the calibration anchors", () => {
-		// These five are the fit set for CURVE in score.ts. The tolerance covers the
-		// 6% RMS fit residual; links.md is the worst point at 7.2 points off.
+		// These six are the fit set for CURVE in score.ts. The tolerance covers the
+		// 2.7% RMS fit residual; wall.md is the worst point at 4 points off.
 		const anchors: Array<[string, string, number]> = [
 			[tiny, "tiny slop, 17 words", 25],
-			[bad, "bad.md", 40],
-			[links, "links.md", 65],
-			[ok, "ok.md", 85],
-			[good, "good.md", 97],
+			[bad, "bad.md", 35],
+			[links, "links.md", 50],
+			[mixed, "mixed.md", 95],
+			[ok, "ok.md", 82],
+			[good, "good.md", 93],
 		];
 		for (const [text, name, expected] of anchors) {
 			const score = analyze(text, "docs").total;
@@ -34,6 +37,23 @@ describe("score", () => {
 
 	test("two sentences of pure slop cannot score as an A", () => {
 		expect(analyze(tiny, "docs").total).toBeLessThan(35);
+	});
+
+	test("rewards using the medium for the same content", () => {
+		const wallReport = analyze(wall, "docs");
+		const mixedReport = analyze(mixed, "docs");
+		expect(mixedReport.total - wallReport.total).toBeGreaterThan(12);
+		expect(wallReport.metrics.mediumKinds).toBe(0);
+		expect(mixedReport.metrics.mediumKinds).toBeGreaterThanOrEqual(3);
+		expect(mixedReport.structured ?? mixedReport.axes.structured).toBeGreaterThan(90);
+		expect(wallReport.axes.structured).toBeLessThan(20);
+	});
+
+	test("does not excuse a wall of prose", () => {
+		const wallReport = analyze(wall, "docs");
+		const ids = wallReport.hits.map((hit) => hit.id);
+		expect(ids).toContain("medium_variety");
+		expect(wallReport.capReason).toBe("one format for the whole document");
 	});
 
 	test("separates AI-shaped prose from clean prose", () => {

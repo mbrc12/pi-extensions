@@ -24,7 +24,12 @@ export type MetricName =
 	| "duplicatePhraseCount"
 	| "headingEchoShare"
 	| "hedgePer100"
-	| "abstractOpenerShare";
+	| "abstractOpenerShare"
+	| "mediumKinds"
+	| "listMissed"
+	| "tableMissed"
+	| "boldMissing"
+	| "italicMissing";
 
 export interface PatternRule {
 	id: string;
@@ -58,7 +63,7 @@ export interface MetricRule {
 	label: string;
 	fix: string;
 	/** Read limits from the profile instead of `good`/`bad`. */
-	profileKey?: "maxSentence" | "maxGrade" | "maxParaSentences" | "minBulletShare";
+	profileKey?: "maxSentence" | "maxGrade" | "maxParaSentences";
 }
 
 export type Rule = PatternRule | MetricRule;
@@ -353,11 +358,59 @@ export const RULES: Rule[] = [
 		true,
 	),
 
-	// ---- Structured ---------------------------------------------------------
+	// ---- Structured: does the document use the medium it has? ---------------
 	metric("paragraph_length", "structured", "paraMax", 5, 9, 6, "overlong paragraph", "Split paragraphs past the profile limit. One idea per paragraph.", "maxParaSentences"),
-	metric("paragraph_mean", "structured", "paraMean", 3, 6, 3, "even, dense paragraphs", "Vary paragraph length. Put the point in a paragraph of its own."),
 	metric("section_length", "structured", "sectionMaxWords", 500, 1100, 4, "overlong section", "Split the section or promote part of it to a subheading."),
-	metric("bullet_shortfall", "structured", "bulletShortfall", 0, 1, 5, "prose where a list belongs", "Convert parallel items into bullets. Documents prefer lists; prose connects them.", "minBulletShare"),
+	metric(
+		"medium_variety",
+		"structured",
+		"mediumKinds",
+		2,
+		0,
+		9,
+		"one format for the whole document",
+		"Use the medium: headings for sections, bullets for parallel items, a table for comparisons, bold for the one claim that matters.",
+	),
+	metric(
+		"list_opportunity",
+		"structured",
+		"listMissed",
+		0,
+		1,
+		8,
+		"parallel items written as prose",
+		"Turn the run of parallel statements into a bullet list. Keep every item and its numbers.",
+	),
+	metric(
+		"table_opportunity",
+		"structured",
+		"tableMissed",
+		0,
+		1,
+		8,
+		"numbers compared in prose",
+		"Put the comparison in a table: one row per item, one column per dimension, a header row.",
+	),
+	metric(
+		"bold_missing",
+		"structured",
+		"boldMissing",
+		0,
+		1,
+		4,
+		"nothing marked as important",
+		"Bold the one claim, number, or warning that matters in each section. One is enough.",
+	),
+	metric(
+		"italic_terms",
+		"structured",
+		"italicMissing",
+		0,
+		1,
+		2,
+		"terms defined without italics",
+		"Italicise a term the first time you define it.",
+	),
 	metric(
 		"heading_echo",
 		"structured",
@@ -379,14 +432,14 @@ export const RULES: Rule[] = [
 		"Delete the stem and start the list.",
 	),
 	pattern("emoji_decoration", "structured", "[\\u{1F300}-\\u{1FAFF}\\u{2700}-\\u{27BF}]", "u", 2.0, 3, "emoji decoration", "Delete the emoji. Keep text for readers."),
-	pattern(
-		"bold_decoration",
+	metric(
+		"bold_density",
 		"structured",
-		"\\*\\*[^*\\n]{1,40}\\*\\*(?![\\s]*[:.])",
-		"",
-		3.0,
+		"boldPer100",
+		2,
+		9,
 		3,
-		"bold used as decoration",
+		"bold on everything",
 		"Keep bold for the one claim, number, or warning that matters. Remove the rest.",
 	),
 
