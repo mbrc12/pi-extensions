@@ -211,6 +211,7 @@ function parseCommandArgs(args: string): {
 	profile?: string;
 	target?: number;
 	editorOnly: boolean;
+	inPlace: boolean;
 	scoreOnly: boolean;
 	force: boolean;
 	audit: boolean;
@@ -219,7 +220,7 @@ function parseCommandArgs(args: string): {
 	const parts = args.trim().split(/\s+/).filter(Boolean);
 	// /deslop is an explicit request, so it always runs at least one pass. Use
 	// --score for a free check first; the tool keeps the cheap target-gated default.
-	const options: ReturnType<typeof parseCommandArgs> = { editorOnly: false, scoreOnly: false, force: true, audit: true };
+	const options: ReturnType<typeof parseCommandArgs> = { editorOnly: false, inPlace: false, scoreOnly: false, force: true, audit: true };
 	for (let index = 0; index < parts.length; index += 1) {
 		const part = parts[index];
 		if (part === "--file" || part === "-f") options.path = parts[++index];
@@ -227,6 +228,7 @@ function parseCommandArgs(args: string): {
 		else if (part === "--target" || part === "-t") options.target = Number(parts[++index]);
 		else if (part === "--save" || part === "-s") options.savePath = parts[++index];
 		else if (part === "--editor" || part === "-e") options.editorOnly = true;
+		else if (part === "--in-place" || part === "-i") options.inPlace = true;
 		else if (part === "--score") options.scoreOnly = true;
 		else if (part === "--force" || part === "-F") options.force = true;
 		else if (part === "--no-audit") options.audit = false;
@@ -460,10 +462,28 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				});
 			};
 
+			// With a file path, -e and -i mean "write it back": an editor buffer is the
+			// wrong destination when the user named a file. This must work headless too.
+			const writeBack = (options.editorOnly || options.inPlace) && Boolean(absolutePath);
+
+			const persist = async (result: DeslopResult): Promise<boolean> => {
+				if (!writeBack || !absolutePath) return false;
+				if (result.text === input) return false;
+				await withFileMutationQueue(absolutePath, async () => {
+					await writeFile(absolutePath, result.text, "utf8");
+				});
+				return true;
+			};
+
 			// No TUI (print or json mode): run without the progress screen.
 			if (!ctx.hasUI) {
 				try {
 					const result = await execute();
+					if (await persist(result)) {
+						console.error(reportLine(result));
+						console.error(`wrote ${absolutePath}`);
+						return;
+					}
 					console.log(result.text);
 					console.error(reportLine(result));
 					console.error(outcomeStatus(result, input, options.target ?? 90));
@@ -507,7 +527,16 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 			}
 			const result = runResult.result!;
 
-			if (options.editorOnly) {
+			if (writeBack && absolutePath) {
+				if (!(await persist(result))) {
+					ctx.ui.notify(`deslop: unchanged (${after.total.toFixed(1)} ${after.band}), file not written`, "warning");
+					return;
+				}
+				ctx.ui.notify(`deslop: wrote ${relative(cwd, absolutePath) || absolutePath} · ${before.total.toFixed(1)} → ${after.total.toFixed(1)}`, "success");
+				return;
+			}
+
+			if (options.editorOnly || options.inPlace) {
 				ctx.ui.setEditorText(result.text);
 				ctx.ui.notify(`deslop: ${reportLine(result)} — loaded into the editor`, "success");
 				return;

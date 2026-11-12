@@ -38,9 +38,11 @@ target, no rewrite is attempted and no model call is made.
 | Command | Effect |
 |---|---|
 | `/deslop` | rewrite the last assistant answer, show it in a scrollable preview |
-| `/deslop --file docs/post.md` | rewrite a file |
-| `/deslop -e` | put the rewrite straight into the editor |
-| `/deslop -s out.md` | save the rewrite |
+| `/deslop --file docs/post.md` | rewrite a file, show it in the preview |
+| `/deslop --file docs/post.md -e` | rewrite the file **in place** |
+| `/deslop -e` | with no file named: put the rewrite into the editor |
+| `/deslop -i` | alias for in-place |
+| `/deslop -s out.md` | save the rewrite somewhere else |
 | `/deslop --score` | score only, no rewrite |
 | `/deslop --force` | on by default for the command: run one pass even when the text already scores well |
 
@@ -50,8 +52,10 @@ text is unchanged when it is ("already scores 93.2, at or above target 90").
 Preview keys: `j`/`k` scroll, `g`/`G` top or bottom, `space`/`b` page, `e` editor,
 `s` save, `q` close. `esc` during the rewrite aborts it.
 
-In print or JSON mode the command writes the text to stdout and the report to
-stderr.
+`-e` and `-i` both overwrite the file when a path is given, and both open the
+editor when one is not. In print or JSON mode the command writes the text to
+stdout and the report to stderr; with `-e` and a path it overwrites the file and
+prints only the report.
 
 ## The rule pack
 
