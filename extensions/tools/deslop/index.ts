@@ -32,6 +32,7 @@ const DeslopParams = Type.Object({
 	score_only: Type.Optional(Type.Boolean({ description: "Measure only. No model call, no rewrite." })),
 	target: Type.Optional(Type.Integer({ minimum: 50, maximum: 100, description: "Stop when the score reaches this. Default 80." })),
 	max_passes: Type.Optional(Type.Integer({ minimum: 1, maximum: 5, description: "Rewrite passes to run. Default 3." })),
+	force: Type.Optional(Type.Boolean({ description: "Run one pass even when the text already scores at or above the target." })),
 	profile: Type.Optional(StringEnum(["general", "technical", "social", "agent", "docs"] as const)),
 	voice: Type.Optional(Type.String({ description: "Path to a writing sample. Its sentence length and reading grade become the targets." })),
 });
@@ -87,6 +88,18 @@ function reportBlock(report: ScoreReport): string {
 		lines.push("no failing rules");
 	}
 	return lines.join("\n");
+}
+
+/** Why the output is (or is not) different, in one line. Shared by the preview and headless runs. */
+function outcomeStatus(result: DeslopResult, input: string, target: number): string {
+	if (result.text !== input) {
+		const kept = result.notes.filter((note) => note.startsWith("section")).length;
+		return `${result.passes} pass${result.passes === 1 ? "" : "es"} · ${result.fixes} fixes${kept ? ` · ${kept} section${kept === 1 ? "" : "s"} left alone` : ""}`;
+	}
+	if (result.before.total >= target) {
+		return `unchanged — already scores ${result.before.total.toFixed(1)}, at or above target ${target}. Use force to push one more pass, or raise the target.`;
+	}
+	return `unchanged — ${result.notes.find((note) => !note.includes("no pass improved")) ?? "no pass improved the score"}`;
 }
 
 function snapshotFromEvent(event: DeslopEvent, label: string, profile: string): ProgressSnapshot {
@@ -150,10 +163,13 @@ function parseCommandArgs(args: string): {
 	target?: number;
 	editorOnly: boolean;
 	scoreOnly: boolean;
+	force: boolean;
 	savePath?: string;
 } {
 	const parts = args.trim().split(/\s+/).filter(Boolean);
-	const options: ReturnType<typeof parseCommandArgs> = { editorOnly: false, scoreOnly: false };
+	// /deslop is an explicit request, so it always runs at least one pass. Use
+	// --score for a free check first; the tool keeps the cheap target-gated default.
+	const options: ReturnType<typeof parseCommandArgs> = { editorOnly: false, scoreOnly: false, force: true };
 	for (let index = 0; index < parts.length; index += 1) {
 		const part = parts[index];
 		if (part === "--file" || part === "-f") options.path = parts[++index];
@@ -162,6 +178,7 @@ function parseCommandArgs(args: string): {
 		else if (part === "--save" || part === "-s") options.savePath = parts[++index];
 		else if (part === "--editor" || part === "-e") options.editorOnly = true;
 		else if (part === "--score") options.scoreOnly = true;
+		else if (part === "--force" || part === "-F") options.force = true;
 		else if (!part.startsWith("-") && !options.path) options.path = part;
 	}
 	return options;
@@ -244,6 +261,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 					profile: (voice as any) ?? params.profile,
 					target: params.target,
 					maxPasses: params.max_passes,
+					force: params.force,
 					signal,
 					onEvent: (event) => {
 						snapshot = { ...snapshotFromEvent(event, label, voice?.name ?? profileName), elapsedMs: Date.now() - started };
@@ -363,6 +381,13 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 
 			const profileName = options.profile ?? (absolutePath ? "docs" : "general");
 			const started = Date.now();
+			const words = countWords(input);
+			ctx.ui.notify(
+				words < 25
+					? `deslop: ${label} is ${words} words — short text leaves little to rewrite`
+					: `deslop: rewriting ${label} (${words} words)`,
+				words < 25 ? "warning" : "info",
+			);
 
 			const execute = async (onProgress?: (snapshot: ProgressSnapshot) => void) => {
 				return runDeslop(ctx, input, {
@@ -371,6 +396,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 					agentDir: getAgentDir(),
 					profile: profileName,
 					target: options.target,
+					force: options.force,
 					onEvent: (event) => {
 						const snapshot = snapshotFromEvent(event, label, profileName);
 						onProgress?.({ ...snapshot, elapsedMs: Date.now() - started });
@@ -384,6 +410,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 					const result = await execute();
 					console.log(result.text);
 					console.error(reportLine(result));
+					console.error(outcomeStatus(result, input, options.target ?? 80));
 				} catch (error) {
 					console.error(`deslop failed: ${error instanceof Error ? error.message : String(error)}`);
 				}
@@ -419,13 +446,44 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const header = [
-				`deslop ${result.before.total.toFixed(1)} → ${result.after.total.toFixed(1)} · ${result.passes} passes · ${result.fixes} fixes`,
-				`${result.before.metrics.gradeLevel} → ${result.after.metrics.gradeLevel} grade · ${result.after.words} words`,
-			];
+			const target = options.target ?? 80;
+			const changed = result.text !== input;
+			const before = result.before;
+			const after = result.after;
+
+			const buildHeader = (theme: any): string[] => {
+				const tone = after.total >= 80 ? "success" : after.total >= 70 ? "warning" : "error";
+				const delta = after.total - before.total;
+				const sign = delta > 0 ? "+" : "";
+				const scoreLine =
+					`${theme.bold("deslop")}  ` +
+					`${theme.fg(tone, before.total.toFixed(1))} ${theme.fg("muted", before.band)}` +
+					`  →  ${theme.fg(tone, after.total.toFixed(1))} ${theme.fg("muted", after.band)}` +
+					(delta === 0 ? "" : `   ${theme.fg(delta > 0 ? "success" : "error", `${sign}${delta.toFixed(1)}`)}`);
+
+				const status = outcomeStatus(result, input, target);
+
+				const metrics =
+					`grade ${before.metrics.gradeLevel} → ${after.metrics.gradeLevel} · ` +
+					`${before.metrics.meanSentence} → ${after.metrics.meanSentence} words/sentence · ` +
+					`${countWords(result.text)} words · target ${target}`;
+
+				return [
+					scoreLine,
+					changed ? theme.fg("muted", status) : theme.fg("warning", status),
+					theme.fg("dim", metrics),
+				];
+			};
 
 			const action = await ctx.ui.custom<{ action: "close" | "edit" | "save" }>((tui, theme, _kb, done) =>
-				new PreviewScreen(tui, theme, header, result.text, done),
+				new PreviewScreen(tui, theme, buildHeader(theme), result.text, done),
+			);
+
+			ctx.ui.notify(
+				changed
+					? `deslop: ${before.total.toFixed(1)} → ${after.total.toFixed(1)} · ${result.passes} pass${result.passes === 1 ? "" : "es"}`
+					: `deslop: unchanged (${before.total.toFixed(1)} ${before.band})`,
+				changed ? "success" : "warning",
 			);
 
 			if (action?.action === "edit") {

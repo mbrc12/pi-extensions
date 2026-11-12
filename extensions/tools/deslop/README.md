@@ -42,6 +42,10 @@ target, no rewrite is attempted and no model call is made.
 | `/deslop -e` | put the rewrite straight into the editor |
 | `/deslop -s out.md` | save the rewrite |
 | `/deslop --score` | score only, no rewrite |
+| `/deslop --force` | on by default for the command: run one pass even when the text already scores well |
+
+The preview header always states the score before and after, the band, and why the
+text is unchanged when it is ("already scores 89.7, at or above target 80").
 
 Preview keys: `j`/`k` scroll, `g`/`G` top or bottom, `space`/`b` page, `e` editor,
 `s` save, `q` close. `esc` during the rewrite aborts it.

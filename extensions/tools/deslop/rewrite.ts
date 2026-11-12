@@ -28,6 +28,8 @@ export interface DeslopOptions {
 	profile?: string | Profile;
 	target?: number;
 	maxPasses?: number;
+	/** Run one pass even when the text already scores at or above the target. */
+	force?: boolean;
 	concurrency?: number;
 	minGain?: number;
 	cwd: string;
@@ -232,7 +234,8 @@ export async function runDeslop(
 	let acceptedPasses = 0;
 	const sectionNotes: string[] = [];
 
-	while (passes < maxPasses && best.total < target) {
+	const shouldRun = () => best.total < target || (options.force === true && passes === 0);
+	while (passes < maxPasses && shouldRun()) {
 		if (options.signal?.aborted) break;
 		passes += 1;
 
