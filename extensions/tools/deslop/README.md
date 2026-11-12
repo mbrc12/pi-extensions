@@ -190,6 +190,25 @@ addressed to an agent ("load the `latex-writing` skill") are filtered out.
 Links are the hard case, so they are enforced twice: the whole inline link is a
 protected span, and the guard fails any rewrite that drops one.
 
+## Performance
+
+- **Sections are rewritten in parallel**, four at a time by default (ceiling six),
+  with results reassembled in document order.
+- **Clean sections are not called at all.** A section with no findings is returned
+  untouched; on a five-section document that is usually one or two calls fewer.
+- **Retries are waves, not queues.** Every section that failed goes back out at
+  the same time with the criterion it broke named in the prompt, up to three
+  attempts. A section is only left alone after that, and the report says why
+  ("section 2: dropped_fact after 3 attempts").
+- **The system prompt is cached** (`cacheRetention: "short"`), since it is
+  identical across sections in a pass, and `maxTokens` is sized to the section.
+- **One audit call per document**, re-run never.
+
+Client-side parallelism only helps if the provider allows it. Measured on
+`opencode-go`: four requests dispatched in the same millisecond came back over the
+following five seconds, so the gateway appears to serialise. On a provider that
+does not, the same code scales.
+
 ## Knobs
 
 | Setting | Default | Notes |

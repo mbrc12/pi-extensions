@@ -59,24 +59,24 @@ export async function auditDocument(
 	const observations = hints.length
 		? `\nmeasured: these section pairs share ${hints.map((hint) => `${Math.round(hint.overlap * 100)}% of vocabulary (${hint.a}/${hint.b})`).join(", ")}. Decide whether the content is duplicated, not just the words.`
 		: "";
-	const request = {
-		systemPrompt: buildSystem(rules),
-		messages: [
-			{
-				role: "user" as const,
-				content: [{ type: "text" as const, text: `<spine>\n${digest}${observations}\n</spine>` }],
-				timestamp: Date.now(),
-			},
-		],
-	};
+	const spineText = `<spine>\n${digest}${observations}\n</spine>`;
 
 	let lastRaw = "";
 	for (let attempt = 0; attempt < (options.strict ? 1 : 2); attempt += 1) {
+		// On the retry, say what was wrong with the previous answer and repeat the
+		// schema. Retrying an identical prompt mostly produces an identical mistake.
+		const user = attempt === 0
+			? spineText
+			: `${spineText}\n\nYour previous reply was not usable: it was not JSON matching the schema. Reply with JSON only, exactly as specified, and nothing else.`;
+		const request = {
+			systemPrompt: buildSystem(rules),
+			messages: [{ role: "user" as const, content: [{ type: "text" as const, text: user }], timestamp: Date.now() }],
+		};
 		const { response } = await completeWithModelFallback(
 			ctx,
 			"deslopAudit",
 			request,
-			{ maxTokens: 1200, signal: options.signal, cacheRetention: "none" },
+			{ maxTokens: 1200, signal: options.signal, cacheRetention: "short" },
 			{},
 		);
 		const text = Array.isArray(response?.content)

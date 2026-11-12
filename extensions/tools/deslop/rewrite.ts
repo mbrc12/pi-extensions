@@ -12,19 +12,25 @@ import { factsPreserved, guardRewrite } from "./guard.ts";
 import { applyStructural, buildSpine, joinSections } from "./spine.ts";
 import { type HousePolicy, loadHousePolicy, policyBlock } from "./policy.ts";
 import { splitSections, type Section } from "./sections.ts";
+import { attemptSection, type Complete } from "./attempt.ts";
+import { mapLimit, repairMessage } from "./retry.ts";
 import { countWords } from "./text.ts";
 import { replaceHint, resolveProfile, type Profile } from "./rules.ts";
 import { analyze, summarize, topFixes, type RuleHit, type ScoreReport } from "./score.ts";
 
 /** DESLOP_DEBUG=1 appends prompts and guard verdicts to /tmp/deslop-debug.log. */
+const START = Date.now();
+
 function debug(label: string, body: string): void {
 	if (!process.env.DESLOP_DEBUG) return;
 	try {
-		appendFileSync("/tmp/deslop-debug.log", `\n===== ${label} =====\n${body}\n`);
+		appendFileSync("/tmp/deslop-debug.log", `\n===== ${label} (+${Date.now() - START}ms) =====\n${body}\n`);
 	} catch {
 		// logging must never break a run
 	}
 }
+
+const MAX_ATTEMPTS = 3;
 
 export interface DeslopOptions {
 	profile?: string | Profile;
@@ -51,7 +57,7 @@ export type DeslopEvent =
 	| { kind: "audit_done"; findings: number; worst: number; ops: number; summary: string }
 	| { kind: "restructure"; applied: string[]; rejected: string[]; before: number; after: number }
 	| { kind: "pass_start"; pass: number; passes: number; sections: number; rules: number }
-	| { kind: "section_done"; pass: number; done: number; total: number; accepted: boolean; note?: string }
+	| { kind: "section_done"; pass: number; attempt: number; done: number; total: number; accepted: boolean; note?: string }
 	| { kind: "pass_end"; pass: number; before: number; after: number; accepted: boolean; note?: string }
 	| { kind: "done"; report: ScoreReport; passes: number; fixes: number; notes: string[] };
 
@@ -144,20 +150,6 @@ function buildSystemPrompt(
 		.join("\n");
 }
 
-/**
- * Models wrap output in a fence or prefix it with an announcement even when told
- * not to. Remove one wrapping fence and a leading announcement, and nothing else.
- */
-function cleanOutput(text: string, hadFence: boolean): string {
-	let out = text.trim();
-	const fenced = out.match(/^```[\w-]*\n([\s\S]*?)\n?```$/);
-	if (fenced && fenced[1].trim()) out = fenced[1];
-	else if (!hadFence) {
-		out = out.replace(/^(?:here(?:'s| is) the (?:rewritten|edited|revised)[^\n]*\n+)/i, "");
-	}
-	return out.trimEnd();
-}
-
 function extractText(response: any): string {
 	if (!response || !Array.isArray(response.content)) return "";
 	return response.content
@@ -167,87 +159,18 @@ function extractText(response: any): string {
 		.trim();
 }
 
-async function rewriteSection(
-	ctx: ModelCompletionContext,
-	section: Section,
-	systemPrompt: string,
-	options: Required<Pick<DeslopOptions, "cwd">> & DeslopOptions,
-): Promise<{ text: string; note?: string }> {
-	const budget = `This section has ${section.words} words. Return between ${Math.round(section.words * 0.9)} and ${Math.round(section.words * 1.1)} words.`;
-
-	let feedback = "";
-	let lastError: string | undefined;
-
-	for (let attempt = 0; attempt < 3; attempt += 1) {
-		try {
-			const instructions = [budget, feedback].filter(Boolean).join("\n\n");
-			const { response } = await completeWithModelFallback(
-				ctx,
-				"deslopRewrite",
-				{
-					systemPrompt,
-					messages: [
-						{
-							role: "user" as const,
-							content: [
-								{
-									type: "text" as const,
-									text: [instructions, "", "<text>", section.masked, "</text>"].join("\n"),
-								},
-							],
-							timestamp: Date.now(),
-						},
-					],
-				},
-				{ maxTokens: 4096, signal: options.signal, cacheRetention: "none" },
-				{},
-			);
-
-			if (attempt === 0) debug("system prompt", systemPrompt);
-			const text = extractText(response);
-			if (!text) {
-				lastError = "empty response";
-				continue;
-			}
-
-			const cleaned = cleanOutput(text, section.raw.includes("```"));
-			const guard = guardRewrite(section.raw, cleaned, section.spans);
-			debug("guard", `ok=${guard.ok} reason=${guard.reason ?? "-"} words=${countWords(cleaned)}/${section.words}`);
-			if (guard.ok && guard.restored.trim() !== section.raw.trim()) {
-				return { text: guard.restored, note: guard.warnings[0] };
-			}
-
-			lastError = guard.ok ? "no change" : guard.reason;
-			// Tell the model what it broke. A targeted retry lands far more often
-			// than a silent rejection, especially for the length constraint.
-			feedback =
-				guard.reason?.includes("length") && cleaned
-					? `Your previous attempt was ${Math.round((countWords(cleaned) / Math.max(1, section.words)) * 100)}% of the original length. Keep every sentence's content. Do not condense, merge, or drop material.`
-					: guard.reason
-						? `Your previous attempt failed: ${guard.reason}. Keep every fact, number, name, and link exactly as written.`
-						: "";
-			if (!feedback) break;
-		} catch (error) {
-			if (options.signal?.aborted) throw error;
-			lastError = error instanceof Error ? error.message : String(error);
-		}
-	}
-
-	return { text: section.raw, note: lastError };
-}
-
-async function mapLimit<T, R>(items: T[], limit: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let cursor = 0;
-	const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-		while (cursor < items.length) {
-			const index = cursor;
-			cursor += 1;
-			results[index] = await worker(items[index], index);
-		}
-	});
-	await Promise.all(runners);
-	return results;
+/** Adapt the configured model fallback chain into the completer attemptSection expects. */
+function makeCompleter(ctx: ModelCompletionContext, signal?: AbortSignal): Complete {
+	return async (request, options) => {
+		const { response } = await completeWithModelFallback(
+			ctx,
+			"deslopRewrite",
+			request as any,
+			{ ...options, signal, cacheRetention: "short" },
+			{},
+		);
+		return extractText(response);
+	};
 }
 
 export async function runDeslop(
@@ -264,7 +187,8 @@ export async function runDeslop(
 	const target = options.target ?? 90;
 	const maxPasses = Math.max(1, options.maxPasses ?? 3);
 	const minGain = options.minGain ?? 2;
-	const concurrency = Math.max(1, options.concurrency ?? 3);
+	const concurrency = Math.max(1, Math.min(6, options.concurrency ?? 4));
+	const complete = makeCompleter(ctx, options.signal);
 
 	let current = input;
 	// The length band is anchored to the original, never to the previous pass.
@@ -330,27 +254,49 @@ export async function runDeslop(
 		const ruleIds = new Set(sectionHits.flat().map((hit) => hit.id));
 		emit({ kind: "pass_start", pass: passes, passes: maxPasses, sections: sections.length, rules: ruleIds.size });
 
-		let done = 0;
-		const rewritten = await mapLimit(sections, concurrency, async (section, index) => {
-			const systemPrompt = buildSystemPrompt(policy, profile, sectionHits[index], passes === 1 ? auditInstructions : []);
-			const result = await rewriteSection(ctx, section, systemPrompt, options);
-			done += 1;
-			if (result.text === section.raw && result.note) {
-				sectionNotes.push(`section ${index + 1}: ${result.note}`);
-			}
-			emit({
-				kind: "section_done",
-				pass: passes,
-				done,
-				total: sections.length,
-				accepted: result.text !== section.raw,
-				note: result.note,
-			});
-			return result.text;
-		});
+		// Only sections with findings are worth a call. A clean section is returned
+		// untouched; the audit may still force the opening section on pass one.
+		const targets = sections
+			.map((section, index) => ({ index, section, hits: sectionHits[index] }))
+			.filter((item, index) => item.hits.length > 0 || (passes === 1 && index === 0 && auditInstructions.length > 0));
 
-		// Sections are rewritten independently, so a model that drops a trailing blank
-		// line would glue the next heading onto the paragraph above it.
+		const rewritten = sections.map((section) => section.raw);
+		let pending = targets.map((item) => ({ ...item, feedback: "" }));
+		let done = 0;
+
+		// Waves, not per-section retries: every section that failed gets its retry at
+		// the same time, with the criterion it broke named in the prompt.
+		for (let attempt = 1; attempt <= MAX_ATTEMPTS && pending.length; attempt += 1) {
+			if (options.signal?.aborted) break;
+			const round = await mapLimit(pending, concurrency, async (item) => {
+				const systemPrompt = buildSystemPrompt(policy, profile, item.hits, passes === 1 ? auditInstructions : []);
+				debug("dispatch", `${item.section.words} words${item.feedback ? " (retry)" : ""}`);
+				return { item, result: await attemptSection(complete, item.section, systemPrompt, item.feedback) };
+			});
+
+			const next: typeof pending = [];
+			for (const { item, result } of round) {
+				done += 1;
+				if (result.status === "accepted") {
+					rewritten[item.index] = result.text;
+				} else if (attempt < MAX_ATTEMPTS && result.status === "invalid") {
+					next.push({ ...item, feedback: repairMessage(result) });
+				} else {
+					sectionNotes.push(`section ${item.index + 1}: ${result.reason === "api" ? result.detail : result.reason} after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
+				}
+				emit({
+					kind: "section_done",
+					pass: passes,
+					attempt,
+					done,
+					total: targets.length,
+					accepted: result.status === "accepted",
+					note: result.status === "accepted" ? undefined : result.reason,
+				});
+			}
+			pending = next;
+		}
+
 		const candidate = joinSections(rewritten, current.endsWith("\n"));
 		const before = best;
 		const after = analyze(candidate, profile);

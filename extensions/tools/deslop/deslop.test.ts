@@ -8,6 +8,9 @@ import { splitSections } from "./sections.ts";
 import { GLOBAL_RULES, validateAudit } from "./global.ts";
 import { factsPreserved } from "./guard.ts";
 import { loadHousePolicy, policyBlock } from "./policy.ts";
+import { attemptSection } from "./attempt.ts";
+import { mapLimit, repairMessage } from "./retry.ts";
+import { splitSections } from "./sections.ts";
 import { applyStructural, buildSpine, reassemble } from "./spine.ts";
 import { analyze, topFixes } from "./score.ts";
 
@@ -266,6 +269,94 @@ describe("spine", () => {
 		const spine = buildSpine(good);
 		const result = applyStructural(spine, [{ kind: "reorder", order: [...spine.sections.map((s) => s.id)].reverse() }]);
 		expect(factsPreserved(good, result.text).ok).toBe(true);
+	});
+});
+
+describe("retry with the criterion named", () => {
+	const original = "The migration moved 1400 rows in 3 passes. We ran it on Linux and it took 11 minutes.";
+
+	/** A section whose spans and masking come from the real pipeline. */
+	function sectionOf(text: string) {
+		return splitSections(text)[0];
+	}
+
+	test("retries an invalid answer and names what it dropped", async () => {
+		const section = sectionOf(original);
+		const requests: string[] = [];
+		let call = 0;
+		const complete = async (request: any) => {
+			requests.push(JSON.stringify(request.messages));
+			call += 1;
+			// First answer loses 1400; second answer is faithful.
+			return call === 1
+				? "The migration moved rows in 3 passes. We ran it on Linux and it took 11 minutes."
+				: "We moved 1400 rows in 3 passes on Linux. It took 11 minutes.";
+		};
+		const first = await attemptSection(complete as any, section, "system");
+		expect(first.status).toBe("invalid");
+		expect(first.reason).toBe("dropped_fact");
+		expect(repairMessage(first)).toContain("1400");
+
+		const second = await attemptSection(complete as any, section, "system", repairMessage(first));
+		expect(second.status).toBe("accepted");
+		// The retry prompt carries the criterion, not just "try again".
+		expect(requests[1]).toContain("1400");
+		expect(requests[1]).toContain("Keep every number");
+	});
+
+	test("retries a length failure with the actual ratio", async () => {
+		const section = sectionOf(original);
+		const complete = async () =>
+			"The migration moved 1400 rows in 3 passes on Linux and it took 11 minutes in total for the whole run across the cluster.";
+		const result = await attemptSection(complete as any, section, "system");
+		expect(result.status).toBe("invalid");
+		expect(result.reason).toBe("length");
+		expect(repairMessage(result)).toMatch(/%/);
+	});
+
+	test("an empty answer is retried, not accepted", async () => {
+		const section = sectionOf(original);
+		const result = await attemptSection(async () => "", section, "system");
+		expect(result.status).toBe("invalid");
+		expect(result.reason).toBe("empty");
+	});
+});
+
+describe("concurrency", () => {
+	test("runs workers in parallel and keeps the input order", async () => {
+		const started = Date.now();
+		const results = await mapLimit([1, 2, 3, 4, 5, 6, 7, 8], 4, async (value) => {
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			return value * 2;
+		});
+		const elapsed = Date.now() - started;
+		expect(results).toEqual([2, 4, 6, 8, 10, 12, 14, 16]);
+		// Serial would be 320 ms. Four at a time is two rounds, about 80 ms.
+		expect(elapsed).toBeLessThan(220);
+	});
+
+	test("never exceeds the ceiling", async () => {
+		let live = 0;
+		let peak = 0;
+		await mapLimit(Array.from({ length: 12 }, (_, index) => index), 3, async () => {
+			live += 1;
+			peak = Math.max(peak, live);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			live -= 1;
+			return 0;
+		});
+		expect(peak).toBeLessThanOrEqual(3);
+	});
+});
+
+describe("retry guidance", () => {
+	test("names the criterion that was broken", () => {
+		expect(repairMessage({ status: "invalid", text: "", reason: "placeholder" })).toContain("[[n]]");
+		expect(repairMessage({ status: "invalid", text: "", reason: "dropped_fact", detail: "number 1400" })).toContain("number 1400");
+		expect(repairMessage({ status: "invalid", text: "", reason: "invented_number", detail: "11" })).toContain("11");
+		expect(repairMessage({ status: "invalid", text: "", reason: "length", detail: "58%" })).toContain("58%");
+		expect(repairMessage({ status: "invalid", text: "", reason: "empty" })).toContain("empty");
+		expect(repairMessage({ status: "unchanged", text: "", reason: "unchanged" })).toContain("identical");
 	});
 });
 
