@@ -17,6 +17,7 @@ export const MODEL_CONFIG_PURPOSES = [
   "permissionClassification",
   "pythonWriteClassification",
   "deslopRewrite",
+  "deslopAudit",
 ] as const;
 export type ModelConfigPurpose = typeof MODEL_CONFIG_PURPOSES[number];
 
@@ -55,6 +56,14 @@ const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
   // deslop rewrites whole sections under a fixed rule list. It needs a model that
   // follows negative constraints (keep every name and number) more than one that
   // writes beautifully, so the cheap flash models come first.
+  // deslopAudit reads a spine and judges document structure. It needs judgement
+  // rather than speed, and it runs once per document.
+  deslopAudit: [
+    "opencode-go/deepseek-v4-pro",
+    "openai-codex/gpt-6-luna",
+    "opencode-go/deepseek-v4.1-flash",
+    "openai-codex-2/gpt-6-luna",
+  ],
   deslopRewrite: [
     "opencode-go/deepseek-v4-pro",
     "openai-codex/gpt-6-luna",

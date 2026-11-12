@@ -89,6 +89,42 @@ one number that matters gets bold, a defined term gets italics.
 Measured on `wall.md` → `mixed.md`, the same facts with and without the medium:
 **74 C → 96 A**. Rewriting `wall.md` in one pass reaches **98**.
 
+## Global audit
+
+Sentence rules cannot see the document. Before any rewriting, one model call
+reads the **spine** — heading, first sentence, last sentence, numbers, length for
+every section — and answers twelve document-level rules:
+
+`promise_fulfilment` · `answer_first` · `thesis_drift` · `use_before_definition` ·
+`given_new_flow` · `redundancy` · `underived_number` · `proportion` ·
+`heading_accuracy` · `dependency_order` · `one_sentence` · `stated_limits`
+
+Sources: higher-order-concern revision practice (Writing Commons, Purdue OWL),
+reverse outlining, Gopen & Swan's topic and stress positions, and the two gaps
+CLEAR-100 names in its own checker.
+
+How it stays honest:
+
+- The audit is **not scored**. It returns findings; the deterministic scorer
+  judges whatever edit the findings produce. No LLM number enters the total.
+- Every finding is validated against the spine: unknown rule, unknown section id,
+  or severity outside 1–3 is dropped. Answers that are prose rather than JSON are
+  discarded and retried once.
+- Only `reorder`, `merge`, and `delete` are applied mechanically, by section id.
+  A reorder must name every section exactly once, and an order identical to the
+  current one is rejected. A delete must name the section that supersedes it.
+- Structural edits are checked with the same fact diff as a rewrite: no number,
+  name, or link may disappear, and a deletion that removes more than 30% of the
+  words is refused.
+- Measured pair similarity is passed to the auditor as an observation, never
+  acted on directly. Section-level redundancy detection by word overlap alone is
+  not reliable; the model decides, the hints help it look.
+- Findings that need prose (`rewrite_opening`, `rename_heading`, `split`,
+  `expand`) become instructions in the rewrite prompt rather than edits.
+
+Cost: one call per document at 150+ words with two or more sections. Disable with
+`audit: false` on the tool or `--no-audit` on the command.
+
 ## Guards
 
 A rewrite is rejected unless all of these hold:

@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 import { guardRewrite } from "./guard.ts";
 import { maskProtected, restoreProtected } from "./mask.ts";
 import { splitSections } from "./sections.ts";
+import { GLOBAL_RULES, validateAudit } from "./global.ts";
+import { factsPreserved } from "./guard.ts";
 import { loadHousePolicy, policyBlock } from "./policy.ts";
+import { applyStructural, buildSpine, reassemble } from "./spine.ts";
 import { analyze, topFixes } from "./score.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "tests", "fixtures", "deslop");
@@ -210,6 +213,114 @@ describe("policy", () => {
 		expect(block).toContain("bullets");
 		expect(block).toContain("Keep every link");
 		expect(block).not.toContain("serv.app");
+	});
+});
+
+describe("spine", () => {
+	test("splits a document into sections and reassembles it exactly", () => {
+		const spine = buildSpine(good);
+		expect(spine.sections.length).toBeGreaterThan(3);
+		expect(reassemble(spine)).toBe(good);
+		expect(spine.sections[0].heading).toBe("Continuous integration");
+		expect(spine.sections[0].first.length).toBeGreaterThan(10);
+		expect(spine.words).toBeGreaterThan(100);
+	});
+
+	test("collects promises from the opening", () => {
+		const spine = buildSpine(`This document covers the pipeline, the cache, and the rollback path.\n\n${good}`);
+		expect(spine.promises.length).toBeGreaterThan(0);
+	});
+
+	test("reorders by section id", () => {
+		const spine = buildSpine(good);
+		const order = [...spine.sections.map((section) => section.id)].reverse();
+		const result = applyStructural(spine, [{ kind: "reorder", order }]);
+		expect(result.rejected).toEqual([]);
+		expect(result.text).toBe([...spine.sections].reverse().map((section) => section.raw).join("\n"));
+	});
+
+	test("rejects an order that misses a section", () => {
+		const spine = buildSpine(good);
+		const result = applyStructural(spine, [{ kind: "reorder", order: [spine.sections[0].id] }]);
+		expect(result.applied).toEqual([]);
+		expect(result.rejected[0]).toContain("every section");
+	});
+
+	test("merges one section into another without losing text", () => {
+		const spine = buildSpine(good);
+		const [first, second] = spine.sections;
+		const result = applyStructural(spine, [{ kind: "merge", from: second.id, into: first.id }]);
+		expect(result.text).toContain(first.body);
+		expect(result.text).toContain(second.body);
+		expect(buildSpine(result.text).sections.length).toBe(spine.sections.length - 1);
+	});
+
+	test("refuses a deletion that names no surviving section", () => {
+		const spine = buildSpine(good);
+		const result = applyStructural(spine, [{ kind: "delete", id: spine.sections[1].id }]);
+		expect(result.applied).toEqual([]);
+		expect(result.rejected[0]).toContain("no surviving section");
+	});
+
+	test("facts survive reordering", () => {
+		const spine = buildSpine(good);
+		const result = applyStructural(spine, [{ kind: "reorder", order: [...spine.sections.map((s) => s.id)].reverse() }]);
+		expect(factsPreserved(good, result.text).ok).toBe(true);
+	});
+});
+
+describe("audit validation", () => {
+	const allowed = GLOBAL_RULES;
+
+	test("keeps findings that name known rules and sections", () => {
+		const spine = buildSpine(good);
+		const raw = JSON.stringify({
+			summary: "order serves the author",
+			findings: [{ rule: "dependency_order", severity: 2, sections: [spine.sections[1].id], evidence: "the cache section comes before what it serves", action: "none" }],
+		});
+		const result = validateAudit(raw, spine, allowed);
+		expect(result.findings).toHaveLength(1);
+		expect(result.findings[0].rule).toBe("dependency_order");
+	});
+
+	test("drops invented rules, sections, and severities", () => {
+		const spine = buildSpine(good);
+		const raw = JSON.stringify({
+			findings: [
+				{ rule: "vibes", severity: 2, sections: ["s0"], evidence: "x", action: "none" },
+				{ rule: "redundancy", severity: 2, sections: ["s99"], evidence: "y", action: "none" },
+				{ rule: "redundancy", severity: 9, sections: ["s0"], evidence: "z", action: "none" },
+			],
+		});
+		const result = validateAudit(raw, spine, allowed);
+		expect(result.findings).toHaveLength(1);
+		expect(result.findings[0].sections).toEqual([]);
+	});
+
+	test("turns merge and reorder answers into operations", () => {
+		const spine = buildSpine(good);
+		const [a, b] = spine.sections;
+		const raw = JSON.stringify({
+			findings: [{ rule: "redundancy", severity: 2, sections: [a.id, b.id], evidence: "same claim", action: "merge" }],
+			order: [...spine.sections.map((section) => section.id)].reverse(),
+		});
+		const result = validateAudit(raw, spine, allowed);
+		expect(result.ops).toContainEqual({ kind: "merge", from: b.id, into: a.id });
+		expect(result.ops.some((op) => op.kind === "reorder")).toBe(true);
+	});
+
+	test("ignores an order that changes nothing", () => {
+		const spine = buildSpine(good);
+		const order = spine.sections.map((section) => section.id);
+		const raw = JSON.stringify({ findings: [], order });
+		expect(validateAudit(raw, spine, allowed).ops).toEqual([]);
+	});
+
+	test("survives a model that answers with prose", () => {
+		const spine = buildSpine(good);
+		const result = validateAudit("I think the order is fine, but section two is weak.", spine, allowed);
+		expect(result.findings).toEqual([]);
+		expect(result.ops).toEqual([]);
 	});
 });
 

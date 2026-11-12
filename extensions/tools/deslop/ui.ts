@@ -10,7 +10,8 @@ import { Markdown, truncateToWidth } from "@earendil-works/pi-tui";
 import { summarize, type ScoreReport } from "./score.ts";
 
 export interface ProgressSnapshot {
-	phase: "measure" | "pass" | "done" | "error";
+	phase: "measure" | "audit" | "pass" | "done" | "error";
+	audit?: string;
 	label: string;
 	profile: string;
 	score?: number;
@@ -52,7 +53,7 @@ export function renderProgress(snapshot: ProgressSnapshot, theme: any): string[]
 	const passText =
 		snapshot.pass !== undefined
 			? theme.fg("muted", `pass ${snapshot.pass}/${snapshot.passes ?? "?"}`)
-			: theme.fg("muted", snapshot.phase === "measure" ? "measuring" : "starting");
+			: theme.fg("muted", snapshot.phase === "measure" ? "measuring" : snapshot.phase === "audit" ? "auditing" : "starting");
 
 	const scoreText = score === undefined ? "" : theme.fg(scoreColor(score), score.toFixed(1));
 	const delta =
@@ -62,7 +63,9 @@ export function renderProgress(snapshot: ProgressSnapshot, theme: any): string[]
 
 	lines.push(`${bar(fraction, theme)} ${scoreText}${delta} ${passText}`);
 
-	if (snapshot.phase === "pass" && snapshot.sections) {
+	if (snapshot.phase === "audit") {
+		lines.push(theme.fg("muted", `auditing structure${snapshot.sections ? ` across ${snapshot.sections} sections` : ""}`));
+	} else if (snapshot.phase === "pass" && snapshot.sections) {
 		lines.push(
 			theme.fg(
 				"muted",

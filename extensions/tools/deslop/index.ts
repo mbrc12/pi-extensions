@@ -13,6 +13,7 @@ import { getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-ag
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { GLOBAL_RULES } from "./global.ts";
 import { analyze, summarize, type ScoreReport } from "./score.ts";
 import { type DeslopEvent, type DeslopResult, reportLine, runDeslop } from "./rewrite.ts";
 import { countWords } from "./text.ts";
@@ -33,6 +34,7 @@ const DeslopParams = Type.Object({
 	target: Type.Optional(Type.Integer({ minimum: 50, maximum: 100, description: "Stop when the score reaches this. Default 90." })),
 	max_passes: Type.Optional(Type.Integer({ minimum: 1, maximum: 5, description: "Rewrite passes to run. Default 3." })),
 	force: Type.Optional(Type.Boolean({ description: "Run one pass even when the text already scores at or above the target." })),
+	audit: Type.Optional(Type.Boolean({ description: "Audit the document structure before rewriting (default true for 250+ words with sections)." })),
 	profile: Type.Optional(StringEnum(["general", "technical", "social", "agent", "docs"] as const)),
 	voice: Type.Optional(Type.String({ description: "Path to a writing sample. Its sentence length and reading grade become the targets." })),
 });
@@ -92,6 +94,25 @@ function reportBlock(report: ScoreReport): string {
 }
 
 /** Why the output is (or is not) different, in one line. Shared by the preview and headless runs. */
+/** Document-audit line, empty when the audit did not run. */
+function auditSummary(result: DeslopResult): string {
+	const parts: string[] = [];
+	if (result.audit) {
+		if (result.audit.findings.length) {
+			const labels = result.audit.findings
+				.slice(0, 4)
+				.map((finding) => GLOBAL_RULES.find((rule) => rule.id === finding.rule)?.label ?? finding.rule);
+			parts.push(`document: ${labels.join(", ")}`);
+			for (const finding of result.audit.findings.filter((entry) => entry.severity >= 2).slice(0, 3)) {
+				if (finding.evidence) parts.push(`  - ${finding.rule}: ${finding.evidence}`);
+			}
+		} else parts.push("document: no global findings");
+	}
+	if (result.structural?.applied.length) parts.push(`structure: ${result.structural.applied.join(" · ")}`);
+	if (result.structural?.rejected.length) parts.push(`structure held back: ${result.structural.rejected.join(" · ")}`);
+	return parts.join("\n");
+}
+
 function outcomeStatus(result: DeslopResult, input: string, target: number): string {
 	if (result.text !== input) {
 		const kept = result.notes.filter((note) => note.startsWith("section")).length;
@@ -115,6 +136,25 @@ function snapshotFromEvent(event: DeslopEvent, label: string, profile: string): 
 	switch (event.kind) {
 		case "measure":
 			return { phase: "measure", label, profile, score: event.report.total, report: event.report };
+		case "audit_start":
+			return { phase: "audit", label, profile, sections: event.sections };
+		case "audit_done":
+			return {
+				phase: "audit",
+				label,
+				profile,
+				score: undefined,
+				audit: event.findings ? `${event.findings} finding${event.findings === 1 ? "" : "s"} (worst ${event.worst}/3)` : "no global findings",
+			};
+		case "restructure":
+			return {
+				phase: "audit",
+				label,
+				profile,
+				score: event.after,
+				previous: event.before,
+				audit: event.applied.length ? event.applied.join(" · ") : undefined,
+			};
 		case "pass_start":
 			return {
 				phase: "pass",
@@ -173,12 +213,13 @@ function parseCommandArgs(args: string): {
 	editorOnly: boolean;
 	scoreOnly: boolean;
 	force: boolean;
+	audit: boolean;
 	savePath?: string;
 } {
 	const parts = args.trim().split(/\s+/).filter(Boolean);
 	// /deslop is an explicit request, so it always runs at least one pass. Use
 	// --score for a free check first; the tool keeps the cheap target-gated default.
-	const options: ReturnType<typeof parseCommandArgs> = { editorOnly: false, scoreOnly: false, force: true };
+	const options: ReturnType<typeof parseCommandArgs> = { editorOnly: false, scoreOnly: false, force: true, audit: true };
 	for (let index = 0; index < parts.length; index += 1) {
 		const part = parts[index];
 		if (part === "--file" || part === "-f") options.path = parts[++index];
@@ -188,6 +229,7 @@ function parseCommandArgs(args: string): {
 		else if (part === "--editor" || part === "-e") options.editorOnly = true;
 		else if (part === "--score") options.scoreOnly = true;
 		else if (part === "--force" || part === "-F") options.force = true;
+		else if (part === "--no-audit") options.audit = false;
 		else if (!part.startsWith("-") && !options.path) options.path = part;
 	}
 	return options;
@@ -198,12 +240,13 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 		name: "deslop",
 		label: "deslop",
 		description:
-			"Rewrite text or a Markdown file into clearer prose. Runs its own isolated loop: measures the text against a 43-rule readability pack, rewrites only the sections that fail, keeps every fact, number, name, link, and code span, re-measures, and keeps the better version. Returns the rewritten text, or writes it back with in_place. Use score_only to measure without spending a model call.",
+			"Rewrite text or a Markdown file into clearer prose. Runs its own isolated loop: audits the document structure first (order, redundancy, proportion, promises), then measures the text against a 43-rule readability pack, rewrites only the sections that fail, keeps every fact, number, name, link, and code span, re-measures, and keeps the better version. Returns the rewritten text, or writes it back with in_place. Use score_only to measure without spending a model call.",
 		promptSnippet: "Rewrite dense or AI-shaped prose into readable prose, or score it",
 		promptGuidelines: [
 			"Use deslop instead of rewriting prose yourself when the user asks for clearer, less AI-sounding text. It keeps the rewrite out of your context and returns the result.",
 			"Call deslop with score_only first when you want to know whether the text needs work before spending a model call.",
 			"Pass in_place: true to overwrite the file; otherwise the rewritten text comes back in the result.",
+			"Set audit: false to skip the document-level audit and spend only the rewrite calls.",
 		],
 		parameters: DeslopParams,
 
@@ -271,6 +314,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 					target: params.target,
 					maxPasses: params.max_passes,
 					force: params.force,
+					audit: params.audit,
 					signal,
 					onEvent: (event) => {
 						snapshot = { ...snapshotFromEvent(event, label, voice?.name ?? profileName), elapsedMs: Date.now() - started };
@@ -303,6 +347,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 
 				const header = [
 					`deslop: ${reportLine(result)}`,
+					auditSummary(result),
 					`${result.before.metrics.gradeLevel} → ${result.after.metrics.gradeLevel} grade · ${result.before.metrics.meanSentence} → ${result.after.metrics.meanSentence} words/sentence · ${countWords(result.text)} words`,
 					wrote ? `wrote ${relative(cwd, wrote) || wrote}` : "",
 				].filter(Boolean);
@@ -406,6 +451,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 					profile: profileName,
 					target: options.target,
 					force: options.force,
+					audit: options.audit,
 					...(signal ? { signal } : {}),
 					onEvent: (event) => {
 						const snapshot = snapshotFromEvent(event, label, profileName);

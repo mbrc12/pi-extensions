@@ -7,7 +7,9 @@
 import { appendFileSync } from "node:fs";
 import type { ModelCompletionContext } from "../../shared/model-config.ts";
 import { completeWithModelFallback } from "../../shared/model-config.ts";
-import { guardRewrite } from "./guard.ts";
+import { auditDocument, type AuditResult } from "./audit.ts";
+import { factsPreserved, guardRewrite } from "./guard.ts";
+import { applyStructural, buildSpine, joinSections } from "./spine.ts";
 import { type HousePolicy, loadHousePolicy, policyBlock } from "./policy.ts";
 import { splitSections, type Section } from "./sections.ts";
 import { countWords } from "./text.ts";
@@ -30,6 +32,8 @@ export interface DeslopOptions {
 	maxPasses?: number;
 	/** Run one pass even when the text already scores at or above the target. */
 	force?: boolean;
+	/** Run the document-level audit and apply structural edits. Default true. */
+	audit?: boolean;
 	concurrency?: number;
 	minGain?: number;
 	cwd: string;
@@ -43,6 +47,9 @@ export interface DeslopOptions {
 
 export type DeslopEvent =
 	| { kind: "measure"; report: ScoreReport; label: string }
+	| { kind: "audit_start"; sections: number }
+	| { kind: "audit_done"; findings: number; worst: number; ops: number; summary: string }
+	| { kind: "restructure"; applied: string[]; rejected: string[]; before: number; after: number }
 	| { kind: "pass_start"; pass: number; passes: number; sections: number; rules: number }
 	| { kind: "section_done"; pass: number; done: number; total: number; accepted: boolean; note?: string }
 	| { kind: "pass_end"; pass: number; before: number; after: number; accepted: boolean; note?: string }
@@ -56,6 +63,8 @@ export interface DeslopResult {
 	fixes: number;
 	notes: string[];
 	policy: HousePolicy;
+	audit?: AuditResult;
+	structural?: { applied: string[]; rejected: string[] };
 	model?: string;
 }
 
@@ -79,7 +88,12 @@ function measuredLine(ruleId: string, profile: Profile): string | undefined {
 	}
 }
 
-function buildSystemPrompt(policy: HousePolicy, profileName: string | Profile, hits: RuleHit[]): string {
+function buildSystemPrompt(
+	policy: HousePolicy,
+	profileName: string | Profile,
+	hits: RuleHit[],
+	instructions: string[] = [],
+): string {
 	const profile = resolveProfile(profileName);
 	const findings = hits.length
 		? hits
@@ -121,9 +135,13 @@ function buildSystemPrompt(policy: HousePolicy, profileName: string | Profile, h
 		"",
 		"Every word listed under 'found' must be gone from the rewrite, with the meaning preserved.",
 		"",
+		instructions.length ? `Document-level findings to address here:\n${instructions.map((line) => `- ${line}`).join("\n")}` : "",
+		"",
 		"Findings to fix, strongest first:",
 		findings,
-	].join("\n");
+	]
+		.filter((line) => line !== "")
+		.join("\n");
 }
 
 /**
@@ -256,6 +274,44 @@ export async function runDeslop(
 	const notes: string[] = [];
 	emit({ kind: "measure", report: best, label: "before" });
 
+	// ---- document audit ------------------------------------------------------
+	// One call over the spine, before any sentence is touched. Structural edits are
+	// applied by section id and fact-checked; everything else becomes an instruction
+	// for the rewrite pass.
+	let audit: AuditResult | undefined;
+	let auditInstructions: string[] = [];
+	let structural: { applied: string[]; rejected: string[] } | undefined;
+
+	if (options.audit !== false && countWords(current) >= 150) {
+		const spine = buildSpine(current);
+		if (spine.sections.length >= 2) {
+			emit({ kind: "audit_start", sections: spine.sections.length });
+			audit = await auditDocument(ctx, spine, { signal: options.signal });
+			const worst = audit.findings.reduce((max, finding) => Math.max(max, finding.severity), 0);
+			emit({ kind: "audit_done", findings: audit.findings.length, worst, ops: audit.ops.length, summary: audit.summary });
+			auditInstructions = audit.instructions;
+
+			if (audit.ops.length) {
+				const beforeTotal = best.total;
+				const applied = applyStructural(spine, audit.ops);
+				const facts = factsPreserved(current, applied.text);
+				const shrink = countWords(applied.text) / originalWords;
+				if (!applied.applied.length) {
+					structural = { applied: [], rejected: applied.rejected };
+				} else if (!facts.ok) {
+					structural = { applied: [], rejected: [...applied.rejected, `not applied: ${facts.missing.slice(0, 2).join(", ")} would be lost`] };
+				} else if (shrink < 0.7) {
+					structural = { applied: [], rejected: [...applied.rejected, `not applied: would remove ${Math.round((1 - shrink) * 100)}% of the words`] };
+				} else {
+					current = applied.text;
+					best = analyze(current, profile);
+					structural = { applied: applied.applied, rejected: applied.rejected };
+					emit({ kind: "restructure", applied: applied.applied, rejected: applied.rejected, before: beforeTotal, after: best.total });
+				}
+			}
+		}
+	}
+
 	let passes = 0;
 	let fixes = 0;
 	let acceptedPasses = 0;
@@ -276,7 +332,7 @@ export async function runDeslop(
 
 		let done = 0;
 		const rewritten = await mapLimit(sections, concurrency, async (section, index) => {
-			const systemPrompt = buildSystemPrompt(policy, profile, sectionHits[index]);
+			const systemPrompt = buildSystemPrompt(policy, profile, sectionHits[index], passes === 1 ? auditInstructions : []);
 			const result = await rewriteSection(ctx, section, systemPrompt, options);
 			done += 1;
 			if (result.text === section.raw && result.note) {
@@ -293,7 +349,9 @@ export async function runDeslop(
 			return result.text;
 		});
 
-		const candidate = rewritten.join("\n");
+		// Sections are rewritten independently, so a model that drops a trailing blank
+		// line would glue the next heading onto the paragraph above it.
+		const candidate = joinSections(rewritten, current.endsWith("\n"));
 		const before = best;
 		const after = analyze(candidate, profile);
 
@@ -344,6 +402,8 @@ export async function runDeslop(
 		after: best,
 		passes,
 		fixes,
+		audit,
+		structural,
 		notes: acceptedPasses ? [...notes, ...diagnostics] : [...notes, "kept the original: no pass improved the score", ...diagnostics],
 		policy,
 	};

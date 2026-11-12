@@ -81,6 +81,18 @@ export function collectFacts(text: string): Facts {
 	return { numbers, entities, links };
 }
 
+/** Structural edits may move text; they may not lose facts. */
+export function factsPreserved(before: string, after: string): { ok: boolean; missing: string[] } {
+	const from = collectFacts(before);
+	const to = collectFacts(after);
+	const missing = [
+		...[...from.numbers].filter((value) => !to.numbers.has(value)).map((value) => `number ${value}`),
+		...[...from.entities].filter((value) => !to.entities.has(value)).map((value) => `name ${value}`),
+		...[...from.links].filter((value) => !to.links.has(value)).map((value) => `link ${value}`),
+	];
+	return { ok: missing.length === 0, missing };
+}
+
 export interface GuardResult {
 	ok: boolean;
 	restored: string;
