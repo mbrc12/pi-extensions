@@ -527,6 +527,11 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 			}
 			const result = runResult.result!;
 
+			const target = options.target ?? 90;
+			const changed = result.text !== input;
+			const before = result.before;
+			const after = result.after;
+
 			if (writeBack && absolutePath) {
 				if (!(await persist(result))) {
 					ctx.ui.notify(`deslop: unchanged (${after.total.toFixed(1)} ${after.band}), file not written`, "warning");
@@ -542,10 +547,6 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const target = options.target ?? 90;
-			const changed = result.text !== input;
-			const before = result.before;
-			const after = result.after;
 
 			const buildHeader = (theme: any): string[] => {
 				const tone = after.total >= 80 ? "success" : after.total >= 70 ? "warning" : "error";
