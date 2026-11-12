@@ -216,7 +216,7 @@ export async function runDeslop(
 		fileTarget: options.fileTarget,
 	});
 	const profile = options.profile ?? (options.fileTarget ? "docs" : "general");
-	const target = options.target ?? 80;
+	const target = options.target ?? 90;
 	const maxPasses = Math.max(1, options.maxPasses ?? 3);
 	const minGain = options.minGain ?? 2;
 	const concurrency = Math.max(1, options.concurrency ?? 3);

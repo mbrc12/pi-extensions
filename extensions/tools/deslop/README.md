@@ -45,7 +45,7 @@ target, no rewrite is attempted and no model call is made.
 | `/deslop --force` | on by default for the command: run one pass even when the text already scores well |
 
 The preview header always states the score before and after, the band, and why the
-text is unchanged when it is ("already scores 89.7, at or above target 80").
+text is unchanged when it is ("already scores 93.2, at or above target 90").
 
 Preview keys: `j`/`k` scroll, `g`/`G` top or bottom, `space`/`b` page, `e` editor,
 `s` save, `q` close. `esc` during the rewrite aborts it.
@@ -97,7 +97,7 @@ protected span, and the guard fails any rewrite that drops one.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `target` | 80 | stop when the score reaches it |
+| `target` | 90 | stop when the score reaches it |
 | `max_passes` | 3 | also stops when a pass gains less than 2 points |
 | `profile` | `docs` for files, `general` for text | sentence and grade caps |
 | `voice` | — | a writing sample sets the sentence and grade targets numerically |
@@ -110,7 +110,7 @@ The rewriter model comes from the `deslopRewrite` purpose in
 
 - Scores writing patterns, not truth. It cannot tell whether a claim is correct.
 - A saturated fixture (300 words of pure slop) gains 20–25 points per run and
-  lands around 85. Weak source material constrains the ceiling.
+  lands around 85–90. Weak source material constrains the ceiling, not the loop.
 - Literal-word substitution is the failure mode of a cheap rewriter: the prompt
   forbids mechanical swaps, but an awkward phrase can still survive.
 

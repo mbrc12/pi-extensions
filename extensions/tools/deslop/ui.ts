@@ -33,9 +33,10 @@ function bar(fraction: number, theme: any): string {
 	return theme.fg("accent", "█".repeat(filled)) + theme.fg("dim", "░".repeat(BAR_WIDTH - filled));
 }
 
+/** Green at or above the default target of 90, amber in the 80s, red below. */
 function scoreColor(score: number): string {
-	if (score >= 80) return "success";
-	if (score >= 70) return "warning";
+	if (score >= 90) return "success";
+	if (score >= 80) return "warning";
 	return "error";
 }
 

@@ -30,7 +30,7 @@ const DeslopParams = Type.Object({
 	path: Type.Optional(Type.String({ description: "File to rewrite, relative to the working directory." })),
 	in_place: Type.Optional(Type.Boolean({ description: "Write the rewrite back to path. Returns only the report." })),
 	score_only: Type.Optional(Type.Boolean({ description: "Measure only. No model call, no rewrite." })),
-	target: Type.Optional(Type.Integer({ minimum: 50, maximum: 100, description: "Stop when the score reaches this. Default 80." })),
+	target: Type.Optional(Type.Integer({ minimum: 50, maximum: 100, description: "Stop when the score reaches this. Default 90." })),
 	max_passes: Type.Optional(Type.Integer({ minimum: 1, maximum: 5, description: "Rewrite passes to run. Default 3." })),
 	force: Type.Optional(Type.Boolean({ description: "Run one pass even when the text already scores at or above the target." })),
 	profile: Type.Optional(StringEnum(["general", "technical", "social", "agent", "docs"] as const)),
@@ -410,7 +410,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 					const result = await execute();
 					console.log(result.text);
 					console.error(reportLine(result));
-					console.error(outcomeStatus(result, input, options.target ?? 80));
+					console.error(outcomeStatus(result, input, options.target ?? 90));
 				} catch (error) {
 					console.error(`deslop failed: ${error instanceof Error ? error.message : String(error)}`);
 				}
@@ -446,7 +446,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const target = options.target ?? 80;
+			const target = options.target ?? 90;
 			const changed = result.text !== input;
 			const before = result.before;
 			const after = result.after;
