@@ -109,6 +109,8 @@ export class ProgressScreen implements Component {
 	private snapshot: ProgressSnapshot;
 	private frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 	private frameIndex = 0;
+	private timer: ReturnType<typeof setInterval> | undefined;
+	private startedAt = Date.now();
 
 	constructor(
 		private tui: any,
@@ -117,21 +119,45 @@ export class ProgressScreen implements Component {
 		private done: (value: { aborted?: boolean }) => void,
 	) {
 		this.snapshot = initial;
+		// A model call can run for 30 seconds. Without its own clock the spinner
+		// stops between progress events and the screen looks hung.
+		this.timer = setInterval(() => {
+			this.frameIndex = (this.frameIndex + 1) % this.frames.length;
+			this.requestRender();
+		}, 110);
+		(this.timer as { unref?: () => void }).unref?.();
+	}
+
+	private requestRender(): void {
+		try {
+			this.tui.requestRender();
+		} catch {
+			// The screen may be closing; a missed frame is harmless.
+		}
+	}
+
+	/** Call before done(): the interval must not outlive the screen. */
+	stop(): void {
+		if (this.timer) clearInterval(this.timer);
+		this.timer = undefined;
 	}
 
 	update(snapshot: ProgressSnapshot): void {
 		this.snapshot = snapshot;
-		this.frameIndex = (this.frameIndex + 1) % this.frames.length;
-		this.tui.requestRender();
+		this.requestRender();
 	}
 
 	render(width: number): string[] {
 		const theme = this.theme;
 		const spinner = theme.fg("accent", this.frames[this.frameIndex]);
 		const body = renderProgress(this.snapshot, theme);
+		const elapsed = seconds(Date.now() - this.startedAt);
 		const lines = [
 			"",
-			truncateToWidth(`  ${spinner} ${theme.bold("deslop")} ${theme.fg("muted", this.snapshot.label)}`, width),
+			truncateToWidth(
+				`  ${spinner} ${theme.bold("deslop")} ${theme.fg("muted", this.snapshot.label)} ${theme.fg("dim", elapsed)}`,
+				width,
+			),
 			"",
 			...body.map((line) => truncateToWidth(`  ${line}`, width)),
 			"",
@@ -142,7 +168,10 @@ export class ProgressScreen implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (data === "\u001b" || data === "\u0003") this.done({ aborted: true });
+		if (data === "\u001b" || data === "\u0003") {
+			this.stop();
+			this.done({ aborted: true });
+		}
 	}
 
 	invalidate(): void {}

@@ -389,7 +389,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				words < 25 ? "warning" : "info",
 			);
 
-			const execute = async (onProgress?: (snapshot: ProgressSnapshot) => void) => {
+			const execute = async (onProgress?: (snapshot: ProgressSnapshot) => void, signal?: AbortSignal) => {
 				return runDeslop(ctx, input, {
 					cwd,
 					fileTarget: Boolean(absolutePath),
@@ -397,6 +397,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 					profile: profileName,
 					target: options.target,
 					force: options.force,
+					...(signal ? { signal } : {}),
 					onEvent: (event) => {
 						const snapshot = snapshotFromEvent(event, label, profileName);
 						onProgress?.({ ...snapshot, elapsedMs: Date.now() - started });
@@ -417,17 +418,28 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
+			const controller = new AbortController();
 			const runResult = await ctx.ui.custom<{ result?: DeslopResult; error?: string } | null>((tui, theme, _kb, done) => {
 				const initial: ProgressSnapshot = { phase: "measure", label, profile: profileName };
-				const component = new ProgressScreen(tui, theme, initial, () => done(null));
+				let finished = false;
+				const finish = (value: { result?: DeslopResult; error?: string } | null) => {
+					if (finished) return;
+					finished = true;
+					component.stop();
+					done(value);
+				};
+				const component = new ProgressScreen(tui, theme, initial, () => {
+					controller.abort();
+					finish(null);
+				});
 				void (async () => {
 					try {
-						const result = await execute((snapshot) => component.update(snapshot));
-						done({ result });
+						const result = await execute((snapshot) => component.update(snapshot), controller.signal);
+						finish({ result });
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
 						component.update({ phase: "error", label, profile: profileName, message });
-						done({ error: message });
+						finish({ error: controller.signal.aborted ? "aborted" : message });
 					}
 				})();
 				return component;
