@@ -4,8 +4,9 @@
  *   - the full-screen progress and preview screens used by /deslop
  */
 
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth } from "@earendil-works/pi-tui";
 import { summarize, type ScoreReport } from "./score.ts";
 
 export interface ProgressSnapshot {
@@ -150,20 +151,19 @@ export interface PreviewResult {
 	action: "close" | "edit" | "save";
 }
 
-/** Scrollable preview of a long rewrite, used by /deslop. */
+/** Scrollable preview of a long rewrite, used by /deslop. Renders as Markdown. */
 export class PreviewScreen implements Component {
 	private offset = 0;
-	private lines: string[];
+	private markdown: Markdown | undefined;
+	private lines: string[] = [];
 
 	constructor(
 		private tui: any,
 		private theme: any,
 		private header: string[],
-		body: string,
+		private body: string,
 		private done: (value: PreviewResult) => void,
-	) {
-		this.lines = body.split("\n");
-	}
+	) {}
 
 	private height(): number {
 		const rows = (this.tui?.terminal?.rows as number | undefined) ?? (process.stdout.rows || 40);
@@ -175,26 +175,34 @@ export class PreviewScreen implements Component {
 		this.offset = Math.min(Math.max(0, this.offset), max);
 	}
 
+	private rendered(width: number): string[] {
+		// Markdown caches per width internally; keep one instance so scrolling stays cheap.
+		if (!this.markdown) this.markdown = new Markdown(this.body, 0, 0, getMarkdownTheme());
+		return this.markdown.render(Math.max(24, width - 2));
+	}
+
 	render(width: number): string[] {
+		this.lines = this.rendered(width);
 		this.clampOffset();
+
 		const theme = this.theme;
 		const height = this.height();
 		const visible = this.lines.slice(this.offset, this.offset + height);
 		const percent = this.lines.length ? Math.round(((this.offset + height) / this.lines.length) * 100) : 100;
-		const scrollNote = theme.fg("dim", `${Math.min(percent, 100)}%  ${this.offset + 1}-${Math.min(this.offset + height, this.lines.length)}/${this.lines.length}`);
+		const scrollNote = theme.fg(
+			"dim",
+			`${Math.min(percent, 100)}%  ${this.offset + 1}-${Math.min(this.offset + height, this.lines.length)}/${this.lines.length}`,
+		);
+		const rule = theme.fg("border", "─".repeat(Math.max(0, Math.min(width - 2, 100))));
 
 		const out: string[] = [""];
 		for (const line of this.header) out.push(truncateToWidth(`  ${line}`, width));
 		out.push(truncateToWidth(`  ${scrollNote}`, width));
-		out.push(theme.fg("border", "─".repeat(Math.max(0, Math.min(width - 2, 100)))));
-		for (const line of visible) out.push(truncateToWidth(line ? `  ${line}` : "", width));
-		out.push(theme.fg("border", "─".repeat(Math.max(0, Math.min(width - 2, 100)))));
-		out.push(
-			truncateToWidth(
-				`  ${theme.fg("dim", "j/k scroll · g/G top/bottom · e editor · s save · q close")}`,
-				width,
-			),
-		);
+		out.push(rule);
+		// Markdown output is already wrapped and styled; do not re-truncate it.
+		out.push(...visible.map((line) => `  ${line}`));
+		out.push(rule);
+		out.push(truncateToWidth(`  ${theme.fg("dim", "j/k scroll · g/G top/bottom · e editor · s save · q close")}`, width));
 		return out;
 	}
 
@@ -213,7 +221,9 @@ export class PreviewScreen implements Component {
 		this.tui.requestRender();
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.markdown?.invalidate();
+	}
 }
 
 export { summarize };
