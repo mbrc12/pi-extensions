@@ -59,6 +59,26 @@ export interface DeslopResult {
 	model?: string;
 }
 
+/** Name the number behind a metric finding so the model knows what to change. */
+function measuredLine(ruleId: string, profile: Profile): string | undefined {
+	switch (ruleId) {
+		case "paragraph_length":
+			return `currently over ${profile.maxParaSentences} sentences in one paragraph, limit ${profile.maxParaSentences}`;
+		case "mean_sentence":
+			return `average above ${profile.maxSentence} words, limit ${profile.maxSentence}`;
+		case "grade_level":
+			return `reading grade above ${profile.maxGrade}, limit ${profile.maxGrade}`;
+		case "medium_variety":
+			return "fewer than two formats in use: headings, lists, tables, code, bold, italics";
+		case "list_opportunity":
+			return "a paragraph of parallel items with no bullet list";
+		case "table_opportunity":
+			return "numbers compared in prose with no table";
+		default:
+			return undefined;
+	}
+}
+
 function buildSystemPrompt(policy: HousePolicy, profileName: string | Profile, hits: RuleHit[]): string {
 	const profile = resolveProfile(profileName);
 	const findings = hits.length
@@ -70,9 +90,9 @@ function buildSystemPrompt(policy: HousePolicy, profileName: string | Profile, h
 							return replacement ? `${term} → ${replacement}` : term;
 						})
 						.join(", ");
-					return replacements
-						? `- ${hit.label} (found: ${replacements}). ${hit.fix}`
-						: `- ${hit.label}: ${hit.fix}`;
+					const measured = measuredLine(hit.id, profile);
+					if (replacements) return `- ${hit.label} (found: ${replacements}). ${hit.fix}`;
+					return measured ? `- ${hit.label} (${measured}). ${hit.fix}` : `- ${hit.label}: ${hit.fix}`;
 				})
 				.join("\n")
 		: "- No structural findings. Tighten sentences and remove filler.";
@@ -280,7 +300,10 @@ export async function runDeslop(
 		const lengthRatio = countWords(candidate) / originalWords;
 		const lengthOk = lengthRatio >= 0.7 && lengthRatio <= 1.15;
 		const gain = after.total - before.total;
-		const accepted = gain > 0 && lengthOk;
+		// Caps can hold two versions at the same total. When that happens, prefer the
+		// one with the lower raw penalty instead of reporting a plateau as no gain.
+		const tiebreak = Math.abs(gain) < 0.05 && after.rawX < before.rawX - 0.01;
+		const accepted = (gain > 0 || tiebreak) && lengthOk;
 
 		emit({
 			kind: "pass_end",

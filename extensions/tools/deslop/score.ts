@@ -223,6 +223,14 @@ function computeMetrics(masked: string, original: string, profile: Profile): Met
 
 	const paragraphs = masked
 		.split(/\n\s*\n/)
+		.filter((block) => {
+			// A list is not a paragraph. Counting six numbered items as one
+			// fourteen-sentence paragraph invents a defect the text does not have.
+			const lines = block.split("\n").filter((line) => line.trim());
+			if (!lines.length) return false;
+			const listish = lines.filter((line) => /^\s{0,3}(?:[-*+]|\d+\.)\s+/.test(line)).length;
+			return listish / lines.length < 0.6;
+		})
 		.map((block) => proseView(block))
 		.filter((block) => words(block).length > 0);
 	const paragraphSentences = paragraphs.map((block) => sentences(block).length).filter((count) => count > 0);

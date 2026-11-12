@@ -49,6 +49,13 @@ describe("score", () => {
 		expect(wallReport.axes.structured).toBeLessThan(20);
 	});
 
+	test("does not count a numbered list as one long paragraph", () => {
+		const list = "Intro line.\n\n1. One item here.\n2. Another item here.\n3. Third item here.\n4. Fourth item here.\n5. Fifth item here.\n6. Sixth item here.";
+		const report = analyze(list, "docs");
+		expect(report.metrics.paraMax).toBeLessThan(3);
+		expect(report.hits.map((hit) => hit.id)).not.toContain("paragraph_length");
+	});
+
 	test("does not excuse a wall of prose", () => {
 		const wallReport = analyze(wall, "docs");
 		const ids = wallReport.hits.map((hit) => hit.id);
@@ -130,6 +137,22 @@ describe("guard", () => {
 		const result = guardRewrite(original, "The run took 4 minutes, down from 11.", spans);
 		expect(result.ok).toBe(false);
 		expect(result.reason).toContain("11");
+	});
+
+	test("does not treat a line-opening word as a name", () => {
+		const original = "Removing the per-row forks. The script ran once per popup.";
+		const { masked, spans } = maskProtected(original);
+		const draft = masked.replace("Removing the per-row forks.", "We removed the per-row forks.");
+		const result = guardRewrite(original, draft, spans);
+		expect(result.ok).toBe(true);
+	});
+
+	test("does not treat a heading word as a name", () => {
+		const original = "## Removing the forks\n\nThe script ran once per popup and cost 35 ms.";
+		const { spans } = maskProtected(original);
+		const draft = "## Fewer forks\n\nThe script ran once per popup and cost 35 ms.";
+		const result = guardRewrite(original, draft, spans);
+		expect(result.ok).toBe(true);
 	});
 
 	test("rejects a dropped name", () => {

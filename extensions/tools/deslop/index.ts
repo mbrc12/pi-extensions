@@ -95,12 +95,20 @@ function reportBlock(report: ScoreReport): string {
 function outcomeStatus(result: DeslopResult, input: string, target: number): string {
 	if (result.text !== input) {
 		const kept = result.notes.filter((note) => note.startsWith("section")).length;
-		return `${result.passes} pass${result.passes === 1 ? "" : "es"} · ${result.fixes} fixes${kept ? ` · ${kept} section${kept === 1 ? "" : "s"} left alone` : ""}`;
+		const edited = `${result.passes} pass${result.passes === 1 ? "" : "es"} · ${result.fixes} fixes${kept ? ` · ${kept} section${kept === 1 ? "" : "s"} left alone` : ""}`;
+		// Text changed but the number did not: a cap is holding it down. Say which.
+		if (result.after.capReason && Math.abs(result.after.total - result.before.total) < 0.05) {
+			return `edited, score held at ${result.after.total.toFixed(1)} by ${result.after.capReason} — ${edited}`;
+		}
+		return edited;
 	}
 	if (result.before.total >= target) {
 		return `unchanged — already scores ${result.before.total.toFixed(1)}, at or above target ${target}. Use force to push one more pass, or raise the target.`;
 	}
-	return `unchanged — ${result.notes.find((note) => !note.includes("no pass improved")) ?? "no pass improved the score"}`;
+	// Prefer the section-level reason: "dropped a name" explains more than "no gain".
+	const section = result.notes.find((note) => note.startsWith("section"));
+	const pass = result.notes.find((note) => !note.includes("no pass improved") && !note.startsWith("section"));
+	return `unchanged — ${section ?? pass ?? "no pass improved the score"}`;
 }
 
 function snapshotFromEvent(event: DeslopEvent, label: string, profile: string): ProgressSnapshot {

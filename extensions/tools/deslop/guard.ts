@@ -41,19 +41,35 @@ export interface Facts {
 
 const STOP_ENTITIES = new Set(["The", "This", "That", "These", "Those", "There", "It", "If", "When", "But", "And", "If", "One", "Two", "Three"]);
 
+/** Offsets where a capitalized word is a sentence opener, not a name. */
+function sentenceStarts(text: string): Set<number> {
+	const starts = new Set<number>();
+	let offset = 0;
+	for (const line of text.split("\n")) {
+		const opener = line.match(/^\s*(?:#{1,6}\s+|[-*+>]\s+|\d+\.\s+)?/);
+		const firstNonSpace = line.search(/\S/);
+		if (firstNonSpace >= 0) starts.add(offset + (opener?.[0].length ?? 0));
+		for (const match of line.matchAll(/[.!?:]\s+/g)) {
+			starts.add(offset + (match.index ?? 0) + match[0].length);
+		}
+		offset += line.length + 1;
+	}
+	return starts;
+}
+
 export function collectFacts(text: string): Facts {
-	const withoutCode = text.replace(/```[\s\S]*?```/g, " ").replace(/`[^`\n]+`/g, " ");
+	// Headings and code are structure, not claims: a rewrite may restyle them.
+	const withoutCode = text
+		.replace(/```[\s\S]*?```/g, " ")
+		.replace(/`[^`\n]+`/g, " ")
+		.replace(/^\s{0,3}#{1,6}\s+.*$/gm, " ");
 
 	const numbers = normalizeNumbers(withoutCode);
+	const starts = sentenceStarts(withoutCode);
 
 	const entities = new Set<string>();
-	const sentenceStarts = new Set<number>();
-	for (const match of withoutCode.matchAll(/(?:^|[.!?:]\s+|\n\s*|^\s*[-*+#]+\s*)/g)) {
-		sentenceStarts.add((match.index ?? 0) + match[0].length);
-	}
 	for (const match of withoutCode.matchAll(/(?<![\w-])[A-Z][A-Za-z0-9]{1,}/g)) {
-		const atStart = sentenceStarts.has(match.index ?? -1);
-		if (atStart) continue;
+		if (starts.has(match.index ?? -1)) continue;
 		if (STOP_ENTITIES.has(match[0])) continue;
 		entities.add(match[0]);
 	}
