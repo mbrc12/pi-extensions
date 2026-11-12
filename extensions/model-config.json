@@ -156,5 +156,12 @@
     "anthropic/claude-haiku-3-5",
     "google/gemini-2.0-flash",
     "openai-codex-2/gpt-6-luna"
+  ],
+  "deslopRewrite": [
+    "opencode-go/deepseek-v4-pro",
+    "openai-codex/gpt-6-luna",
+    "opencode-go/deepseek-v4.1-flash",
+    "openai-codex-2/gpt-6-luna",
+    "opencode-go/kimi-k2.6"
   ]
 }

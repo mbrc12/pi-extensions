@@ -16,6 +16,7 @@ export const MODEL_CONFIG_PURPOSES = [
   "consultSummary",
   "permissionClassification",
   "pythonWriteClassification",
+  "deslopRewrite",
 ] as const;
 export type ModelConfigPurpose = typeof MODEL_CONFIG_PURPOSES[number];
 
@@ -51,6 +52,16 @@ const SUBAGENT_CAPABILITY_FALLBACKS: Record<SubagentCapability, readonly Subagen
 };
 
 const DEFAULT_MODEL_CONFIG: Record<ModelConfigPurpose, string[]> = {
+  // deslop rewrites whole sections under a fixed rule list. It needs a model that
+  // follows negative constraints (keep every name and number) more than one that
+  // writes beautifully, so the cheap flash models come first.
+  deslopRewrite: [
+    "opencode-go/deepseek-v4-pro",
+    "openai-codex/gpt-6-luna",
+    "opencode-go/deepseek-v4.1-flash",
+    "openai-codex-2/gpt-6-luna",
+    "opencode-go/kimi-k2.6",
+  ],
   recapGeneration: [
     // DeepSeek V4 Flash has the largest Go-plan allowance and is the lowest-cost
     // model listed by OpenCode for lightweight background requests.

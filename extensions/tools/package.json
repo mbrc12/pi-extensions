@@ -2,14 +2,15 @@
   "pi": {
     "extensions": [
       "./ask-question.ts",
-        "./consult/index.ts",
+      "./consult/index.ts",
       "./self_compact.ts",
       "./export-md.ts",
       "./permissions/index.ts",
       "./py-explore/index.ts",
       "./web-use/index.ts",
       "./memory-store/index.ts",
-      "./task-backgrounder/index.ts"
+      "./task-backgrounder/index.ts",
+      "./deslop/index.ts"
     ]
   }
 }

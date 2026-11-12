@@ -16,6 +16,7 @@ symlink to this folder.
 | `tui/thinking-tail` | Shows only the last 5 displayed lines of long thinking blocks |
 | `tui/vscode-theme` | Switches theme inside a VS Code terminal without touching global settings |
 | `tools/ask-question` | `ask_question` dialog: single-choice, multi-choice, or free text |
+| `tools/deslop` | `deslop` rewrites text or a file into readable prose: measures it against a 43-rule pack, rewrites only the failing sections, keeps every fact and link, re-measures, and keeps the better version. Also `/deslop` for the last answer |
 | `tools/consult` | `consult`: search, list, and summarize other Pi sessions, or this session's branch with `self: true` |
 | `tools/export-md` | `/export-md` writes the session branch as a Markdown transcript |
 | `tools/memory-store` | Persistent memory in SQLite with FTS5 search plus LLM rerank |
