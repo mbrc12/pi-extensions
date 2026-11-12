@@ -14,7 +14,9 @@ const PATTERNS: RegExp[] = [
 	/\$\$[\s\S]*?\$\$/g, // display math
 	/\$[^$\n]+\$/g, // inline math
 	/!?\[[^\]\n]*\]\([^)\n]*\)/g, // whole markdown link or image, text included
-	/^(?:[ \t]*\|.*\|[ \t]*\n?)+/gm, // tables
+	/^(?:[ \t]*\|.*\|[ \t]*\n?)+/gm, // pipe tables
+	/^(?:[ \t]*(?=[^\n]*[│┃┌┐└┘├┤┬┴┼╭╮╯╰─━])[^\n]*\n?)+/gm, // box-drawn tables
+	/^(?:[ \t]*\+[-=]{2,}\+[^\n]*\n?)+/gm, // ascii tables
 	/https?:\/\/[^\s<>()]+/g, // bare URLs
 	/(?:^|[\s(])(?:~\/|\/(?:[\w.-]+\/)+)[\w.-]*/g, // absolute and home paths
 	/(?:^|\s)--?[a-z][\w-]*/gi, // flags
@@ -73,9 +75,38 @@ export function restoreProtected(masked: string, spans: string[]): RestoreResult
 	return { text, missing, duplicated, unknownTokens };
 }
 
+/**
+ * Unwrap hard-wrapped prose. A 130-column paragraph is one sentence boundary per
+ * line otherwise, which halves the measured sentence length and fakes a low
+ * reading grade on every wrapped document.
+ */
+function unwrap(text: string): string {
+	const blocks: string[] = [];
+	let current = "";
+	const flush = () => {
+		if (current.trim()) blocks.push(current.trim());
+		current = "";
+	};
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		if (!line) {
+			flush();
+			continue;
+		}
+		if (/^(?:[-*+]|\d+\.|#{1,6})\s/.test(line)) {
+			flush();
+			current = line;
+			continue;
+		}
+		current = current ? `${current} ${line}` : line;
+	}
+	flush();
+	return blocks.join("\n\n");
+}
+
 /** Prose-only view for scoring: tokens, markdown syntax, and list markers removed. */
 export function proseView(masked: string): string {
-	return masked
+	return unwrap(masked)
 		.replace(/\[\[\d+\]\]/g, " ")
 		.replace(/^\s{0,3}#{1,6}\s+/gm, "")
 		.replace(/^\s{0,3}[-*+]\s+/gm, "")

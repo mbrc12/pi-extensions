@@ -26,6 +26,8 @@ export interface Metrics {
 	headingEchoShare: number;
 	hedgePer100: number;
 	abstractOpenerShare: number;
+	headingCount: number;
+	paragraphCount: number;
 }
 
 export interface RuleHit {
@@ -48,6 +50,57 @@ export interface ScoreReport {
 	words: number;
 	sentences: number;
 	profile: string;
+	/** Weighted penalty ratio before the calibration curve. 0 is clean. */
+	rawX: number;
+	/** Set when a single violation capped the total below the weighted average. */
+	capReason?: string;
+	cap?: number;
+}
+
+/**
+ * A tell that is present at all costs a fixed share of the rule. The rest of the
+ * penalty ramps with density, so repeated tells cost more than one.
+ */
+const PRESENCE = 0.35;
+
+/**
+ * Calibration curve. Fitted by least squares in log space over the anchor set in
+ * deslop.test.ts, not chosen by hand:
+ *
+ *   tiny slop (17 words)  25      bad.md   40      links.md  65
+ *   ok.md                 85      good.md  97
+ *
+ * Fit residual is 6% RMS. Refit with the same five anchors if the rule pack
+ * changes; never tune these by eye.
+ */
+export const CURVE = { k: 1.93, g: 0.6 };
+
+/**
+ * A rule only carries weight when the text could break it. Rules that need
+ * headings, several paragraphs, or a long document are skipped on short inputs.
+ */
+export function applicable(rule: Rule, metrics: Metrics, profile: Profile): boolean {
+	switch (rule.id) {
+		case "heading_echo":
+		case "section_length":
+			return metrics.headingCount >= 1;
+		case "bullet_shortfall":
+			return metrics.words >= 300 && profile.minBulletShare > 0;
+		case "duplicate_phrases":
+			return metrics.words >= 150;
+		case "sentence_rhythm":
+		case "repeated_openers":
+			return metrics.sentences >= 5;
+		case "paragraph_length":
+		case "paragraph_mean":
+			return metrics.paragraphCount >= 3;
+		case "emoji_decoration":
+		case "bold_decoration":
+		case "listicle_stem":
+			return true;
+		default:
+			return true;
+	}
 }
 
 const HEDGES =
@@ -177,6 +230,8 @@ function computeMetrics(masked: string, profile: Profile): Metrics {
 		headingEchoShare: round(headingEchoShare),
 		hedgePer100: round(per100(hedges)),
 		abstractOpenerShare: round(abstractOpeners / Math.max(1, sentenceCount)),
+		headingCount: (masked.match(/^\s{0,3}#{1,6}\s+\S/gm) ?? []).length,
+		paragraphCount: paragraphSentences.length,
 	};
 }
 
@@ -247,9 +302,15 @@ export function analyze(text: string, profileName: string | Profile = "general")
 	const hits: RuleHit[] = [];
 
 	for (const rule of RULES) {
+		// A rule that cannot apply to this text must not produce a hit either,
+		// otherwise short inputs are punished for rules they never faced.
+		if (!applicable(rule, metrics, profile)) continue;
 		if (rule.kind === "pattern") {
 			const { count, evidence, terms } = patternHits(rule, prose);
-			const penalty = count === 0 ? 0 : Math.min(1, count * rule.perHit);
+			// Density, not a flat per-hit cost: one tell in 200 words is a
+			// different document from one tell in 2,000.
+			const rate = (count * 100) / Math.max(60, metrics.words);
+			const penalty = count === 0 ? 0 : clamp01(PRESENCE + (1 - PRESENCE) * (rate / rule.density));
 			if (penalty > 0) {
 				hits.push({ id: rule.id, axis: rule.axis, label: rule.label, fix: rule.fix, penalty, count, evidence, terms });
 			}
@@ -271,22 +332,59 @@ export function analyze(text: string, profileName: string | Profile = "general")
 	}
 
 	const axes: Record<Axis, number> = { plain: 100, human: 100, structured: 100, dense: 100 };
+	// Opportunity: a 40-word sample cannot demonstrate eighteen tells, so the
+	// denominator scales with how much text the rules had to work with. Without
+	// this, short slop samples score as if they passed rules they never faced.
+	const opportunity = Math.min(1, Math.max(0.2, metrics.words / 250));
+
+	let rawX = 0;
+	let effectiveWeight = 0;
+	let effectiveTotal = 0;
 	for (const axis of Object.keys(axes) as Axis[]) {
-		const axisRules = RULES.filter((rule) => rule.axis === axis);
-		const totalWeight = axisRules.reduce((sum, rule) => sum + rule.weight, 0);
+		const allRules = RULES.filter((rule) => rule.axis === axis);
+		const axisRules = allRules.filter((rule) => applicable(rule, metrics, profile));
+		const fullWeight = allRules.reduce((sum, rule) => sum + rule.weight, 0);
+		const applicableWeight = axisRules.reduce((sum, rule) => sum + rule.weight, 0);
+		if (applicableWeight === 0) {
+			axes[axis] = 100;
+			continue;
+		}
 		const weightedPenalty = hits
 			.filter((hit) => hit.axis === axis)
 			.reduce((sum, hit) => {
 				const rule = RULES.find((candidate) => candidate.id === hit.id);
 				return sum + (rule?.weight ?? 0) * hit.penalty;
 			}, 0);
-		axes[axis] = round(Math.max(0, 100 * (1 - weightedPenalty / Math.max(1, totalWeight))), 1);
+		const share = weightedPenalty / (applicableWeight * opportunity);
+		axes[axis] = round(Math.max(0, 100 * Math.max(0, 1 - CURVE.k * share) ** CURVE.g), 1);
+
+		// An axis the text cannot be judged on contributes little, and the total is
+		// renormalised over the weight that remains.
+		const axisWeight = AXIS_WEIGHT[axis] * (applicableWeight / fullWeight);
+		effectiveWeight += axisWeight;
+		effectiveTotal += axes[axis] * axisWeight;
+		rawX += axisWeight * share;
 	}
 
-	const total = round(
-		(Object.keys(axes) as Axis[]).reduce((sum, axis) => sum + axes[axis] * AXIS_WEIGHT[axis], 0),
-		1,
-	);
+	const averaged = effectiveWeight > 0 ? effectiveTotal / effectiveWeight : 100;
+
+	// One severe violation is a verdict, not a rounding error. A document with a
+	// 14-sentence paragraph, or with a strong tell left in, cannot be an A no
+	// matter how clean the other axes are: averaging over ten rules per axis
+	// would let it through.
+	let cap = 100;
+	let capReason: string | undefined;
+	for (const hit of hits) {
+		const rule = RULES.find((candidate) => candidate.id === hit.id);
+		if (!rule) continue;
+		const ceiling = hit.penalty >= 0.85 && rule.weight >= 8 ? 74 : hit.penalty >= 0.8 ? 79 : 100;
+		if (ceiling < cap) {
+			cap = ceiling;
+			capReason = hit.label;
+		}
+	}
+
+	const total = round(Math.min(averaged, cap), 1);
 
 	hits.sort((left, right) => right.penalty - left.penalty || right.count - left.count);
 
@@ -299,6 +397,9 @@ export function analyze(text: string, profileName: string | Profile = "general")
 		words: metrics.words,
 		sentences: metrics.sentences,
 		profile: profile.name,
+		rawX: round(rawX, 4),
+		cap: cap < 100 ? cap : undefined,
+		capReason,
 	};
 }
 
@@ -323,5 +424,6 @@ export function topFixes(report: ScoreReport, limit = 8): RuleHit[] {
 export function summarize(report: ScoreReport): string {
 	const remaining = report.hits.slice(0, 3).map((hit) => hit.label);
 	const tail = remaining.length ? ` · left: ${remaining.join(", ")}` : "";
-	return `${report.total.toFixed(1)} ${report.band} (plain ${report.axes.plain} · human ${report.axes.human} · structured ${report.axes.structured} · dense ${report.axes.dense})${tail}`;
+	const cap = report.capReason ? ` · capped at ${report.cap} by ${report.capReason}` : "";
+	return `${report.total.toFixed(1)} ${report.band} (plain ${report.axes.plain} · human ${report.axes.human} · structured ${report.axes.structured} · dense ${report.axes.dense})${cap}${tail}`;
 }

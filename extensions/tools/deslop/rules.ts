@@ -33,8 +33,11 @@ export interface PatternRule {
 	/** Source and flags are stored separately so matching never leaks lastIndex. */
 	source: string;
 	flags: string;
-	/** Penalty per hit, before the cap. */
-	perHit: number;
+	/**
+	 * Tells per 100 words that saturate this rule. One strong tell in a short
+	 * text reads as dense; the same tell spread across a long document does not.
+	 */
+	density: number;
 	/** Extra weight when ranking rules for the prompt. */
 	weight: number;
 	label: string;
@@ -93,12 +96,12 @@ const pattern = (
 	axis: Axis,
 	source: string,
 	flags: string,
-	perHit: number,
+	density: number,
 	weight: number,
 	label: string,
 	fix: string,
 	terms = false,
-): PatternRule => ({ id, axis, kind: "pattern", source, flags, perHit, weight, label, fix, terms });
+): PatternRule => ({ id, axis, kind: "pattern", source, flags, density, weight, label, fix, terms });
 
 /**
  * Concrete substitutions. Naming the replacement in the prompt beats describing
@@ -160,7 +163,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:it'?s|that'?s|this is|it is|this isn'?t|it isn'?t)\\s+(?:not|n't)\\s+(?:just|only|merely|about)\\b[^.;!?\\n]{0,90}?(?:[;,]\\s*(?:it'?s|it is|they'?re|but)\\b)",
 		"i",
-		0.9,
+		0.4,
 		10,
 		"not X, but Y",
 		"State the claim once, directly. Delete the negation you are correcting and keep only the real assertion.",
@@ -170,7 +173,7 @@ export const RULES: Rule[] = [
 		"human",
 		"(?:^|[.!?]\\s+|\\n\\s*)(?:let that sink in|full stop|period\\.|that'?s it\\.|end of story|read that again|i'?ll say it again)\\b",
 		"i",
-		0.9,
+		0.4,
 		10,
 		"one-line closer",
 		"Delete the closer. The paragraph before it already made the point.",
@@ -181,7 +184,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:at its core|at the end of the day|when you think about it|at the heart of it|the real (?:magic|power|work) (?:happens|is)|what really matters is|the beauty of)\\b",
 		"i",
-		0.8,
+		0.45,
 		9,
 		"deep-sounding saying",
 		"Replace the saying with the specific claim it is standing in for, or delete it.",
@@ -192,7 +195,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:here'?s the thing|the thing is|honestly\\b|let'?s be (?:clear|honest)|to be (?:clear|honest)|the truth is|spoiler[: ]|plot twist)\\b",
 		"i",
-		0.8,
+		0.45,
 		9,
 		"staged run-up",
 		"Cut the run-up. Start with the sentence that follows it.",
@@ -203,7 +206,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:i'?m not saying|that'?s not to say|don'?t get me wrong|this isn'?t (?:about|to say)|it'?s not that)\\b",
 		"i",
-		0.8,
+		0.5,
 		8,
 		"arguing with no one",
 		"Delete the imaginary objection and keep the claim.",
@@ -216,7 +219,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:delve[sd]?|delving|testament to|landscape of|realm of|tapestry|showcase[sd]?|underscore[sd]?|pivotal|crucial|robust|seamless(?:ly)?|comprehensive|holistic|leverage[sd]?|utiliz(?:e|es|ed|ing)|utilis(?:e|es|ed|ing)|paradigm|foster(?:s|ed|ing)?|garner(?:s|ed)?|myriad|plethora|embark(?:s|ed|ing)?|elevate[sd]?|unpack(?:s|ed|ing)?)\\b",
 		"i",
-		0.2,
+		1.2,
 		9,
 		"AI vocabulary",
 		"Use the plain word. Say what the thing does.",
@@ -227,7 +230,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:plays? a (?:crucial|vital|key|pivotal|central) role|stands? as a testament|marks? a (?:significant|pivotal|major) (?:shift|moment|milestone)|serves? as a reminder|underscores? the (?:importance|need)|is a game[- ]?changer)\\b",
 		"i",
-		0.7,
+		0.6,
 		8,
 		"inflated significance",
 		"State the concrete effect instead: what changed, for whom, by how much.",
@@ -247,7 +250,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:supercharg(?:e|es|ed|ing)|unlock(?:s|ed|ing)?|revolutionary|cutting[- ]edge|state[- ]of[- ]the[- ]art|best[- ]in[- ]class|world[- ]class|effortless(?:ly)?|powerful|delightful|magical)\\b",
 		"i",
-		0.5,
+		1.0,
 		5,
 		"sales language",
 		"Replace the adjective with the property that earns it, or delete it.",
@@ -258,7 +261,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:great question|good question|i hope this helps|hope this helps|let me know if you|feel free to reach out|as an ai\\b|i cannot browse|i don'?t have access to real[- ]?time)\\b",
 		"i",
-		0.9,
+		0.5,
 		7,
 		"chatbot residue",
 		"Delete the conversational wrapper. The text should read as a document, not a reply.",
@@ -268,7 +271,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:as of my (?:last )?(?:knowledge|training)|up to my (?:training|knowledge) cutoff|cannot provide (?:real[- ]?time|up[- ]?to[- ]?date))\\b",
 		"i",
-		0.8,
+		0.6,
 		6,
 		"knowledge-limit disclaimer",
 		"Cut the disclaimer or replace it with the date and scope of what the text actually covers.",
@@ -278,7 +281,7 @@ export const RULES: Rule[] = [
 		"human",
 		"\\b(?:in this (?:article|post|section|guide|page),? (?:we|i)(?:'ll| will)|this (?:article|post|section|guide) (?:will )?(?:cover|explain|explore|walk)|we'?ll (?:look at|explore|cover) (?:how|what|why))\\b",
 		"i",
-		0.6,
+		0.7,
 		6,
 		"writing about the document",
 		"Delete the announcement and start with the content. The heading already says what this is.",
@@ -288,7 +291,7 @@ export const RULES: Rule[] = [
 		"human",
 		",\\s+(?:highlighting|underscoring|emphasi[sz]ing|reflecting|showcasing|demonstrating|illustrating|revealing|ensuring|allowing for)\\b",
 		"i",
-		0.6,
+		0.8,
 		6,
 		"shallow -ing phrase",
 		"Turn the -ing phrase into a plain statement of fact, or delete it.",
@@ -333,7 +336,7 @@ export const RULES: Rule[] = [
 		"plain",
 		"\\b(?:may|might|could|would)\\s+(?:potentially|possibly|perhaps|conceivably)\\b|\\b(?:it (?:is|seems) (?:possible|likely) that)\\b",
 		"i",
-		0.6,
+		0.8,
 		5,
 		"stacked hedge",
 		"Keep one hedge or none. Say what is known and what was not tested.",
@@ -343,7 +346,7 @@ export const RULES: Rule[] = [
 		"plain",
 		"(?:^|[.!?]\\s+|\\n\\s*)(?:it is worth noting|it'?s worth noting|it is important to|it'?s important to|notably,|importantly,|interestingly,|in today'?s|in order to|due to the fact that)\\b",
 		"i",
-		0.5,
+		1.0,
 		4,
 		"filler opener",
 		"Delete the filler and keep the sentence. 'in order to' becomes 'to'.",
@@ -375,13 +378,13 @@ export const RULES: Rule[] = [
 		"listicle stem",
 		"Delete the stem and start the list.",
 	),
-	pattern("emoji_decoration", "structured", "[\\u{1F300}-\\u{1FAFF}\\u{2700}-\\u{27BF}]", "u", 0.3, 3, "emoji decoration", "Delete the emoji. Keep text for readers."),
+	pattern("emoji_decoration", "structured", "[\\u{1F300}-\\u{1FAFF}\\u{2700}-\\u{27BF}]", "u", 2.0, 3, "emoji decoration", "Delete the emoji. Keep text for readers."),
 	pattern(
 		"bold_decoration",
 		"structured",
 		"\\*\\*[^*\\n]{1,40}\\*\\*(?![\\s]*[:.])",
 		"",
-		0.12,
+		3.0,
 		3,
 		"bold used as decoration",
 		"Keep bold for the one claim, number, or warning that matters. Remove the rest.",

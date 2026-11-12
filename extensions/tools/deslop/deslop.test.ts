@@ -11,14 +11,37 @@ import { analyze, topFixes } from "./score.ts";
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "tests", "fixtures", "deslop");
 const bad = readFileSync(join(fixtures, "bad.md"), "utf8");
 const good = readFileSync(join(fixtures, "good.md"), "utf8");
+const ok = readFileSync(join(fixtures, "ok.md"), "utf8");
+const links = readFileSync(join(fixtures, "links.md"), "utf8");
+const tiny = "In today's fast-paced world, it's not just a tool, it's a paradigm shift. Let that sink in.";
 
 describe("score", () => {
+	test("lands on the calibration anchors", () => {
+		// These five are the fit set for CURVE in score.ts. The tolerance covers the
+		// 6% RMS fit residual; links.md is the worst point at 7.2 points off.
+		const anchors: Array<[string, string, number]> = [
+			[tiny, "tiny slop, 17 words", 25],
+			[bad, "bad.md", 40],
+			[links, "links.md", 65],
+			[ok, "ok.md", 85],
+			[good, "good.md", 97],
+		];
+		for (const [text, name, expected] of anchors) {
+			const score = analyze(text, "docs").total;
+			expect(Math.abs(score - expected), `${name}: ${score} vs ${expected}`).toBeLessThanOrEqual(8);
+		}
+	});
+
+	test("two sentences of pure slop cannot score as an A", () => {
+		expect(analyze(tiny, "docs").total).toBeLessThan(35);
+	});
+
 	test("separates AI-shaped prose from clean prose", () => {
 		const badReport = analyze(bad, "docs");
 		const goodReport = analyze(good, "docs");
-		expect(badReport.total).toBeLessThan(75);
+		expect(badReport.total).toBeLessThan(50);
 		expect(goodReport.total).toBeGreaterThan(90);
-		expect(goodReport.total - badReport.total).toBeGreaterThan(20);
+		expect(goodReport.total - badReport.total).toBeGreaterThan(50);
 	});
 
 	test("finds the strong tells", () => {

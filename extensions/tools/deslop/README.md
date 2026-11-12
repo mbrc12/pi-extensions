@@ -79,6 +79,33 @@ A rewrite is rejected unless all of these hold:
 Rejected passes are never applied, even when their score rose. The score can rise
 because content disappeared.
 
+## Calibration
+
+The total is not a hand-picked curve. Four mechanisms make it strict, each fixed
+by a test:
+
+- **Density, not presence.** A rule costs 35% of its weight when it appears at
+  all, and the rest ramps with tells per 100 words. Eighteen AI words in 300 cost
+  more than one in 2,000.
+- **Applicability.** A rule only carries weight when the text could break it.
+  Heading rules are skipped without headings, rhythm rules without five
+  sentences, bullet rules under 300 words.
+- **Opportunity.** The denominator scales with `words / 250`, floored at 20%.
+  Three tells in seventeen words means every opportunity was used.
+- **Severity caps.** One violation at 80% or more caps the total at 79; a strong
+  tell (weight 8+) caps it at 74. Averaging ten rules per axis would otherwise
+  let one serious defect disappear.
+
+The curve `100 · max(0, 1 − 1.93·x)^0.6` is fitted by least squares over five
+anchors: tiny slop 25, `bad.md` 40, `links.md` 65, `ok.md` 85, `good.md` 97.
+Residual 6% RMS. Refit (`CURVE` in `score.ts`) if the rule pack changes; do not
+tune it by eye.
+
+The reading grade is Flesch–Kincaid, which rewards short sentences more than
+simple ideas. A technical note with 11-word sentences reads as grade 4 even when
+the vocabulary is ordinary, so the metric is reported with FK and the mean
+sentence length beside it, never on its own.
+
 When a pass is rejected for length, the model gets one retry that names what it
 broke ("your previous attempt was 64% of the original length"), which lands far
 more often than a silent rejection.

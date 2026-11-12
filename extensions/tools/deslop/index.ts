@@ -75,8 +75,9 @@ async function readMaybe(path: string | undefined, cwd: string): Promise<{ path?
 function reportBlock(report: ScoreReport): string {
 	const lines = [
 		`score ${report.total.toFixed(1)} ${report.band} · plain ${report.axes.plain} · human ${report.axes.human} · structured ${report.axes.structured} · dense ${report.axes.dense}`,
-		`${report.words} words · ${report.sentences} sentences · grade ${report.metrics.gradeLevel} · mean ${report.metrics.meanSentence} words/sentence`,
+		`${report.words} words · ${report.sentences} sentences · grade ${report.metrics.gradeLevel} (FK${report.metrics.meanSentence < 14 ? ", short sentences" : ""}) · mean ${report.metrics.meanSentence} words/sentence`,
 	];
+	if (report.capReason) lines.push(`capped at ${report.cap} by: ${report.capReason}`);
 	const hits = report.hits.slice(0, 6);
 	if (hits.length) {
 		lines.push("failing rules:");
@@ -476,7 +477,7 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				const status = outcomeStatus(result, input, target);
 
 				const metrics =
-					`grade ${before.metrics.gradeLevel} → ${after.metrics.gradeLevel} · ` +
+					`grade ${before.metrics.gradeLevel} → ${after.metrics.gradeLevel} (FK) · ` +
 					`${before.metrics.meanSentence} → ${after.metrics.meanSentence} words/sentence · ` +
 					`${countWords(result.text)} words · target ${target}`;
 
