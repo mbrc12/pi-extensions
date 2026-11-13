@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export interface PromptWaitNotification {
@@ -40,8 +40,33 @@ function notifyWindows(title: string, body: string): void {
 	execFile("powershell.exe", ["-NoProfile", "-Command", windowsToastScript(title, body)]);
 }
 
+/**
+ * Inside tmux, hand the notification to tmux-notify instead of writing OSC 777
+ * to the terminal. tmux cannot hook OSC sequences, so it can only pass them to
+ * the outer terminal, which means the notice is lost when you are looking at a
+ * different session. tmux-notify adds the session and window to the text, puts
+ * it on every client's status line, and posts a macOS banner of its own so the
+ * alert survives iTerm2's notifications being switched off.
+ */
+function notifyTmux(title: string, body: string): void {
+	const notifier = `${process.env.HOME}/.local/bin/tmux-notify`;
+	const args = ["-t", title, "-b", body];
+	if (process.env.TMUX_PANE) args.push("-p", process.env.TMUX_PANE);
+	try {
+		// Detached so the banner still lands if pi exits immediately after.
+		spawn(notifier, args, { detached: true, stdio: "ignore" }).unref();
+	} catch {
+		// A failed notification must never disturb the session.
+	}
+}
+
 function notify(title: string, body: string): void {
 	bell();
+
+	if (process.env.TMUX) {
+		notifyTmux(title, body);
+		return;
+	}
 
 	// No cmux branch by request: never call the cmux CLI or post into a cmux
 	// workspace. Inside a cmux terminal this now falls through to OSC 777.
