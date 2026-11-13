@@ -44,9 +44,9 @@ function notifyWindows(title: string, body: string): void {
  * Inside tmux, hand the notification to tmux-notify instead of writing OSC 777
  * to the terminal. tmux cannot hook OSC sequences, so it can only pass them to
  * the outer terminal, which means the notice is lost when you are looking at a
- * different session. tmux-notify adds the session and window to the text, puts
- * it on every client's status line, and posts a macOS banner of its own so the
- * alert survives iTerm2's notifications being switched off.
+ * different session. tmux-notify adds the session and window to the text and
+ * posts a macOS banner of its own, so the alert survives iTerm2's notifications
+ * being switched off. It renders nothing into the pane.
  */
 function notifyTmux(title: string, body: string): void {
 	const notifier = `${process.env.HOME}/.local/bin/tmux-notify`;
