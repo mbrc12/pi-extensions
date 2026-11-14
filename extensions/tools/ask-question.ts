@@ -22,9 +22,12 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { foldedResult } from "../shared/result-fold.ts";
 import { promptWait } from "../session/notify-on-idle";
 import {
+	Container,
 	Editor,
 	type EditorTheme,
 	Key,
+	Markdown,
+	type MarkdownTheme,
 	matchesKey,
 	Text,
 	visibleWidth,
@@ -77,7 +80,7 @@ const OptionSchema = Type.Object({
 const AskQuestionParams = Type.Object({
 	question: Type.String({
 		description:
-			"The question to ask the user. Phrase it as a complete question, e.g. 'Which database should I use for the new service?'",
+			"The question to ask the user. The text is rendered as Markdown, so use lists, bold and inline code where they help. Phrase it as a complete question, e.g. 'Which database should I use for the new service?'",
 	}),
 	selection_mode: StringEnum(["single", "multiple", "text"] as const, {
 		description:
@@ -136,6 +139,52 @@ function errorResult(message: string, question: string, mode: SelectionMode): {
 }
 
 /**
+ * Markdown theme for the pi theme in hand. The dialog and the call row both
+ * receive the live Theme instance, so derive the markdown tokens from it
+ * instead of importing pi's module-global theme.
+ */
+function markdownThemeFor(theme: any): MarkdownTheme {
+	const token = (name: string) => (text: string) => theme.fg?.(name, text) ?? text;
+	const style = (name: string) => (text: string) => theme[name]?.(text) ?? text;
+	return {
+		heading: token("mdHeading"),
+		link: token("mdLink"),
+		linkUrl: token("mdLinkUrl"),
+		code: token("mdCode"),
+		codeBlock: token("mdCodeBlock"),
+		codeBlockBorder: token("mdCodeBlockBorder"),
+		quote: token("mdQuote"),
+		quoteBorder: token("mdQuoteBorder"),
+		hr: token("mdHr"),
+		listBullet: token("mdListBullet"),
+		bold: style("bold"),
+		italic: style("italic"),
+		underline: style("underline"),
+		strikethrough: style("strikethrough"),
+	};
+}
+
+/**
+ * Flatten Markdown to one line of plain text, for the collapsed call row. A
+ * single line has no room for emphasis, lists or fences, and the raw markers
+ * would read as noise.
+ */
+function flattenMarkdown(markdown: string): string {
+	const text = markdown
+		.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_m, code: string) => ` ${code} `)
+		.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/^\s{0,3}([-*_])(\s*\1){2,}\s*$/gm, "")
+		.replace(/^\s{0,3}(#{1,6}|>)\s+/gm, "")
+		.replace(/^\s{0,3}([-*+]|\d+[.)])\s+/gm, "")
+		.replace(/[*~`]+/g, "")
+		// Underscores are emphasis only between boundaries; inside a word they are
+		// part of a name, as in my_var.
+		.replace(/(?<![\p{L}\p{N}])_+([^_]+)_+(?![\p{L}\p{N}])/gu, "$1");
+	return text.replace(/\s+/g, " ").trim();
+}
+
+/**
  * Custom TUI component that renders the question, an options list, and an
  * inline editor for "Type something...". Returns the chosen answers or null
  * if the user cancelled.
@@ -177,6 +226,9 @@ export function askViaUI(
 			},
 		};
 		const editor = new Editor(tui, editorTheme);
+		// The question can be Markdown (bullets, bold, inline code, tables), so it
+		// goes through pi's renderer instead of one bolded paragraph.
+		const questionMd = new Markdown(question, 1, 0, markdownThemeFor(theme));
 
 		// Selected state:
 		//  - single mode: selectedIndices has at most 1 entry
@@ -390,7 +442,7 @@ export function askViaUI(
 						: "free text";
 			addWithPrefix(lines, " ", theme.fg("dim", `[ ${tag} ]`), w);
 			lines.push("");
-			addWithPrefix(lines, " ", theme.fg("text", theme.bold(question)), w);
+			lines.push(...questionMd.render(w));
 			lines.push("");
 
 			if (mode === "text") {
@@ -462,6 +514,7 @@ export function askViaUI(
 			render,
 			invalidate: () => {
 				cachedLines = undefined;
+				questionMd.invalidate();
 			},
 			handleInput,
 		};
@@ -604,15 +657,17 @@ export default function (pi: ExtensionAPI) {
 			let text = theme.fg("toolTitle", theme.bold("ask_question "));
 			text += theme.fg("muted", args.selection_mode ?? "single");
 			if (context?.expanded) {
-				text += " " + theme.fg("text", question);
+				const view = new Container();
+				view.addChild(new Text(text, 0, 0));
+				view.addChild(new Markdown(question, 2, 0, markdownThemeFor(theme)));
 				if (opts.length) {
 					const labels = opts.map((o, i) => `${i + 1}. ${o.label}`);
-					text += `\n${theme.fg("dim", "  Options: " + labels.join("   "))}`;
+					view.addChild(new Text(theme.fg("dim", "  Options: " + labels.join("   ")), 0, 0));
 				}
-				return new Text(text, 0, 0);
+				return view;
 			}
 			// Collapsed: one readable line; the full question and options sit behind Ctrl+O.
-			const preview = question.replace(/\s+/g, " ").trim();
+			const preview = flattenMarkdown(question);
 			const flat = preview.length > 120 ? `${preview.slice(0, 119)}…` : preview;
 			text += " " + theme.fg("text", flat);
 			if (opts.length) {

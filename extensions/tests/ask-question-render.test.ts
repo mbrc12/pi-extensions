@@ -48,6 +48,87 @@ describe("ask_question call row", () => {
 	});
 });
 
+const markdownQuestion = [
+	"Which **database** should the new service use?",
+	"",
+	"- Postgres for `jsonb`",
+	"- SQLite for a single node",
+	"",
+	"See [the notes](https://example.com/notes) first.",
+].join("\n");
+
+const mdArgs = {
+	question: markdownQuestion,
+	selection_mode: "single",
+	options: [{ label: "Postgres" }, { label: "SQLite" }],
+};
+
+/** Drive askViaUI's component once and return its rendered lines. */
+async function dialogLines(question: string): Promise<string> {
+	const { askViaUI } = require("../tools/ask-question.ts");
+	const tui = { requestRender: () => {}, width: 80, height: 40 };
+	let c: any;
+	const ui = {
+		custom: async (factory: any) => {
+			c = factory(tui, theme, {}, () => {});
+			return null;
+		},
+	};
+	await askViaUI(
+		{
+			question,
+			mode: "single",
+			options: [{ label: "Postgres" }, { label: "SQLite" }],
+			allowOther: true,
+			minSelect: 1,
+			maxSelect: 0,
+		},
+		{ ui },
+	);
+	return c.render(48).join("\n");
+}
+
+describe("ask_question Markdown question", () => {
+	// The model writes the question in Markdown, so the dialog must render it
+	// rather than print the raw markers.
+	test("the dialog renders the question as Markdown", async () => {
+		const text = await dialogLines(markdownQuestion);
+		expect(text).toContain("Which database should the new service use?");
+		expect(text).toContain("Postgres for jsonb");
+		expect(text).toMatch(/^ *- Postgres for jsonb/m);
+		expect(text).toContain("example.com/notes");
+		expect(text).not.toContain("**");
+		expect(text).not.toContain("`");
+		expect(text).not.toContain("](");
+	});
+
+	test("the expanded call row renders Markdown", () => {
+		const text = plain(tool().renderCall(mdArgs, theme, { expanded: true }));
+		expect(text).toContain("Which database should the new service use?");
+		expect(text).toMatch(/^ *- Postgres for jsonb/m);
+		expect(text).not.toContain("**");
+	});
+
+	test("the collapsed call row flattens Markdown to one plain line", () => {
+		const text = plain(tool().renderCall(mdArgs, theme, { expanded: false }));
+		expect(text.split("\n")).toHaveLength(1);
+		expect(text).toContain("Which database should the new service use?");
+		expect(text).toContain("Postgres for jsonb");
+		expect(text).not.toContain("**");
+		expect(text).not.toContain("- Postgres");
+	});
+
+	test("a collapsed horizontal rule leaves no dashes behind", () => {
+		const text = plain(tool().renderCall({ ...mdArgs, question: "Pick one\n\n---\n\nReally." }, theme, { expanded: false }));
+		expect(text).toContain("Pick one Really.");
+	});
+
+	test("a collapsed name keeps its underscores", () => {
+		const text = plain(tool().renderCall({ ...mdArgs, question: "Rename `my_var`, then _commit_ the rest." }, theme, { expanded: false }));
+		expect(text).toContain("Rename my_var, then commit the rest.");
+	});
+});
+
 describe("ask_question failed result", () => {
 	// pi sends `details: {}` for a validation error and nothing at all for a
 	// thrown one. Reading `answers` unguarded would throw and lose the fold.
