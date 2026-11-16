@@ -1,0 +1,4 @@
+group,mean,err
+control,0.42,0.06
+treated,0.71,0.08
+rescue,0.55,0.07

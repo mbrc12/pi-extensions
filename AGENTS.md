@@ -17,6 +17,7 @@ that kind of work.
 | Extensions, skills, prompt templates, themes, pi settings | `pi-config` |
 | Creating or editing `.ipynb` notebooks | `notebooks` |
 | Math in a document written to disk | `latex-writing` |
+| Scientific figures, plots, schematics for papers (TikZ/PGFPlots) | `tikz-scientific-figures` |
 | Writing Python, `deal` contracts, pandas→polars, scratch venvs | `python-style` |
 | Creating a venv or project, `uv`, basedpyright/ruff config | `python-env` |
 | Dealing with bend or bend-2, a language for checkable code | `bend` |

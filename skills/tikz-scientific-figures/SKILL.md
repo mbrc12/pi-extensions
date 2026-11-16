@@ -4,98 +4,151 @@ description: >-
   Create publication-grade scientific figures and schematic diagrams with
   TikZ/PGFPlots, output as vector PDF (and SVG for visual editing). Use when the
   user wants a figure for a paper/thesis/report, a data plot (line, scatter,
-  bar, error-bar, heatmap, log axis), a circuit diagram, a flowchart or block
-  diagram, a free-body/force or geometry schematic, a biology figure
-  (immunofluorescence/tissue, cell, signaling pathway, gene or plasmid map), a
-  CS/ML figure (neural network, system architecture, finite-state machine, tree,
-  graph), or a molecular structure — especially when they mention TikZ, PGFPlots,
-  circuitikz, LaTeX figures, reproducible/vector/publication-quality plots, or
-  editing an existing .tex figure. Produces reproducible .tex + data sources the
-  user can re-edit.
+  bar, error-bar, heatmap, log axis), a multi-panel figure, a circuit diagram, a
+  free-body/force or geometry schematic, a biology figure (immunofluorescence
+  or tissue, cell, signaling pathway, gene or plasmid map), a CS/ML figure
+  (neural network, system architecture, finite-state machine, tree, graph), or a
+  molecular structure — especially when they mention TikZ, PGFPlots, circuitikz,
+  LaTeX figures, reproducible/vector publication-quality plots, or editing an
+  existing .tex figure. Also use when a polars DataFrame must become a
+  journal-shaped panel rather than a quick matplotlib chart. Produces
+  reproducible .tex + data sources the user can re-edit.
 ---
 
-# TikZ Scientific Figures
+# TikZ scientific figures
 
-Generate reproducible, publication-grade figures in TikZ. One figure = one
-`standalone` `.tex` file that compiles to a tightly-cropped vector PDF. Always
-deliver the `.tex` (+ any data file) so the figure stays editable.
+One figure = one `standalone` `.tex` that compiles to a tightly-cropped vector
+PDF. Deliver the PDF plus the `.tex` and any data file, so the figure stays
+editable.
 
-## Step 0 — check the toolchain (first run only)
+## On this machine (read before the first command)
+
+- **Toolchain is already complete.** TeX Live 2025 (`/usr/local/texlive/2025`),
+  `pdflatex`, `latexmk`, `dvisvgm`, `pdftoppm`, `mutool`. Every package the
+  recipes use is installed: pgfplots, circuitikz, chemfig, siunitx, tikz-cd,
+  pgfgantt, forest, tikz-feynman, mhchem. Do not run `tlmgr` unless a compile
+  says a package is missing.
+- **Scripts live in the skill, the project is the cwd.** Always call them by
+  absolute path, or the relative `scripts/...` form fails:
+  ```bash
+  SKILL=~/.pi/agent/skills/tikz-scientific-figures
+  bash "$SKILL/scripts/compile.sh" figures/figure.tex
+  ```
+- **Figures belong in `<project>/figures/`, not `/tmp`.** Paths under `$HOME` get
+  a `http://localhost:1002/...` URL; `/tmp` does not, so a figure there cannot be
+  linked back to the user.
+- **Compiles take seconds.** Run them in the foreground. Never wrap them in
+  `task_start`.
+- **Data comes from polars.** `df.write_csv("figures/data.csv")`, then
+  `\addplot table[x=t, y=signal, col sep=comma] {data.csv};`. Name columns in
+  the plot instead of using `x index`/`y index`; it survives a column reorder.
+  pandas appears only at an anndata boundary.
+- **Verify with your own eyes.** `scripts/preview.sh` writes a PNG, and the
+  `read` tool shows that PNG to you. Look at every revision before saying a
+  figure is correct — overlap, clipped labels and misaligned arrows are all
+  visible and none of them raise a LaTeX error.
+- **The user cannot see inline images.** `read` the preview PNG so the TUI
+  renders a clickable `file://` link, and give the PDF as
+  `http://localhost:1002/<path from $HOME>/figure.pdf` next to its raw path.
+- **`\si{...}` does not travel to Markdown.** The markdown renderer uses KaTeX,
+  which has no siunitx. In an `.md` report write units as plain text
+  ("Time (s)"), or embed the PNG/SVG instead of pasting LaTeX.
+- **Only `~/.pi/agent/skills` paths exist for you.** The editable source is
+  `~/dev/pi/skills/tikz-scientific-figures`; edit there if the skill itself needs
+  changing, then `/reload`.
+
+## Step 0 — confirm the toolchain (only after a TeX or brew change)
+
 ```bash
-bash scripts/check_env.sh
+bash ~/.pi/agent/skills/tikz-scientific-figures/scripts/selftest.sh
 ```
-If tools are missing, show the user the printed install hints (OS-aware:
-macOS/Windows/Linux) and stop until the toolchain is in place. Need: a LaTeX
-engine (pdflatex — the scripts' default; lualatex needs luatex85), poppler
-(preview), and for SVG export dvisvgm + mutool (mupdf-tools). latexmk is optional
-— the scripts run the engine twice without it.
 
-**Cross-platform note.** The recipes and TikZ code are OS-independent (identical
-output on macOS/Windows/Linux). The four `.sh` scripts are portable bash: on
-Windows run them from Git Bash or WSL. If no bash is available, run the
-underlying commands directly — `compile` ≈ `pdflatex -interaction=nonstopmode
--halt-on-error figure.tex` (run twice), `preview` ≈ `pdftoppm -png -r 200
--singlefile figure.pdf out`, `export_svg` ≈ `dvisvgm --pdf figure.pdf`. On
-Windows, MiKTeX auto-installs missing LaTeX packages on first compile, so the
-"optional packages" step is usually unnecessary there.
+`SELFTEST PASS` means compile, preview and SVG export all work. For a full
+inventory run `scripts/check_env.sh`; if it reports `[MISS]`, show the user its
+printed install hints and stop until the toolchain is fixed.
 
 ## Workflow
-1. **Pick the figure type** and read the matching recipe (only that one):
-   - data plot (line/scatter/bar/hist/box/heatmap/contour/3D/log) → `references/pgfplots-recipes.md`
+
+1. **Pick the figure type and read only that recipe.**
+   - data plot (line, scatter, bar, hist, box, heatmap, contour, 3D, log axis) → `references/pgfplots-recipes.md`
    - circuit → `references/circuitikz-recipes.md`
-   - flowchart / block / force / geometry → `references/diagram-recipes.md`
-   - biology (IF/tissue, cell, pathway, gene/plasmid map) → `references/biology-recipes.md`
+   - flowchart, block or signal diagram, force or geometry schematic → `references/diagram-recipes.md`
+   - biology (IF or tissue, cell, pathway, gene or plasmid map) → `references/biology-recipes.md`
    - CS/ML (neural net, architecture, automaton, tree, graph, UML, ER, Gantt) → `references/cs-recipes.md`
    - chemistry (molecule, reaction, energy profile, lattice) → `references/chemistry-recipes.md`
    - physics (ray optics, Feynman, vector field) → `references/physics-recipes.md`
    - math (commutative diagram, Venn, number line) → `references/math-recipes.md`
-2b. **Composing a paper figure?** Multi-panel (a)(b)(c), insets, significance
-   markers, fit+CI bands, or labelling a real microscopy/photo image →
+2. **Composing a paper figure?** Multi-panel (a)(b)(c), insets, significance
+   brackets, fit plus CI band, or labelling a real microscopy image →
    `references/figure-composition.md`.
-2. **Start from the template.** Copy `assets/standalone-template.tex` and
-   `assets/preamble.tex` into the working dir. Keep the `TUNABLES` block at the
-   top — it is what lets non-experts hand-edit later.
-3. **Put data in an external file** (`data.csv`) for data plots, so "editing the
-   plot" means editing the CSV, not the TikZ.
-4. **Compile, then self-check visually** (do not skip the look):
+3. **Start from a known-good source, do not type from a blank page.**
    ```bash
-   bash scripts/compile.sh figure.tex      # -> figure.pdf  (read figure.log on error)
-   bash scripts/preview.sh figure.pdf      # -> figure.preview.png — actually open & inspect it
+   mkdir -p figures && cp "$SKILL"/assets/preamble.tex figures/
+   cp "$SKILL"/assets/standalone-template.tex figures/figure.tex   # single panel
+   # or the verified two-panel skeleton, which ships its own CSVs:
+   cp "$SKILL"/assets/example/* figures/
    ```
-   On errors, match `figure.log` against `references/common-errors.md`.
-5. **Deliver** the PDF + `.tex` + data file together, and state the figure's
-   edit state (see Editing below).
+   Keep the `TUNABLES` block at the top of the file: it is what lets a
+   non-expert hand-edit later without reading TikZ.
+4. **Put data in an external CSV** for data plots, so editing the plot means
+   editing the CSV.
+5. **Compile, then look.**
+   ```bash
+   bash "$SKILL/scripts/compile.sh" figures/figure.tex      # -> figures/figure.pdf
+   bash "$SKILL/scripts/preview.sh" figures/figure.pdf      # -> figures/figure.preview.png
+   ```
+   Then `read` the PNG. On an error, match `figures/figure.log` against
+   `references/common-errors.md`. Repeat until the picture is right.
+6. **Deliver** PDF + `.tex` + CSV, the localhost URL, the raw path, the PNG
+   preview link, and the figure's edit state (TeX branch or SVG branch).
 
-## Publication-grade rules (non-negotiable defaults)
-- Vector output (PDF/SVG); never deliver only a raster.
-- Colour-blind-safe palette (Okabe–Ito / viridis) — wired into `preamble.tex`.
-  Never hard-code raw red/green or use the `jet` colormap.
-- Size to the target: 89 mm single-column / 183 mm double-column; body font 7–9 pt.
-- Every axis labelled **with units**; error bars state SD/SE/CI; multi-panel
-  figures numbered (a)(b)(c).
-- Render math labels in LaTeX (`$\alpha$`, `siunitx`), so they match the paper.
-- Ship the source: deliver `.tex` + data, not just an image.
+## Publication-grade rules (defaults, not options)
 
-If the user names a target venue (IEEE, a thesis template, etc.), adjust width,
-font, and `compat` in `preamble.tex` accordingly before drawing.
+- Vector output (PDF/SVG). Never ship only a raster.
+- Colour-blind-safe palette (Okabe–Ito / viridis), already wired into
+  `preamble.tex` as `cbBlue`, `cbOrange`, `cbGreen`, `cbVermillion`, `cbPurple`,
+  `cbSky`, `cbYellow`. Never hard-code raw red/green, never use `jet`.
+- Size to the target: 89 mm single column, 183 mm double column, body font
+  7–9 pt. Set it once in the `TUNABLES` block.
+- Every axis labelled with units; error bars state SD, SE or CI; panels numbered
+  (a)(b)(c).
+- Math and units in LaTeX (`$\alpha$`, `\si{\micro\metre}`) so the figure matches
+  the paper's typography. Available siunitx units only — `\arbitraryunit` does
+  not exist; write `(a.u.)` as plain text.
+- Ship the source: `.tex` + data, not just an image.
+
+If the user names a venue (IEEE, Nature, a thesis template), adjust `\figwidth`,
+font sizes and `compat` in `preamble.tex` before drawing.
 
 ## Editing an existing figure
-Read `references/editing-guide.md`. Summary of the rule that must not be broken:
-- Default: edit the `.tex`/`.csv` in place and recompile (model-driven or via the
-  `TUNABLES` block). Never redraw from scratch when a source file exists.
-- For free-form visual polish, `bash scripts/export_svg.sh figure.tex` exports an
-  SVG for Inkscape/TikZiT. **This forks the figure to the SVG branch** (a
-  `figure.svg.frozen` marker is written): from then on the SVG is authoritative
-  and the `.tex` is a frozen archive — do NOT recompile the `.tex` over the
-  user's SVG edits. Always tell the user which branch a figure is on.
-- After exporting, launch a local visual editor that loads the SVG and saves
-  back in place:
+
+Read `references/editing-guide.md`. The rule that must not be broken:
+
+- Default: edit the `.tex` or `.csv` in place and recompile, model-driven or via
+  the `TUNABLES` block. Never redraw from scratch when a source file exists.
+- `bash "$SKILL/scripts/export_svg.sh" figures/figure.tex` exports an SVG for
+  Inkscape or TikZiT and **forks the figure to the SVG branch** (it writes
+  `figure.svg.frozen`). From then on the SVG is authoritative and the `.tex` is
+  a frozen archive: never recompile the `.tex` over the user's SVG edits, and
+  always tell the user which branch the figure is on.
+- Free-form polish in the browser, with save-back to the same file:
   ```bash
-  bash scripts/edit_svg.sh figure.svg   # no arg => newest *.svg in the dir
+  bash "$SKILL/scripts/edit_svg.sh" figures/figure.svg
   ```
-  This starts a local server (127.0.0.1, ephemeral port), opens **Method Draw**
-  in the browser with the SVG pre-loaded, and **Ctrl/Cmd+S writes the edits back
-  to the same `figure.svg`** (the browser's download export stays as a fallback).
-  Ctrl+C in the terminal stops the server. The SVG remains the authoritative
-  source (`.tex` stays frozen). Needs `python3`; on Windows run from Git Bash or
-  call `python3 scripts/edit_server.py figure.svg` directly.
+  Starts a stdlib-only Python server on 127.0.0.1 with an ephemeral port, opens
+  Method Draw with the SVG loaded, and Cmd+S writes back. Ctrl+C stops it. It is
+  unrelated to the menu-bar server `~/Applications/serv.app` — never restart,
+  quit or kill that one.
+- A figure is one or the other, never both. If the user wants parametric edits
+  after forking, say so and let them choose: keep editing the SVG, or abandon
+  the SVG edits and return to the `.tex` branch.
+
+## Skill maintenance
+
+- `scripts/selftest.sh` compiles the bundled example end to end; run it after any
+  change to `preamble.tex`, the example, or the scripts.
+- `bash scripts/tests/test_edit_svg_sh.sh` and
+  `/Users/subwave/dev/tmp/random-tasks/.venv/bin/python -m unittest discover -s scripts/tests -t scripts`
+  cover the SVG editor plumbing.
+- Recipes are plain Markdown. Add a new figure type as a new file in
+  `references/` and one line in the recipe list above.

@@ -14,7 +14,7 @@
         "^opencode-go-2/.*$",
         "^anthropic/.*$"
       ],
-      "defaultModel": "openai-codex-2/gpt-6.1-sol"
+      "defaultModel": "openai-codex-2/gpt-6.1-terra"
     }
   },
   "subagentModels": {

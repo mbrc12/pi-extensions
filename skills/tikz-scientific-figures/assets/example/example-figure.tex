@@ -1,0 +1,44 @@
+% ============================================================
+% example-figure.tex — known-good reference figure (two panels).
+% Copy this file, preamble.tex and the .csv files into your project
+% figures/ directory, then edit. Compiles as-is; verify with
+% bash ~/.pi/agent/skills/tikz-scientific-figures/scripts/selftest.sh
+% ============================================================
+\documentclass[border=2pt]{standalone}
+\input{preamble.tex}
+\usepgfplotslibrary{groupplots,fillbetween}
+
+% ===== TUNABLES — non-experts edit only this block ===========
+\def\panelwidth{62mm}  % 89mm single-column / 183mm double-column total
+\def\paneltitle{(a)}   % rename panels here, not inline
+% ============================================================
+
+\begin{document}
+\begin{tikzpicture}
+\begin{groupplot}[
+  group style={group size=2 by 1, horizontal sep=1.6cm},
+  width=\panelwidth, height=0.72*\panelwidth,
+  xlabel={Time $t$ \si{(\second)}}, ylabel={Signal \si{(\volt)}},
+  grid=both, ymin=-0.1, ymax=1.3,
+]
+% ---- panel (a): line + 95% CI band from a polars-written CSV ----
+\nextgroupplot[title={\paneltitle}, legend pos=south east]
+  \addplot[name path=hi, draw=none] table[x=t, y=hi, col sep=comma] {data.csv};
+  \addplot[name path=lo, draw=none] table[x=t, y=lo, col sep=comma] {data.csv};
+  \addplot[cbBlue!18] fill between[of=hi and lo];
+  \addplot[cbBlue, thick] table[x=t, y=signal, col sep=comma] {data.csv};
+  \addlegendentry{measured}
+
+% ---- panel (b): grouped bars with SD error bars ----
+\nextgroupplot[
+  title={(b)}, ybar, bar width=8pt, ymin=0,
+  symbolic x coords={control,treated,rescue}, xtick=data,
+  xlabel={Condition}, ylabel={Response (a.u.)},
+  enlarge x limits=0.25,
+]
+  \addplot+[error bars/.cd, y dir=both, y explicit]
+    table[x=group, y=mean, y error=err, col sep=comma] {bars.csv};
+  \addlegendentry{mean $\pm$ SD}
+\end{groupplot}
+\end{tikzpicture}
+\end{document}
