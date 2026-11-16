@@ -45,6 +45,20 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 afterEach(() => { for (const child of children.splice(0)) { child.stdin.end(); child.stdout.destroy(); child.stderr.destroy(); } commands.splice(0); uiResponses.splice(0); settleMode = "success"; settleAborted = false; settleOutput = "Answer"; configuredModels = []; failedStartupModels = new Set(); silentlyDefaultedModels = new Set(); failedRequestModels = new Set(); failedSetModels = new Set(); settleDuringSetModel = false; emitToolBeforeFailure = false; });
 
 describe("multiagent RPC operators", () => {
+ test("advertises itself in the system prompt so agents route to it", () => {
+  const tool = harness().tools.get("multiagent");
+  // Without these two fields the tool is absent from the <tools> list and <rules> section.
+  expect(typeof tool.promptSnippet).toBe("string");
+  expect(tool.promptSnippet.length).toBeGreaterThan(20);
+  expect(Array.isArray(tool.promptGuidelines)).toBe(true);
+  expect(tool.promptGuidelines.length).toBeGreaterThanOrEqual(3);
+  // Guidelines are appended flat, so each must name the tool it governs.
+  for (const rule of tool.promptGuidelines) expect(rule).toContain("multiagent");
+  // The description must say when to prefer it over the other delegation tools.
+  expect(tool.description).toContain("subagent");
+  expect(tool.description).toContain("background_subagent");
+  expect(tool.description).toContain("do not poll");
+ });
  test("shows a play/pause statusline with running and total operator counts", async () => {
   settleMode = "hang";
   const h = harness(); const tool = h.tools.get("multiagent");

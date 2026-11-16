@@ -48,7 +48,9 @@ that kind of work.
 
 ## Subagents
 
+- **Three delegation tools, one rule.** `subagent` for a single delegated job you wait on; `background_subagent` for one job you want back while you keep working; `multiagent` when the same teammate must handle several rounds and its accumulated context is the point.
 - **Prefer the `data-explorer` subagent over `scout`** for data exploration: datasets, logs, tables, CSV/JSON/Parquet files, schemas, statistics, data pipelines, and read-only analytical Python.
+- Operators brief themselves from the task text alone, so give each one a self-contained brief.
 
 ## Pi extensions and configuration
 

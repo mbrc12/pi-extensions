@@ -84,6 +84,10 @@ const Params = Type.Object({ action: StringEnum(["start", "send", "list", "inspe
 
 export default function(pi: any) {
  const operators = new Map<string, Operator>(); const live = new Map<string, LiveOperator>(); const assignmentReservations = new Set<string>(); const shutdowns = new Map<string, Promise<void>>();
+ // Agent names are static per install/cwd, and a wrong name only fails after the call.
+ // Surface them in the description so `start` needs no discovery round trip.
+ const agentNames = (() => { try { return discoverAgents(process.cwd(), "both").agents.map((a: AgentConfig) => `${a.name} (${a.source})`); } catch { return []; } })();
+ const agentHint = agentNames.length ? ` Available agents: ${agentNames.join(", ")}.` : "";
  function stopLive(item: LiveOperator): Promise<void> { const stopping = item.client.stop(); shutdowns.set(item.operator.name, stopping); return stopping.finally(() => { if (shutdowns.get(item.operator.name) === stopping) shutdowns.delete(item.operator.name); }); }
  let currentCtx: any; let generation = 0;
  const notified = new WeakMap<Operator, string>();
@@ -291,7 +295,7 @@ export default function(pi: any) {
   if (ctx.mode === "tui") await ctx.ui.custom(createOperatorViewer(loadReport, { heightFraction: 0.6 }));
   else ctx.ui.notify(boundedReport(inspectText(selected)), "info");
  } });
- pi.registerTool({ name: "multiagent", label: "Multiagent", description: "Manage persistent Pi operators. Actions: start, send, list, inspect, stop, restart. Operators retain separate sessions and resume on demand.", parameters: Params,
+ pi.registerTool({ name: "multiagent", label: "Multiagent", description: ["Manage persistent Pi operators: long-lived pi processes, each with its own session, that keep their context between assignments.", "Actions: start (name, agent, task), send, list, inspect, stop, restart.", "Use it when one teammate should handle several rounds of work and accumulated context is the point. For a single delegated job use subagent, or background_subagent when you want one result back while you keep working.", "start and send return immediately; the completion message wakes you when the operator finishes, so do not poll." + agentHint].join(" "), promptSnippet: "Run persistent operators that keep their context across assignments", promptGuidelines: ["Use multiagent when work needs a persistent teammate across several turns, because the same operator keeps its session and does not need re-briefing. Use subagent for one-shot delegation and background_subagent for one job whose single result you want back while you keep working.", "Use multiagent with action 'start' (name, agent, task) to launch an operator, 'send' for its next assignment, 'stop' when its work is done or off track, and 'restart' only when its accumulated context is hurting. One operator accepts one assignment at a time; send is rejected while it runs.", "Write a self-contained brief for multiagent: operators do not see this conversation, so include the goal, file paths, constraints, and exactly what to report back.", "multiagent start and send return immediately and a completion message wakes you. Do not poll list or inspect while an operator works; do useful work or end the turn."], parameters: Params,
   renderCall(args: any, theme: any) {
    const target = args.name ? ` · ${args.name}${args.agent ? ` (${args.agent})` : ""}` : "";
    return new Text(theme.fg("toolTitle", theme.bold(`multiagent ${args.action ?? ""}`)) + theme.fg("muted", target), 0, 0);
