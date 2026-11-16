@@ -28,6 +28,12 @@ The user does not know pandas, so write all data analysis in polars.
 - When constructing an AnnData, build the frame in polars and pass `.to_pandas()` to `ad.AnnData(obs=..., var=...)`.
 - Prefer polars for any tabular output, and keep printouts friendly (polars tables) rather than raw pandas screenshots.
 
+## Environments
+
+Create environments with `uv` and configure them per the `python-env` skill. Never install a
+language server or linter into a project venv: `basedpyright` and `ruff` already live in
+`~/.local/bin`.
+
 ## Scratch Python work
 
 - Use the permanent virtual environment at `/Users/subwave/dev/tmp/random-tasks/.venv` for ad hoc scripts, exploration, and other one-off tasks.
