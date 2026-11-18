@@ -12,7 +12,8 @@
       "allow": [
         "^openai-codex-2/.*$",
         "^opencode-go-2/.*$",
-        "^anthropic/.*$"
+        "^anthropic/.*$",
+        "^sarvam/.*$"
       ],
       "defaultModel": "openai-codex-2/gpt-6.1-terra"
     }
