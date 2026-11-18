@@ -44,6 +44,7 @@ import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { subagentEnvironment } from "../../shared/fast-mode.ts";
 import { foldedResult } from "../../shared/result-fold.ts";
+import { ensureWorkspace, providePi } from "../shared/tmux-session.ts";
 import { formatDuration } from "../shared/session-activity.ts";
 import { getSessionDisplayEntries } from "../shared/session-display.ts";
 import {
@@ -570,9 +571,16 @@ async function runSingleAgentAttempt(
 		};
 	}
 
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
+	const args: string[] = ["--mode", "json", "-p"];
 	if (model) args.push("--model", model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+
+	// The run always gets a transcript file, so a pane opened later can show the
+	// history as well as the live tail. A nested subagent has no workspace and
+	// stays ephemeral.
+	const transcript = ensureWorkspace(summaryCtx)?.openTranscript("subagent", agentName, cwd ?? defaultCwd);
+	if (transcript) args.push(...transcript.args);
+	else args.push("--no-session");
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
@@ -765,6 +773,8 @@ async function runSingleAgentAttempt(
 		if (wasAborted) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {
+		// Keep the pane readable, but let the workspace evict it once the cap is hit.
+		transcript?.finish();
 		// childFinished = true;
 		// if (progressSummaryTimer) clearInterval(progressSummaryTimer);
 		if (tmpPromptPath)
@@ -880,6 +890,9 @@ const SubagentParams = Type.Object({
 });
 
 export function createSubagentTool(pi: ExtensionAPI) {
+	// The background entry builds its tool through this factory, so binding here
+	// covers both entries.
+	providePi(pi);
 	return {
 		name: "subagent",
 		label: "Subagent",

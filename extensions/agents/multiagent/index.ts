@@ -9,6 +9,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { createOperatorViewer } from "./viewer.ts";
 import { Type } from "typebox";
 import { discoverAgents, type AgentConfig } from "../subagent/agents.ts";
+import { ensureWorkspace, getWorkspace, providePi } from "../shared/tmux-session.ts";
 import { getSubagentModelFallbacks } from "../../shared/model-config.ts";
 import { createNotificationGate } from "../../shared/notification-gate.ts";
 import { extractSessionActivity, formatDuration, renderSessionActivity } from "../shared/session-activity.ts";
@@ -83,6 +84,7 @@ function boundedReport(text: string, max = 1200): string {
 const Params = Type.Object({ action: StringEnum(["start", "send", "list", "inspect", "stop", "restart"] as const), name: Type.Optional(Type.String({ description: "Operator name" })), agent: Type.Optional(Type.String({ description: "Agent definition name for start/restart" })), task: Type.Optional(Type.String({ description: "Assignment for start/send/restart" })), agentScope: Type.Optional(StringEnum(["user", "project", "both"] as const, { default: "user" })), cwd: Type.Optional(Type.String({ description: "Operator working directory" })) });
 
 export default function(pi: any) {
+ providePi(pi);
  const operators = new Map<string, Operator>(); const live = new Map<string, LiveOperator>(); const assignmentReservations = new Set<string>(); const shutdowns = new Map<string, Promise<void>>();
  // Agent names are static per install/cwd, and a wrong name only fails after the call.
  // Surface them in the description so `start` needs no discovery round trip.
@@ -186,6 +188,9 @@ export default function(pi: any) {
     liveOp.starting = false; op.model = selectedModel ?? op.model;
     if (index > 0) op.modelFallback = `Fallback ${index + 1}/${models.length} after ${index} startup failure${index === 1 ? "" : "s"}.`; else op.modelFallback = undefined;
     record("model", op);
+    // The canonical session path is known only after the handshake, because a
+    // session-id file carries a generated timestamp in its name.
+    ensureWorkspace(ctx)?.register({ key: op.id, title: op.name, sessionFile: op.sessionFile, cwd: op.cwd });
     return liveOp;
    } catch (error) {
     lastError = error; if (live.get(op.name) === liveOp) live.delete(op.name); await rpc.stop();
@@ -196,8 +201,8 @@ export default function(pi: any) {
  }
  function terminate(liveOp: LiveOperator, reason: string, failed: boolean) {
   const op = liveOp.operator; if (live.get(op.name) !== liveOp) return; live.delete(op.name); liveOp.busy = false;
-  if (liveOp.starting) return;
-  if (op.status === "running") { op.status = failed || !!liveOp.error ? "failed" : "idle"; op.lastActivity = liveOp.error ?? reason; op.finishedAt = Date.now(); record("status", op); notifyCompletion(op, op.status === "failed" ? "failed" : "completed"); }
+  if (!liveOp.starting) getWorkspace()?.markDone(op.id);
+  if (liveOp.starting) return;  if (op.status === "running") { op.status = failed || !!liveOp.error ? "failed" : "idle"; op.lastActivity = liveOp.error ?? reason; op.finishedAt = Date.now(); record("status", op); notifyCompletion(op, op.status === "failed" ? "failed" : "completed"); }
  }
  async function finishAssignment(liveOp: LiveOperator, aborted = false) {
   if (!liveOp.busy || live.get(liveOp.operator.name) !== liveOp) return;
@@ -318,7 +323,7 @@ export default function(pi: any) {
     const found = discoverAgents(params.cwd ?? ctx.cwd, params.agentScope ?? "user"); const agent = found.agents.find((item: AgentConfig) => item.name === params.agent); if (!agent) throw new Error(`Unknown agent "${params.agent}". Available: ${found.agents.map((a: AgentConfig) => a.name).join(", ") || "none"}.`);
     if (agent.source === "project" && ctx.hasUI) { const ok = await ctx.ui.confirm("Run project-local operator?", `Agent: ${agent.name}\nSource: ${agent.filePath}\n\nOnly approve trusted repositories.`); if (!ok) return { content: [{ type: "text", text: "Canceled." }] }; } else if (agent.source === "project") throw new Error("Project-local agents require interactive approval.");
     let op = operators.get(name); if (action === "start" && op) throw new Error(`Operator ${name} exists; use restart to replace its session.`);
-    if (op) { const oldLive = live.get(name); if (oldLive) { oldLive.busy = false; try { await oldLive.client.command("abort"); } catch {} await stopLive(oldLive); } live.delete(name); op.status = "stopped"; record("status", op); }
+    if (op) { const oldLive = live.get(name); if (oldLive) { oldLive.busy = false; try { await oldLive.client.command("abort"); } catch {} await stopLive(oldLive); } live.delete(name); getWorkspace()?.unregister(op.id); op.status = "stopped"; record("status", op); }
     const priorSessionFiles = op ? [...(op.priorSessionFiles ?? []), op.sessionFile] : [];
     const dir = sessionDir(ctx); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const id = randomUUID(); op = { id, name, agent: agent.name, agentConfig: { ...agent }, priorSessionFiles, sessionFile: path.join(dir, `${id}.jsonl`), cwd: params.cwd ?? ctx.cwd, status: "idle", startedAt: Date.now() }; operators.set(name, op); record(action, op);
@@ -326,7 +331,7 @@ export default function(pi: any) {
    }
    const op = operators.get(name!); if (!op) throw new Error(`Unknown operator "${name}" on this planner branch.`);
    if (action === "send") { if (!params.task) throw new Error("send requires task."); await assignment(op, params.task, ctx); }
-   else if (action === "stop") { if (op.status === "running") { const liveOp = live.get(op.name); if (liveOp) { liveOp.busy = false; try { await liveOp.client.command("abort"); } catch {} } } const stopping = live.get(op.name); if (stopping) await stopLive(stopping); live.delete(op.name); op.status = "stopped"; op.lastActivity = "Stopped by planner"; op.finishedAt = Date.now(); record("status", op); }
+   else if (action === "stop") { if (op.status === "running") { const liveOp = live.get(op.name); if (liveOp) { liveOp.busy = false; try { await liveOp.client.command("abort"); } catch {} } } const stopping = live.get(op.name); if (stopping) await stopLive(stopping); live.delete(op.name); getWorkspace()?.unregister(op.id); op.status = "stopped"; op.lastActivity = "Stopped by planner"; op.finishedAt = Date.now(); record("status", op); }
    else if (action === "inspect") { const l = live.get(op.name); let sessionText = transcript(op); if (l) { try { const state = await l.client.command("get_state"); op.lastActivity = state?.isStreaming ? "Streaming" : op.lastActivity; const result = await l.client.command("get_messages"); if (Array.isArray(result?.messages)) sessionText = formatTranscript(result.messages); } catch {} } const report = inspectText(op).replace(`Session activity:\n${transcript(op)}`, `Session activity:\n${sessionText}`); return { content: [{ type: "text", text: report }], details: { operator: { ...op }, transcript: sessionText } }; }
    return { content: [{ type: "text", text: `${op.name}: ${op.status}${op.lastActivity ? ` — ${op.lastActivity}` : ""}` }], details: { operator: { ...op } } };
   },

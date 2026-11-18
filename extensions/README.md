@@ -28,6 +28,7 @@ symlink to this folder.
 | `agents/subagent` | `subagent` delegation in single, parallel, and chain modes |
 | `agents/background-subagent` | `background_subagent` runs one agent without blocking the caller |
 | `agents/multiagent` | `multiagent` manages persistent named operators |
+| `agents/tmux-session` | `/tmux-session [on\|off\|status\|attach]` opens a per-session tmux workspace with one live pane per subagent and operator; off by default, and the session that opens it closes it on shutdown |
 | `models/codex-account-alias` | Adds `openai-codex-2` as a second Codex OAuth account |
 | `models/fast` | `/fast` toggles OpenAI priority processing for the session |
 | `models/profile` | `/profile` limits usable models to a named allow-list |

@@ -3,7 +3,8 @@
     "extensions": [
       "./subagent/index.ts",
       "./background-subagent/index.ts",
-      "./multiagent/index.ts"
+      "./multiagent/index.ts",
+      "./tmux/index.ts"
     ]
   }
 }
