@@ -37,7 +37,7 @@ symlink to this folder.
 | `session/cleanup` | `/cleanup` tells the model to stop and clean up session resources |
 | `session/btw` | `/btw [question]` explains recent work, or answers a question about it, in an Esc-dismissable overlay that stays out of the model context. It sends the whole active session context and may call `read`, `grep`, `find`, `ls`, `web_use`, and `consult` when the context is not enough |
 | `session/exit-alias` | `/exit` alias for `/quit` |
-| `session/notify-on-idle` | Desktop notification when a turn ends, on shutdown, or on `prompt_wait` |
+| `session/notify-on-idle` | Desktop notification when your prompt settles, and when a prompt waits on you. Children stay silent via `PI_NOTIFY=off` |
 | `session/rename` | `/rename [hint]` proposes session names from broadest to narrowest and asks you to pick one |
 | `shared/` | Imported helpers: model config, fast-mode, notification gate |
 | `model-config.json` | Model fallback lists and profiles used by the extensions above |

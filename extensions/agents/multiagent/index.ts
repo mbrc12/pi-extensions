@@ -12,6 +12,7 @@ import { discoverAgents, type AgentConfig } from "../subagent/agents.ts";
 import { ensureWorkspace, getWorkspace, providePi } from "../shared/tmux-session.ts";
 import { getSubagentModelFallbacks } from "../../shared/model-config.ts";
 import { createNotificationGate } from "../../shared/notification-gate.ts";
+import { quietChildEnvironment } from "../../shared/notification-policy.ts";
 import { extractSessionActivity, formatDuration, renderSessionActivity } from "../shared/session-activity.ts";
 
 const STATE = "multiagent";
@@ -154,7 +155,7 @@ export default function(pi: any) {
    const args = ["--mode", "rpc", "--session-id", op.id, "--session-dir", dir, "--name", `${op.name} (${agent.name})`];
    if (agent.tools?.length) args.push("--tools", agent.tools.join(",")); if (agent.systemPrompt.trim()) args.push("--append-system-prompt", agent.systemPrompt);
    if (model) { args.push("--model", model); }
-   const cmd = invocation(args); const child = spawn(cmd.command, cmd.args, { cwd: op.cwd || ctx.cwd, env: { ...process.env }, stdio: ["pipe", "pipe", "pipe"] });
+   const cmd = invocation(args); const child = spawn(cmd.command, cmd.args, { cwd: op.cwd || ctx.cwd, env: quietChildEnvironment(), stdio: ["pipe", "pipe", "pipe"] });
    const rpc = new RpcProcess(child); const liveOp: LiveOperator = { client: rpc, operator: op, busy: false, starting: true, models, modelIndex: index, toolExecutionStarted: false, interactiveBlocked: false }; live.set(op.name, liveOp);
   rpc.listeners.add(event => {
    if (event.type === "agent_settled") void finishAssignment(liveOp, event.aborted === true);

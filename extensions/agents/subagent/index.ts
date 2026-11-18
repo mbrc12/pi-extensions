@@ -43,6 +43,7 @@ import {
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { subagentEnvironment } from "../../shared/fast-mode.ts";
+import { quietChildEnvironment } from "../../shared/notification-policy.ts";
 import { foldedResult } from "../../shared/result-fold.ts";
 import { ensureWorkspace, providePi } from "../shared/tmux-session.ts";
 import { formatDuration } from "../shared/session-activity.ts";
@@ -657,7 +658,7 @@ async function runSingleAgentAttempt(
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
-				env: subagentEnvironment(model),
+				env: quietChildEnvironment(subagentEnvironment(model)),
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
