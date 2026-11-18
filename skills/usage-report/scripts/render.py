@@ -99,7 +99,7 @@ def trends():
                                 bb["ask"] += 1
                             elif nm == "self_compact":
                                 bb["compact"] += 1
-                            elif nm == "context_recall" or (nm == "consult" and isinstance(a, dict) and a.get("self")):
+                            elif nm in ("context_recall", "consult"):
                                 bb["recall"] += 1
                 u = m.get("usage")
                 if u and bb:
@@ -233,22 +233,33 @@ def main():
     big = max(sessions, key=lambda s: s["total"])
     busiest_dow = max(range(7), key=lambda i: sum(heat[i]))
 
+    months_sorted = sorted(month_cost)
+    top_m = max(months_sorted, key=lambda m: month_cost[m])
+    prev2 = [m for m in months_sorted if m < top_m][-2:] or [top_m, top_m]
+
+    def mname(m: str) -> str:
+        return datetime.strptime(m, "%Y-%m").strftime("%B %Y")
+
+    half_cost = days[next(i for i, v in enumerate(cum_c) if v >= C / 2)]
+    half_tok = days[next(i for i, v in enumerate(cum_t) if v >= T / 2)]
+
     toks = [s["total"] for s in sessions]
     med_turns = st.median([s["turns"] for s in sessions])
     med_tok = st.median(toks)
     med_active = st.median([s["active"] for s in sessions])
     tok_bins = hist(toks, [0, 1e6, 5e6, 20e6, 50e6, 100e6, 250e6, 5e8, 1e18],
-                    ["under 1M", "1–5M", "5–20M", "20–50M", "50–100M", "100–250M",
-                     "250–500M", "500M+"])
+                    ["<1", "1–5", "5–20", "20–50", "50–100", "100–250",
+                     "250–500", "500+"])
     dur_bins = hist([min(s["active"], 21600) for s in sessions],
                     [0, 300, 900, 1800, 3600, 7200, 21600],
-                    ["under 5m", "5–15m", "15–30m", "30–60m", "1–2h", "2h+"])
+                    ["<5m", "5–15m", "15–30m", "30–60m", "1–2h", "2h+"])
 
     # heatmap: single-hue blue ramp, no numbers in cells
     hmax = max((v for r in heat for v in r), default=1) or 1
     cells = ['<div class="lab"></div>']
     for h in range(24):
-        cells.append(f'<div class="hh">{h:02d}</div>' if h % 3 == 0 else '<div class="hh"></div>')
+        cls = "hh h6" if h % 6 == 0 else "hh"
+        cells.append(f'<div class="{cls}">{h:02d}</div>' if h % 3 == 0 else '<div class="hh"></div>')
     for di, name in enumerate(DOWS):
         cells.append(f'<div class="lab">{name}</div>')
         for h in range(24):
@@ -261,14 +272,19 @@ def main():
                'day, local time. Darkest cells are late evening and early morning.">'
                + "".join(cells) + "</div>")
 
+    def plabel(p: str, keep: int = 30) -> str:
+        q = p.replace(os.path.expanduser("~"), "~")
+        return q if len(q) <= keep else "\u2026" + q[-keep + 1:]
+
     data = {
-        "days": days, "dayCost": day_cost_series, "dayTok": day_tok_series,
+        "days": days,"dayCost": day_cost_series, "dayTok": day_tok_series,
         "dayFresh": day_fresh_series,
         "cat": [{"name": CATNAME[k], "tokens": grand[k], "cost": round(gcost[k], 2)} for k in CATS],
         "cumT": cum_t, "cumC": cum_c,
         "modelTok": [{"name": k, "tokens": v["total"], "cost": v["cost"]} for k, v in by_tok[:10]],
         "modelCost": [{"name": k, "tokens": v["total"], "cost": v["cost"]} for k, v in by_cost[:10]],
-        "proj": [{"name": k, "tokens": v["total"], "cost": v["cost"]} for k, v in by_proj[:10]],
+        "proj": [{"name": k, "label": plabel(k), "tokens": v["total"], "cost": v["cost"]}
+                 for k, v in by_proj[:10]],
         "tokBins": tok_bins, "durBins": dur_bins,
         "weeks": X["weeks"], "tools": X["tools"], "trends": TR,
     }
@@ -288,9 +304,9 @@ def main():
         f"Cache reads are <b>{cache_hit*100:.1f}%</b> of all tokens but only "
         f"<b>{gcost['cacheRead']/C*100:.0f}%</b> of the cost; cached input is billed far lower. "
         f"Fresh input and output are {ftok(fresh)} tokens and {fusd(fresh_cost)}.",
-        f"September carried the spend at <b>{fusd(month_cost.get('2026-09', 0))}</b>, against "
-        f"{fusd(month_cost.get('2026-08', 0))} in August and {fusd(month_cost.get('2026-07', 0))} "
-        f"in July.",
+        f"{mname(top_m)} carried the spend at <b>{fusd(month_cost[top_m])}</b>, against "
+        f"{fusd(month_cost.get(prev2[-1], 0))} in {mname(prev2[-1])} and "
+        f"{fusd(month_cost.get(prev2[0], 0))} in {mname(prev2[0])}.",
         f"<b>{top_tok_model}</b> moved the most tokens ({ftok(top_tok_v['total'])}, "
         f"{top_tok_v['total']/T*100:.0f}%) for {fusd(top_tok_v['cost'])}. <b>{top_cost_model}</b> "
         f"cost the most, {fusd(top_cost_v['cost'])}, or {top_cost_v['cost']/C*100:.0f}% of the bill, "
@@ -298,6 +314,8 @@ def main():
         f"<b>{night/T*100:.0f}%</b> of tokens fall between 20:00 and 04:00, the busiest hour is "
         f"<b>{peak_hour:02d}:00</b>, and weekends account for {weekend/T*100:.0f}%.",
     ]
+    risky = max((t for t in X["tools"] if t["calls"] >= 200),
+                key=lambda t: t["err"], default=X["tools"][0])
     signals = [
         ("Interrupted turns", f"{X['interrupt_rate']:.1f}%", f"{fi(X['aborts'])} of {fi(X['turns'])} aborted", "abort_rate", "line"),
         ("Sessions you cut in", fi(X["sessions_interrupted"]), f"of {fi(len(sessions))}; worst {X['max_session_aborts']}", "sessions_cut", "bar"),
@@ -329,138 +347,168 @@ def main():
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 :root {{
-  --bg:#ffffff; --soft:#f6f8fb; --line:#e4e9f0; --line2:#cfd8e3;
-  --text:#17212f; --muted:#5c6a7a; --accent:#2563eb; --accent2:#1e40af;
+  --bg:#ffffff; --soft:#f4f7fb; --line:#dfe5ee; --line2:#aab6c6;
+  --text:#10192a; --muted:#57627a; --accent:#2563eb; --accent2:#1e40af;
 }}
 * {{ box-sizing:border-box; }}
 html {{ background:var(--bg); }}
 body {{ margin:0; background:var(--bg); color:var(--text);
-  font:400 14.5px/1.6 "Hanken Grotesk",system-ui,-apple-system,sans-serif;
+  font:400 14.5px/1.62 "Hanken Grotesk",system-ui,-apple-system,sans-serif;
   -webkit-font-smoothing:antialiased; }}
-.wrap {{ max-width:1120px; margin:0 auto; padding:0 24px; }}
+.wrap {{ max-width:1120px; margin:0 auto; padding:0 28px; }}
 a {{ color:var(--accent); }}
-b, strong {{ font-weight:600; }}
-code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.88em;
-  background:var(--soft); border:1px solid var(--line); border-radius:4px; padding:0 4px; }}
+b, strong {{ font-weight:600; white-space:nowrap; }}
+code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+  background:var(--soft); border-bottom:1px solid var(--line2); padding:0 3px; }}
 
-.head {{ border-bottom:1px solid var(--line); background:#fff; }}
-.head .wrap {{ padding-top:34px; padding-bottom:26px; }}
-.eyebrow {{ margin:0 0 8px; font-size:12px; font-weight:600; letter-spacing:.08em;
-  text-transform:uppercase; color:var(--accent); }}
-h1 {{ margin:0; font-size:clamp(1.7rem,3.6vw,2.3rem); font-weight:700; letter-spacing:-.01em; }}
-.sub {{ margin:10px 0 0; color:var(--muted); font-size:13.5px; }}
-.lede {{ margin:28px 0 0; font-size:16px; color:#33404f; max-width:74ch; }}
+/* nameplate: engraved rules and measured fields, no decoration */
+.plate {{ border-bottom:1px solid var(--line2); }}
+.plate .wrap {{ display:flex; align-items:flex-end; justify-content:space-between;
+  gap:36px; padding-top:40px; padding-bottom:16px; flex-wrap:wrap; }}
+h1 {{ margin:0; font-size:clamp(1.55rem,3.2vw,2.05rem); font-weight:600;
+  letter-spacing:-.028em; line-height:1.1; }}
+.fields {{ display:flex; gap:30px; margin:0; flex-wrap:wrap; }}
+.fields div {{ min-width:0; }}
+.fields dt {{ font-size:11px; color:var(--muted); margin-bottom:4px; }}
+.fields dd {{ margin:0; font-size:12.5px; color:var(--text); font-variant-numeric:tabular-nums; }}
+.ruler {{ height:9px; border-top:1px solid var(--line2);
+  background-image:
+    repeating-linear-gradient(to right, var(--line2) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(to right, var(--line2) 0 1px, transparent 1px 45px);
+  background-size:auto 4px, auto 9px; background-position:0 0, 0 0;
+  background-repeat:repeat-x; }}
 
-.stats {{ display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin:26px 0 0; }}
-.stat {{ background:var(--soft); border:1px solid var(--line); border-radius:10px; padding:14px 15px; }}
-.stat .k {{ font-size:12px; color:var(--muted); margin-bottom:6px; }}
-.stat .v {{ font-size:1.35rem; font-weight:700; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }}
-.stat .s {{ font-size:12px; color:var(--muted); margin-top:4px; }}
-.signals {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }}
-.sig {{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 15px 10px;
-  min-width:0; }}
-.sig .k {{ font-size:12px; color:var(--muted); }}
-.sig .v {{ font-size:1.3rem; font-weight:700; letter-spacing:-.01em; font-variant-numeric:tabular-nums;
-  margin-top:2px; }}
-.sig .s {{ font-size:11.5px; color:var(--muted); min-height:30px; }}
+.lede {{ margin:26px 0 0; font-size:16.5px; line-height:1.55; max-width:64ch; color:#1d2836; }}
+
+/* one continuous reading band, not six floating cards */
+.band {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); margin:26px 0 0;
+  border-right:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--soft); }}
+.reading {{ padding:15px 16px 14px; border-left:1px solid var(--line); border-top:1px solid var(--line); }}
+.reading .k {{ font-size:11.5px; color:var(--muted); margin-bottom:7px; }}
+.reading .v {{ font-size:1.5rem; font-weight:600; letter-spacing:-.026em; line-height:1.06;
+  font-variant-numeric:tabular-nums; }}
+.reading .s {{ font-size:11.5px; color:var(--muted); margin-top:6px; }}
+
+/* signals: a ruled grid of instrument readings */
+.signals {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr));
+  border-right:1px solid var(--line); border-bottom:1px solid var(--line); }}
+.sig {{ border-left:1px solid var(--line); border-top:1px solid var(--line);
+  padding:14px 16px 10px; min-width:0; }}
+.sig .k {{ font-size:11.5px; color:var(--muted); }}
+.sig .v {{ font-size:1.42rem; font-weight:600; letter-spacing:-.02em; line-height:1.1;
+  font-variant-numeric:tabular-nums; margin-top:3px; }}
+.sig .s {{ font-size:11.5px; color:var(--muted); min-height:31px; }}
 .spark {{ position:relative; height:46px; margin-top:8px; min-width:0; }}
 
-section {{ margin-top:44px; }}
-h2 {{ font-size:1.15rem; font-weight:600; margin:0 0 4px; }}
-.h2row {{ display:flex; align-items:baseline; justify-content:space-between; gap:16px;
-  border-bottom:1px solid var(--line); padding-bottom:10px; margin-bottom:18px; }}
-.meta {{ font-size:12.5px; color:var(--muted); }}
+section {{ margin-top:48px; }}
+.sec {{ border-top:1px solid var(--line2); padding-top:12px; margin-bottom:22px;
+  display:flex; align-items:baseline; justify-content:space-between; gap:20px; }}
+.sec h2 {{ margin:0; font-size:1.03rem; font-weight:600; letter-spacing:-.012em; }}
+.sec h2::before {{ content:""; display:inline-block; width:10px; height:2px;
+  background:var(--accent); vertical-align:middle; margin-right:10px;
+  transform:translateY(-2px); }}
+.meta {{ font-size:11.5px; color:var(--muted); text-align:right; }}
 
-.notes {{ list-style:none; margin:0; padding:0; display:grid; grid-template-columns:1fr 1fr; gap:14px 28px; }}
-.notes li {{ display:flex; gap:12px; }}
-.notes .n {{ flex:0 0 auto; width:22px; height:22px; border-radius:50%; background:var(--soft);
-  border:1px solid var(--line); color:var(--accent); font-size:12px; font-weight:600;
-  display:flex; align-items:center; justify-content:center; }}
+.notes {{ list-style:none; margin:0; padding:0; display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px 36px; }}
+.notes li {{ display:flex; gap:13px; }}
+.notes .n {{ flex:0 0 auto; min-width:13px; padding-top:2px; color:var(--accent);
+  font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; }}
 .notes p {{ margin:0; }}
 
-.card {{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 17px 15px; }}
-.card h3 {{ margin:0 0 12px; font-size:12.5px; font-weight:600; color:#33404f; }}
-.grid2 {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
-.split {{ display:grid; grid-template-columns:minmax(260px,360px) 1fr; gap:26px; align-items:start; }}
-.prose p {{ margin:0 0 12px; }}
+.panel {{ min-width:0; }}
+.panel h3 {{ margin:0 0 12px; font-size:11.5px; font-weight:600; color:var(--text);
+  display:flex; align-items:center; gap:8px; }}
+.panel h3::before {{ content:""; flex:0 0 auto; width:5px; height:5px; background:var(--accent); }}
+.grid2 {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:28px 32px; }}
+.split {{ display:grid; grid-template-columns:minmax(240px,320px) minmax(0,1fr);
+  gap:32px; align-items:start; }}
+.prose p {{ margin:0 0 13px; max-width:62ch; }}
 .prose p:last-child {{ margin-bottom:0; }}
-.big {{ font-size:1.5rem; font-weight:700; color:var(--accent2); font-variant-numeric:tabular-nums; }}
+.big {{ font-size:1.34rem; font-weight:600; letter-spacing:-.02em; color:var(--accent2);
+  font-variant-numeric:tabular-nums; }}
 .chart {{ position:relative; width:100%; min-width:0; height:200px; }}
 .chart.tall {{ height:250px; }}
-.cap {{ font-size:12.5px; color:var(--muted); margin-top:10px; }}
+.cap {{ font-size:12.5px; color:var(--muted); margin:12px 0 0; max-width:78ch; }}
 
-.heat {{ display:grid; grid-template-columns:auto repeat(24,1fr); gap:2px; align-items:center; }}
+.heat {{ display:grid; grid-template-columns:auto repeat(24,minmax(0,1fr)); gap:3px; align-items:center; }}
 .heat .lab {{ font-size:10.5px; color:var(--muted); text-align:right; padding-right:8px; white-space:nowrap; }}
-.heat .hh {{ font-size:10px; color:var(--muted); text-align:center; }}
-.heat .hc {{ aspect-ratio:1; border-radius:2px; background:hsl(221,40%,95%); }}
-.scale {{ display:flex; align-items:center; gap:10px; margin-top:12px; font-size:11.5px; color:var(--muted); }}
-.scale .bar {{ width:180px; height:8px; border-radius:4px; background:linear-gradient(90deg,
+.heat .hh {{ font-size:9.5px; color:var(--muted); text-align:center; }}
+.heat .hc {{ aspect-ratio:1; background:hsl(221,40%,95%); }}
+.scale {{ display:flex; align-items:center; gap:10px; margin-top:14px; font-size:11.5px; color:var(--muted); }}
+.scale .bar {{ width:160px; height:6px; background:linear-gradient(90deg,
   hsl(221,85%,95%), hsl(221,60%,32%)); }}
 
-.actions {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }}
-.btn {{ display:inline-block; font-size:13px; font-weight:600; text-decoration:none;
-  color:#fff; background:var(--accent); border:1px solid var(--accent); border-radius:8px; padding:9px 15px; }}
-.btn.alt {{ background:#fff; color:var(--accent); }}
-.btn:hover {{ background:var(--accent2); border-color:var(--accent2); color:#fff; }}
-.btn.alt:hover {{ background:var(--soft); color:var(--accent2); border-color:var(--line2); }}
-
-footer {{ border-top:1px solid var(--line); margin-top:56px; padding:20px 0 56px;
-  color:var(--muted); font-size:12.5px; }}
+footer {{ border-top:1px solid var(--line2); margin-top:60px; padding:18px 0 60px;
+  color:var(--muted); font-size:12px; }}
 :focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
-.print-only {{ display:none; }}
 
 @media (max-width:1000px) {{
-  .stats {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
-  .signals {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+  .band {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+  .signals {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
 }}
 @media (max-width:760px) {{
-  .stats {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
-  .signals {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+  .band {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+  .signals {{ grid-template-columns:1fr; }}
   .grid2, .split {{ grid-template-columns:1fr; }}
   .notes {{ grid-template-columns:1fr; }}
+  .plate .fields {{ gap:20px 26px; }}
+  .sec {{ display:block; }}
+  .meta {{ display:block; text-align:left; margin-top:5px; }}
+}}
+@media (max-width:520px) {{
+  .heat {{ gap:2px; }}
+  .heat .hh {{ font-size:8px; }}
+  .heat .hh:not(.h6) {{ visibility:hidden; }}
+  .heat .lab {{ font-size:9.5px; padding-right:5px; }}
+  .wrap {{ padding:0 18px; }}
 }}
 @media print {{
   @page {{ size:letter; margin:14mm 13mm; }}
   body {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; font-size:10.5pt; }}
   section {{ margin-top:22px; }}
-  h2 {{ break-after:avoid; }}
-  .card, .stat, .notes li, .split > *, figure {{ break-inside:avoid; }}
+  .sec {{ break-after:avoid; }}
+  .panel, .reading, .notes li, .split > *, figure {{ break-inside:avoid; }}
   .grid2, .split {{ display:block; }}
-  .grid2 > *, .split > * {{ margin-bottom:12px; }}
+  .grid2 > *, .split > * {{ margin-bottom:14px; }}
   .chart {{ height:200px; }} .chart.tall {{ height:235px; }}
-  .btn {{ display:none; }} .print-only {{ display:inline; }}
 }}
 </style>
 </head>
 <body>
-<header class="head">
+<header class="plate">
   <div class="wrap">
-    <p class="eyebrow">Pi token report</p>
     <h1>Token usage report</h1>
-    <p class="sub">{first} → {last} · Asia/Kolkata · generated {gen}</p>
+    <dl class="fields">
+      <div><dt>Period</dt><dd>{first} → {last}</dd></div>
+      <div><dt>Timezone</dt><dd>Asia/Kolkata</dd></div>
+      <div><dt>Generated</dt><dd>{gen}</dd></div>
+    </dl>
   </div>
+  <div class="ruler" aria-hidden="true"></div>
 </header>
 
 <main class="wrap">
-  <p class="lede">How one machine used pi over {span_days} days: total volume, where the money
-  went, which models did the work, where it happened and when. There are no tables; every figure
-  sits in a chart, with a plain-language summary beside it.</p>
+  <p class="lede">Over {span_days} days pi recorded {ftok(T)} tokens and {fusd(C)} of
+  provider-reported cost, with {cache_hit*100:.1f}% of the volume served from cache. The work ran
+  on {fi(len(sessions))} sessions and {fi(turns)} assistant turns; {night/T*100:.0f}% of the tokens
+  moved between eight in the evening and four in the morning.</p>
 
-  <div class="stats">
-{''.join(f'<div class="stat"><div class="k">{a}</div><div class="v">{b}</div><div class="s">{c}</div></div>' for a, b, c in stats)}
+  <div class="band">
+{''.join(f'<div class="reading"><div class="k">{a}</div><div class="v">{b}</div><div class="s">{c}</div></div>' for a, b, c in stats)}
   </div>
 
   <section>
-    <div class="h2row"><h2>What stands out</h2><span class="meta">five notes</span></div>
+    <div class="sec"><h2>What stands out</h2></div>
     <ol class="notes">
 {''.join(f'<li><span class="n">{i+1}</span><p>{x}</p></li>' for i, x in enumerate(notes))}
     </ol>
   </section>
 
   <section>
-    <div class="h2row"><h2>Where the tokens go</h2><span class="meta">{fi(T)} tokens · {fusd(C)}</span></div>
+    <div class="sec"><h2>Where the tokens go</h2><span class="meta">{fi(T)} tokens, {fusd(C)}</span></div>
     <div class="split">
-      <div class="card"><h3>Share of cost</h3>
+      <div class="panel"><h3>Share of cost</h3>
         <div class="chart"><canvas id="cat" role="img"
           aria-label="Doughnut chart of cost by token category."></canvas></div>
       </div>
@@ -477,42 +525,43 @@ footer {{ border-top:1px solid var(--line); margin-top:56px; padding:20px 0 56px
   </section>
 
   <section>
-    <div class="h2row"><h2>Over time</h2><span class="meta">daily and cumulative</span></div>
+    <div class="sec"><h2>Over time</h2></div>
     <div class="grid2">
-      <div class="card"><h3>Cost per day (USD)</h3>
+      <div class="panel"><h3>Cost per day (USD)</h3>
         <div class="chart"><canvas id="daily" role="img"
           aria-label="Area chart of daily cost in US dollars."></canvas></div>
-        <div class="cap">September was heaviest at {fusd(month_cost.get('2026-09', 0))}. The costliest
+        <div class="cap">{mname(top_m)} was heaviest at {fusd(month_cost[top_m])}. The costliest
         day was {priciest[0]} at {fusd(priciest[1])}.</div>
       </div>
-      <div class="card"><h3>Tokens per day</h3>
+      <div class="panel"><h3>Tokens per day</h3>
         <div class="chart"><canvas id="dailyTok" role="img"
           aria-label="Stacked bar chart of daily tokens by cache read versus fresh tokens."></canvas></div>
         <div class="cap">Busiest day by volume: {busiest[0]} with {ftok(busiest[1])} tokens. Cache
         reads dominate most days.</div>
       </div>
-      <div class="card"><h3>Fresh tokens per day (input + output)</h3>
+      <div class="panel"><h3>Fresh tokens per day (input + output)</h3>
         <div class="chart"><canvas id="fresh" role="img"
           aria-label="Line chart of fresh tokens per day."></canvas></div>
         <div class="cap">The genuinely new text: {ftok(fresh)} tokens over the period, about
         {ftok(fresh/span_days)} on an average day.</div>
       </div>
-      <div class="card"><h3>Cumulative tokens and cost</h3>
+      <div class="panel"><h3>Cumulative tokens and cost</h3>
         <div class="chart"><canvas id="cum" role="img"
           aria-label="Line chart of cumulative tokens and cumulative cost."></canvas></div>
-        <div class="cap">Both curves steepen from mid-August, when heavier models saw more use.</div>
+        <div class="cap">Half the money, {fusd(C/2)}, had accrued by {half_cost}; half the
+        tokens by {half_tok}.</div>
       </div>
     </div>
   </section>
 
   <section>
-    <div class="h2row"><h2>Models</h2><span class="meta">{len(bym)} seen · top 10 shown</span></div>
+    <div class="sec"><h2>Models</h2><span class="meta">{len(bym)} models, top 10 shown</span></div>
     <div class="grid2">
-      <div class="card"><h3>Tokens by model</h3>
+      <div class="panel"><h3>Tokens by model</h3>
         <div class="chart tall"><canvas id="modelTok" role="img"
           aria-label="Bar chart of total tokens by model."></canvas></div>
       </div>
-      <div class="card"><h3>Cost by model</h3>
+      <div class="panel"><h3>Cost by model</h3>
         <div class="chart tall"><canvas id="modelCost" role="img"
           aria-label="Bar chart of total cost by model."></canvas></div>
       </div>
@@ -525,8 +574,8 @@ footer {{ border-top:1px solid var(--line); margin-top:56px; padding:20px 0 56px
   </section>
 
   <section>
-    <div class="h2row"><h2>Projects</h2><span class="meta">{len(by_proj)} directories · top 10 shown</span></div>
-    <div class="card"><h3>Top projects by tokens</h3>
+    <div class="sec"><h2>Projects</h2><span class="meta">{len(by_proj)} directories, top 10 shown</span></div>
+    <div class="panel"><h3>Top projects by tokens</h3>
       <div class="chart tall"><canvas id="proj" role="img"
         aria-label="Bar chart of tokens by project directory."></canvas></div>
       <div class="cap"><code>{by_proj[0][0]}</code> leads with {ftok(by_proj[0][1]['total'])} tokens
@@ -536,8 +585,8 @@ footer {{ border-top:1px solid var(--line); margin-top:56px; padding:20px 0 56px
   </section>
 
   <section>
-    <div class="h2row"><h2>When the work happens</h2><span class="meta">weekday × hour, local time</span></div>
-    <div class="card">
+    <div class="sec"><h2>When the work happens</h2><span class="meta">weekday by hour, local time</span></div>
+    <div class="panel" style="padding:2px 0 0">
       {heatmap}
       <div class="scale"><span>fewer tokens</span><span class="bar"></span><span>more</span></div>
       <div class="cap">Darker is more. Peak hour {peak_hour:02d}:00; heaviest weekday
@@ -547,13 +596,13 @@ footer {{ border-top:1px solid var(--line); margin-top:56px; padding:20px 0 56px
   </section>
 
   <section>
-    <div class="h2row"><h2>Sessions</h2><span class="meta">{fi(len(sessions))} files · median {ftok(med_tok)}</span></div>
+    <div class="sec"><h2>Sessions</h2><span class="meta">{fi(len(sessions))} files, median {ftok(med_tok)} tokens</span></div>
     <div class="grid2">
-      <div class="card"><h3>Sessions by total tokens</h3>
+      <div class="panel"><h3>Sessions by total tokens (millions)</h3>
         <div class="chart"><canvas id="tokBins" role="img"
           aria-label="Bar chart of sessions grouped by total token size."></canvas></div>
       </div>
-      <div class="card"><h3>Sessions by active time</h3>
+      <div class="panel"><h3>Sessions by active time</h3>
         <div class="chart"><canvas id="durBins" role="img"
           aria-label="Bar chart of sessions grouped by active time."></canvas></div>
       </div>
@@ -566,27 +615,29 @@ footer {{ border-top:1px solid var(--line); margin-top:56px; padding:20px 0 56px
   </section>
 
   <section>
-    <div class="h2row"><h2>Usage signals</h2><span class="meta">weekly trends · derived from the session logs</span></div>
+    <div class="sec"><h2>Usage signals</h2><span class="meta">weekly trends from the session logs</span></div>
     <div class="signals">
 {''.join(f'<div class="sig"><div class="k">{a}</div><div class="v">{b}</div><div class="s">{c}</div><div class="spark"><canvas id="sp{i}" role="img" aria-label="{a} weekly trend."></canvas></div></div>' for i, (a, b, c, key, typ) in enumerate(signals))}
     </div>
-    <p class="cap">Each sparkline is the weekly trend from W27 to W41. The figure in each card is
+    <p class="cap">Each sparkline is the weekly trend from {TR['labels'][0]} to
+    {TR['labels'][-1]}. The figure in each cell is
     the period total or extreme; the sparkline shows that measure week by week as a rate, median or
     count.</p>
-    <div class="card" style="margin-top:16px"><h3>Tools used, with error share</h3>
+    <div class="panel" style="margin-top:26px"><h3>Tools used, with error share</h3>
       <div class="chart tall"><canvas id="tools" role="img"
         aria-label="Bar chart of calls per tool."></canvas></div>
       <div class="spark" style="height:52px; margin-top:12px"><canvas id="spTools" role="img"
         aria-label="Weekly tool call volume."></canvas></div>
-      <div class="cap">bash leads at {fi(X['tools'][0]['calls'])} calls; edit and read follow. The
-      riskiest is ask_question, wrong about a third of the time. Across {fi(X['edit_calls'])} edits
-      the agent added {fi(X['edits_add'])} lines and removed {fi(X['edits_del'])}. The sparkline
-      tracks total tool calls per week.</div>
+      <div class="cap">{X['tools'][0]['name']} leads at {fi(X['tools'][0]['calls'])} calls,
+      then {X['tools'][1]['name']} and {X['tools'][2]['name']}. The highest error rate belongs to
+      <b>{risky['name']}</b>, at {risky['err']}% of {fi(risky['calls'])} calls. Across
+      {fi(X['edit_calls'])} edits the agent added {fi(X['edits_add'])} lines and removed
+      {fi(X['edits_del'])}. The sparkline tracks total tool calls per week.</div>
     </div>
   </section>
 
   <section>
-    <div class="h2row"><h2>Method and data</h2><span class="meta">sources and definitions</span></div>
+    <div class="sec"><h2>Method and data</h2></div>
     <div class="notes">
       <li><span class="n">A</span><p>Source: every <code>~/.pi/agent/sessions/**/*.jsonl</code> file,
       {fi(len(sessions))} in total.</p></li>
@@ -605,8 +656,8 @@ footer {{ border-top:1px solid var(--line); margin-top:56px; padding:20px 0 56px
   </section>
 
   <footer>
-    Pi token report · {first} → {last} · Asia/Kolkata · generated {gen}. Totals include the session
-    that wrote this page.
+    {first} → {last}, Asia/Kolkata, generated {gen}. Totals include the session that wrote this
+    page.
   </footer>
 </main>
 
@@ -620,11 +671,11 @@ const usd = n => '$'+n.toLocaleString('en-US',{{maximumFractionDigits:2}});
 const el = id => document.getElementById(id);
 Chart.defaults.font.family = "'Hanken Grotesk',system-ui,sans-serif";
 Chart.defaults.font.size = 10.5;
-Chart.defaults.color = '#5c6a7a';
+Chart.defaults.color = '#57627a';
 Chart.defaults.animation = false;
 Chart.defaults.plugins.legend.labels.boxWidth = 10;
 Chart.defaults.plugins.legend.labels.font = {{size:10.5}};
-const G = {{ grid:{{color:'rgba(23,33,47,.08)', drawTicks:false}}, border:{{color:'rgba(23,33,47,.18)'}},
+const G = {{ grid:{{color:'rgba(16,25,42,.07)', drawTicks:false}}, border:{{color:'rgba(16,25,42,.16)'}},
   ticks:{{padding:6, maxRotation:0}} }};
 const S = (x, y) => ({{ x: Object.assign({{}}, G, x||{{}}), y: Object.assign({{}}, G, y||{{}}) }});
 
@@ -632,7 +683,7 @@ new Chart(el('cat'), {{
   type:'doughnut',
   data:{{ labels:D.cat.map(c=>c.name), datasets:[{{ data:D.cat.map(c=>c.cost),
     backgroundColor:[S1, S3, S2, S4], borderColor:'#fff', borderWidth:2, hoverOffset:0 }}] }},
-  options:{{ responsive:true, maintainAspectRatio:false, cutout:'58%',
+  options:{{ responsive:true, maintainAspectRatio:false, cutout:'64%',
     plugins:{{ legend:{{position:'right', labels:{{padding:10, boxHeight:9}}}}, tooltip:{{callbacks:{{
       label:x=>x.label+' · '+usd(x.raw)+' · '+fmtTok(D.cat[x.dataIndex].tokens)+' tok'}}}} }} }}
 }});
@@ -685,7 +736,7 @@ new Chart(el('cum'), {{
 function hbar(id, arr, key, color) {{
   new Chart(el(id), {{
     type:'bar',
-    data:{{ labels:arr.map(m=>m.name), datasets:[{{ data:arr.map(m=>m[key]), backgroundColor:color }}] }},
+    data:{{ labels:arr.map(m=>m.label||m.name), datasets:[{{ data:arr.map(m=>m[key]), backgroundColor:color }}] }},
     options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
       scales:{{ x:Object.assign({{}}, G, {{beginAtZero:true, ticks:{{callback:v=>key==='cost'?'$'+v:fmtTok(v)}}}}),
         y:Object.assign({{}}, G, {{ticks:{{autoSkip:false, font:{{size:10}}}}}}) }},
@@ -699,11 +750,13 @@ hbar('modelCost', D.modelCost, 'cost', S2);
 hbar('proj', D.proj, 'tokens', S1);
 
 function vbar(id, bins, color) {{
+  const narrow = window.innerWidth < 560;
   new Chart(el(id), {{
     type:'bar',
     data:{{ labels:bins.map(b=>b.label), datasets:[{{ data:bins.map(b=>b.count), backgroundColor:color }}] }},
     options:{{ responsive:true, maintainAspectRatio:false,
-      scales:S({{ticks:{{maxRotation:40, minRotation:40, autoSkip:false, font:{{size:9.5}}}}}}, {{beginAtZero:true}}),
+      scales:S({{ticks:{{maxRotation:narrow?32:0, minRotation:narrow?32:0, autoSkip:false,
+        font:{{size:narrow?8:9.5}}}}}}, {{beginAtZero:true}}),
       plugins:{{ legend:{{display:false}}, tooltip:{{callbacks:{{label:x=>fmtInt(x.raw)+' sessions'}}}} }} }}
   }});
 }}

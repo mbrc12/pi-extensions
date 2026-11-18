@@ -156,11 +156,12 @@ last three characters (for example `W27`). Each series is a list aligned to
 Keep this order and every section. Never drop information to make the page
 shorter.
 
-1. Header: eyebrow `Pi token report`, `h1` `Token usage report`, sub-line with
-   `first → last`, `Asia/Kolkata`, generated timestamp.
-2. Lede paragraph.
-3. Stats: 6 cards — total tokens, reported cost, sessions, cache-read share,
-   fresh tokens, active time.
+1. Header: nameplate — `h1` `Token usage report` on the left, three fields on the
+   right (Period `first → last`, Timezone `Asia/Kolkata`, Generated timestamp),
+   closed by the tick ruler. No eyebrow, no dot-joined meta line.
+2. Lede paragraph, computed from the period totals.
+3. Reading band: 6 readings in one ruled band — total tokens, reported cost,
+   sessions, cache-read share, fresh tokens, active time.
 4. What stands out: 5 numbered notes.
 5. Where the tokens go: cost doughnut + two prose paragraphs.
 6. Over time: 4 charts — cost per day, tokens per day (stacked), fresh tokens per
@@ -169,8 +170,9 @@ shorter.
 8. Projects: top projects by tokens (horizontal bar, top 10) + a note.
 9. When the work happens: weekday × hour heatmap, colour only, with a scale bar.
 10. Sessions: sessions by total tokens and by active time (2 histograms) + a note.
-11. Usage signals: 12 metric cards, each with a weekly sparkline; then the tools
-    chart (calls with error share) plus a weekly tool-call sparkline.
+11. Usage signals: 12 readings in one ruled grid, each with a weekly sparkline;
+    then the tools chart (calls with error share) plus a weekly tool-call
+    sparkline.
 12. Method and data: 6 notes (A–F).
 13. Footer.
 
@@ -180,35 +182,67 @@ Chart canvas IDs are fixed: `cat`, `daily`, `dailyTok`, `fresh`, `cum`,
 
 ## Design system (exact tokens)
 
+The identity is an instrument faceplate: one measuring strip, engraved rules,
+square corners, a single continuous reading band, and one bold gesture (the
+nameplate ruler). Do not reintroduce card chrome — rounded corners, shadows, a
+soft fill behind every block — or the generated-page tells: an uppercase tracked
+eyebrow above every heading, meta strings joined with `·`, a marker before every
+title, and a big number with a small label standing in for a hero.
+
 Single-hue blue. Never introduce a second hue, and never use a warm/beige
 background.
 
 ```css
 :root {
-  --bg:#ffffff; --soft:#f6f8fb; --line:#e4e9f0; --line2:#cfd8e3;
-  --text:#17212f; --muted:#5c6a7a; --accent:#2563eb; --accent2:#1e40af;
+  --bg:#ffffff; --soft:#f4f7fb; --line:#dfe5ee; --line2:#aab6c6;
+  --text:#10192a; --muted:#57627a; --accent:#2563eb; --accent2:#1e40af;
 }
 /* data series, darkest → lightest */
 S1 #1e40af   S2 #2563eb   S3 #60a5fa   S4 #bfdbfe
 ```
 
-- Font: **Hanken Grotesk** (400/500/600/700, plus italic 400) from Google Fonts,
-  `14.5px/1.6`, `system-ui` fallback. This is the project's default report font.
-  Numbers use `font-variant-numeric: tabular-nums`.
-- Layout: `.wrap { max-width:1120px; margin:0 auto; padding:0 24px }`.
-- Stats grid: 6 columns, dropping to 3 at ≤1000 px and 2 at ≤760 px.
-- Signals grid: 4 columns, dropping to 3 and 2 at the same breakpoints.
-- Cards: `border:1px solid var(--line); border-radius:10px; padding:16px 17px`.
+- Font: one family only, **Hanken Grotesk** (400/500/600/700, plus italic 400)
+  from Google Fonts, `14.5px/1.62`, `system-ui` fallback. This is the project's
+  default report font. No uppercase labels and no letter-spaced tracking; weight
+  and size carry the hierarchy. Figures use `font-variant-numeric: tabular-nums`.
+- Corners: 0 on every element. No shadows, no fills behind chart panels.
+- Layout: `.wrap { max-width:1120px; margin:0 auto; padding:0 28px }` (18 px at
+  ≤520 px).
+- Nameplate: `h1` left, a `dl.fields` of three cells right, closed by `.ruler` —
+  two repeating 1 px gradients at 9 px and 45 px pitch under a `--line2` rule.
+  Use the ruler once, in the nameplate only.
+- Reading band (`.band`): six readings, `background:var(--soft)`; each cell
+  carries `border-left` + `border-top`, the container carries `border-right` +
+  `border-bottom`, so the frame closes at any column count. 6 columns → 3 at
+  ≤1000 px → 2 at ≤760 px.
+- Signals grid: `repeat(3,minmax(0,1fr))` → 2 at ≤1000 px → 1 at ≤760 px, same
+  border trick, white cells, no fill.
+- Panels (`.panel`): no border. `h3` is an 11.5 px/600 corner label with a 5 px
+  accent square. `.grid2` uses `repeat(2,minmax(0,1fr))`; every canvas track is
+  `minmax(0,1fr)`.
+- Section headers (`.sec`): `border-top:1px solid var(--line2)`, `h2` preceded by
+  a 10 px accent tick, meta right-aligned at 11.5 px in sentence case (`45 models,
+  top 10 shown`), stacking under the heading at ≤760 px.
 - Charts: `height:200px`; `tall` = 250 px; sparklines 46 px (tools spark 52 px).
 - Heatmap cell: `hsl(221, S%, L%)` with `t = sqrt(v / max)`,
-  `S = 85 - 25t`, `L = 95 - 63t`; empty cells `hsl(221,40%,95%)`.
+  `S = 85 - 25t`, `L = 95 - 63t`; empty cells `hsl(221,40%,95%)`. Gap 3 px,
+  2 px at ≤520 px with only the 6-hour labels visible (`.h6`).
   Scale bar: `linear-gradient(90deg, hsl(221,85%,95%), hsl(221,60%,32%))`.
-- Chart.js defaults: `font.family "Hanken Grotesk"`, size 10.5, color `#5c6a7a`,
-  `animation:false`, legend `boxWidth:10`; grid `rgba(23,33,47,.08)`, border
-  `rgba(23,33,47,.18)`, ticks `padding:6, maxRotation:0`.
+- Chart.js defaults: `font.family "Hanken Grotesk"`, size 10.5, color `#57627a`,
+  `animation:false`, legend `boxWidth:10`; grid `rgba(16,25,42,.07)`, border
+  `rgba(16,25,42,.16)`, ticks `padding:6, maxRotation:0`; doughnut `cutout:'64%'`.
 - Print: `@page { size:letter; margin:14mm 13mm }`,
-  `print-color-adjust:exact`, `break-inside:avoid` on cards, stats, notes and
-  split children; grids collapse to block; buttons hidden.
+  `print-color-adjust:exact`, `break-inside:avoid` on panels, readings, notes and
+  split children; grids collapse to block.
+
+### Design procedure
+
+Before changing CSS, write a four-line plan: palette as 4–6 named hex values,
+the type family and its roles, a one-sentence layout concept with an ASCII
+sketch, and the single principle that makes this page specific to a machine's
+token ledger. Check that plan against the tells above and revise anything you
+would produce for any report. Build, screenshot at 375, 768 and 1280 px, then
+remove one accessory.
 
 ## Hard rules
 
@@ -219,6 +253,10 @@ S1 #1e40af   S2 #2563eb   S3 #60a5fa   S4 #bfdbfe
 - **One hue only.** Blue (hue 221), varied by lightness.
 - **Heatmap shows colour only**, with a scale bar; values on hover/tap.
 - **Every chart has a plain-language caption.**
+- **Captions are computed, never hardcoded.** Every month, week range, model,
+  tool and path in prose comes from the data (`mname(top_m)`, `prev2`,
+  `TR['labels']`, `risky`, `plabel`). A caption that names a fixed month or tool
+  goes stale the next run.
 - **Every bespoke metric card has a weekly sparkline.**
 - **Keep every section** and all 5 + 6 notes.
 
@@ -240,9 +278,10 @@ EOF
 node --check /tmp/report.js               # must pass
 ```
 
-Then in the browser: no horizontal overflow at 375 px and 1200 px, all 24
-canvases present, and the totals in the stats row match the console line printed
-by `render.py`.
+Then in the browser: no horizontal overflow at 375, 768 and 1280 px, all 24
+canvases present, and the totals in the reading band match the console line
+printed by `render.py`. `agent-browser set viewport <w> <h>` changes the width;
+check `document.documentElement.scrollWidth === clientWidth`.
 
 ## Customizing
 
@@ -260,6 +299,11 @@ by `render.py`.
 - **Canvas overflow:** grids that hold canvases must use `minmax(0,1fr)` tracks
   and `min-width:0` on the item. A plain `1fr` track lets the canvas's 300 px
   intrinsic width blow out the page.
+- **Long axis labels:** project paths go through `plabel()` (home → `~`, 30
+  characters, tail kept) and the token histogram uses bare numbers under a
+  "(millions)" heading. Without both, Chart.js clips labels at 375 px.
+- **Narrow histograms:** `vbar` rotates its ticks 32° below 560 px; without it
+  the eight session bins collide.
 - **Do not run `engine.py` directly.** It is a library; the renderer is the entry
   point. Running the old engine `main()` would emit a different (brutalist) page.
 - **Count subagent usage.** The `subagent` tool result carries its own `usage`;
