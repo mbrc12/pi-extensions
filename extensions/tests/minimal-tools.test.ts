@@ -34,23 +34,35 @@ const textResult = (text: string) => ({ content: [{ type: "text", text }], detai
 /** A failed call: pi sends the error message as content and sets isError. */
 const failedResult = (text: string, details: unknown = {}) => ({ content: [{ type: "text", text }], details, isError: true });
 
-describe("bash timeout requirement", () => {
-	test("the schema lists timeout as required", () => {
+describe("bash contract", () => {
+	test("the schema requires timeout and description", () => {
 		const bash = tools.get("bash");
-		expect(bash.parameters.required).toEqual(["command", "timeout"]);
+		expect(bash.parameters.required).toEqual(["command", "timeout", "description"]);
 		expect(bash.parameters.properties.timeout.description).toContain("Required");
+		expect(bash.parameters.properties.description.description).toContain("One short sentence");
 	});
 
-	test("the description states the requirement instead of calling it optional", () => {
+	test("the tool description states both requirements", () => {
 		const description: string = tools.get("bash").description;
-		expect(description).toContain("A timeout in seconds is required.");
+		expect(description).toContain("A timeout in seconds and a one-sentence description are required.");
 		expect(description).not.toContain("Optionally provide a timeout");
+	});
+
+	test("the guidelines ask for a description on every call", () => {
+		const guidelines: string[] = tools.get("bash").promptGuidelines ?? [];
+		expect(guidelines.some((line) => line.includes("one-sentence description on every bash call"))).toBe(true);
 	});
 
 	test("execute refuses a call without a positive timeout", async () => {
 		const bash = tools.get("bash");
-		await expect(bash.execute("id", { command: "true" }, undefined, undefined)).rejects.toThrow("positive timeout");
-		await expect(bash.execute("id", { command: "true", timeout: 0 }, undefined, undefined)).rejects.toThrow("positive timeout");
+		await expect(bash.execute("id", { command: "true", description: "x" }, undefined, undefined)).rejects.toThrow("positive timeout");
+		await expect(bash.execute("id", { command: "true", timeout: 0, description: "x" }, undefined, undefined)).rejects.toThrow("positive timeout");
+	});
+
+	test("execute refuses a call without a description", async () => {
+		const bash = tools.get("bash");
+		await expect(bash.execute("id", { command: "true", timeout: 5 }, undefined, undefined)).rejects.toThrow("description");
+		await expect(bash.execute("id", { command: "true", timeout: 5, description: "   " }, undefined, undefined)).rejects.toThrow("description");
 	});
 });
 
@@ -139,5 +151,29 @@ describe("minimal tool renderers", () => {
 		expect(render("grep", textResult(lines), true)).toContain("… 15 more lines");
 		expect(render("ls", textResult(lines), true)).toContain("… 10 more lines");
 		expect(render("grep", textResult(lines), false)).not.toContain("file-0");
+	});
+});
+
+describe("bash call rendering", () => {
+	/** Render a call the way pi does: renderCall(args, theme, context). */
+	function renderCall(args: any, expanded: boolean) {
+		const context = { expanded, executionStarted: false, state: {} as Record<string, unknown> };
+		const component = tools.get("bash").renderCall(args, theme, context);
+		return typeof component.render === "function" ? component.render(200).join("\n") : String(component.text ?? "");
+	}
+
+	test("the description is shown under the command", () => {
+		const text = renderCall(
+			{ command: "grep -rn policy src", timeout: 30, description: "Find every policy reference before editing" },
+			false,
+		);
+		expect(text).toContain("Find every policy reference before editing");
+		expect(text).toContain("grep -rn policy src");
+	});
+
+	test("a call without a description still renders the command", () => {
+		const text = renderCall({ command: "ls", timeout: 10 }, false);
+		expect(text).toContain("ls");
+		expect(text.split("\n").length).toBe(1);
 	});
 });

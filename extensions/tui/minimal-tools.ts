@@ -90,12 +90,17 @@ const tools = {
  */
 const bashParameters = {
 	...tools.bash.parameters,
-	required: ["command", "timeout"],
+	required: ["command", "timeout", "description"],
 	properties: {
 		...tools.bash.parameters.properties,
 		timeout: {
 			type: "number",
 			description: "Timeout in seconds. Required for every command; keep it as short as the work allows.",
+		},
+		description: {
+			type: "string",
+			description:
+				"One short sentence: what this command does and why. Shown in the transcript and in any approval prompt, so a reader can judge the command without reading it.",
 		},
 	},
 } as typeof tools.bash.parameters;
@@ -103,9 +108,11 @@ const bashParameters = {
 /** Built-in description with the optional timeout replaced by the requirement. */
 const BASH_DESCRIPTION = (() => {
 	const optional = /Optionally provide a timeout in seconds\.$/;
+	const required =
+		"A timeout in seconds and a one-sentence description are required. The description is shown next to the command and in any approval prompt.";
 	return optional.test(tools.bash.description)
-		? tools.bash.description.replace(optional, "A timeout in seconds is required.")
-		: `${tools.bash.description} A timeout in seconds is required.`;
+		? tools.bash.description.replace(optional, required)
+		: `${tools.bash.description} ${required}`;
 })();
 
 export default function (pi: ExtensionAPI) {
@@ -148,6 +155,7 @@ export default function (pi: ExtensionAPI) {
 		promptGuidelines: [
 			...tools.bash.promptGuidelines,
 			"Pass a timeout to bash on every call; never omit it.",
+			"Pass a one-sentence description on every bash call: what the command does and why. It is what the user reads in the transcript and in approval prompts.",
 		],
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -156,8 +164,12 @@ export default function (pi: ExtensionAPI) {
 			if (typeof params.timeout !== "number" || !Number.isFinite(params.timeout) || params.timeout <= 0) {
 				throw new Error("bash requires a positive timeout in seconds.");
 			}
+			if (typeof params.description !== "string" || params.description.trim().length === 0) {
+				throw new Error("bash requires a one-sentence description of what the command does.");
+			}
+			const { description: _description, ...rest } = params;
 			if (shellPath === undefined) resolveShell();
-			return bashTool().execute(toolCallId, params, signal, onUpdate, ctx);
+			return bashTool().execute(toolCallId, rest, signal, onUpdate, ctx);
 		},
 
 		renderCall(args, theme, context) {
@@ -168,17 +180,19 @@ export default function (pi: ExtensionAPI) {
 
 			const command = args.command || "...";
 			const timeout = args.timeout as number | undefined;
+			const why = typeof args.description === "string" ? args.description.trim() : "";
 			const startedAtSuffix = state.startedAt === undefined
 				? ""
 				: theme.fg("dim", ` ${formatStartTime(state.startedAt)}`);
 			const timeoutSuffix = timeout ? theme.fg("muted", ` (${timeout}s)`) : "";
-			
-			if (context.expanded) {
-				return new Text(theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", command) + startedAtSuffix + timeoutSuffix, 0, 0);
-			}
-			
-			const compressed = compressCommand(command);
-			return new Text(theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", compressed) + startedAtSuffix + timeoutSuffix, 0, 0);
+			const whyLine = why ? `\n${theme.fg("muted", `   ${why}`)}` : "";
+
+			const shown = context.expanded ? command : compressCommand(command);
+			return new Text(
+				theme.fg("toolTitle", theme.bold("$ ")) + theme.fg("accent", shown) + startedAtSuffix + timeoutSuffix + whyLine,
+				0,
+				0,
+			);
 		},
 
 		renderResult(result, { expanded, isPartial }, theme, context) {

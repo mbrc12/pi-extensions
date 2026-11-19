@@ -113,15 +113,16 @@ function summarizeToolCall(
   switch (toolName) {
     case "bash": {
       const cmd = (input.command as string) ?? "";
+      const why = typeof input.description === "string" ? input.description.trim() : "";
       const isLarge = cmd.length > COMMAND_PREVIEW_LENGTH;
       const detail = isLarge
         ? cmd.slice(0, COMMAND_PREVIEW_LENGTH) +
           `\n... [${cmd.length - COMMAND_PREVIEW_LENGTH} more chars truncated]`
         : cmd;
-      const summary = isLarge
-        ? `Run bash command (${cmd.length} chars)`
-        : "Run bash command";
-      return { title: summary, detail, isLarge, full: cmd };
+      // The description is the model's own statement of intent; it is the most
+      // useful thing to show in an approval prompt.
+      const title = why || (isLarge ? `Run bash command (${cmd.length} chars)` : "Run bash command");
+      return { title, detail, isLarge, full: cmd };
     }
     case "write": {
       const p = (input.path as string) ?? "?";
@@ -208,6 +209,7 @@ async function promptForToolCall(
   event: { toolName: string; input: Record<string, unknown> },
   ctx: ExtensionContext,
   level: "destructive" | "outside" | "mode",
+  matchedPattern?: string,
 ): Promise<{ block: true; reason: string } | undefined> {
   const destructive = level === "destructive";
   if (!ctx.hasUI) {
@@ -220,9 +222,14 @@ async function promptForToolCall(
   }
 
   const summary = summarizeToolCall(event.toolName, event.input);
+  const subtitleParts = [
+    summary.title !== "Run bash command" ? summary.title : undefined,
+    matchedPattern ? `matches: ${matchedPattern}` : undefined,
+  ].filter(Boolean) as string[];
+  const subtitle = subtitleParts.length > 0 ? subtitleParts.join(" · ") : undefined;
   const header =
     level === "destructive"
-      ? "⛔ DESTRUCTIVE — review before allowing"
+      ? "⛔ Matches a destructive pattern — check the command"
       : level === "outside"
         ? "⚠️ Outside the permission policy"
         : "🔴 Ask mode — approve this call";
@@ -230,7 +237,7 @@ async function promptForToolCall(
   promptWait(pi, { title: "Pi", body: header });
   const allowed = await showAskDialog(ctx, {
     header,
-    subtitle: summary.isLarge ? summary.title : undefined,
+    subtitle,
     preview: summary.detail,
     full: summary.full,
     truncated: summary.isLarge,
@@ -376,11 +383,17 @@ function bypassed(): boolean {
   return !policy.enabled || currentMode === "allow";
 }
 
-/** True when a bash command matches a destructive pattern from policy. */
-function isDestructive(event: { toolName: string; input: Record<string, unknown> }): boolean {
-  if (event.toolName !== "bash") return false;
+/**
+ * The first destructive pattern a bash command matches, if any.
+ *
+ * The pattern source is shown in the prompt: without it the user has to guess
+ * whether the text will run or merely mentions something, which is exactly the
+ * distinction a regex cannot make.
+ */
+function destructiveMatch(event: { toolName: string; input: Record<string, unknown> }): string | undefined {
+  if (event.toolName !== "bash") return undefined;
   const command = typeof event.input.command === "string" ? event.input.command : "";
-  return promptPatterns(policy.commands.prompt).some((re) => re.test(command));
+  return promptPatterns(policy.commands.prompt).find((re) => re.test(command))?.source;
 }
 
 /** Compiled `commands.prompt` patterns, cached by source. */
@@ -504,8 +517,9 @@ async function handleSandboxDenials(
   );
 
   const notes: string[] = [];
-  if (blocked.length > 0) {
-    notes.push(`🚫 denied by policy, not grantable: ${blocked.join(", ")}`);
+  const blockedUnique = [...new Set(blocked)];
+  if (blockedUnique.length > 0) {
+    notes.push(`🚫 denied by policy, not grantable: ${blockedUnique.join(", ")}`);
   }
 
   if (grantable.length > 0 && ctx.hasUI) {
@@ -533,7 +547,7 @@ async function handleSandboxDenials(
       items.push({ key: "no", label: "🚫 No, leave it denied" });
 
       const choice = await ctx.ui.select(
-        `📦 Sandbox denied ${grantable.length} write${grantable.length === 1 ? "" : "s"}`,
+        `📦 Sandbox denied ${new Set(grantable).size} write${new Set(grantable).size === 1 ? "" : "s"}`,
         items.map((item) => item.label),
       );
       const picked = items.find((item) => item.label === choice)?.key ?? "no";
@@ -592,9 +606,9 @@ export default function (pi: ExtensionAPI) {
 
     // Ask mode prompts for everything; sandbox mode only for the ask band.
     if (verdict === "ask" || currentMode === "ask") {
-      const level =
-        verdict === "ask" ? (isDestructive(event) ? "destructive" : "outside") : "mode";
-      const result = await promptForToolCall(pi, event, ctx, level);
+      const matched = verdict === "ask" ? destructiveMatch(event) : undefined;
+      const level = verdict === "ask" ? (matched ? "destructive" : "outside") : "mode";
+      const result = await promptForToolCall(pi, event, ctx, level, matched);
       if (modeGeneration !== callGeneration) {
         return {
           block: true,
