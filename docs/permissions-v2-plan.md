@@ -104,8 +104,9 @@ already stores per-folder decisions in `~/.pi/agent/`.
   grant added mid-session rewrites the profile immediately; no restart.
 - **Precedence:** `policy.deny` (never grantable) › `policy.write` ›
   `folder.write` › `folder.deny` (additive, lets one checkout be stricter) › implicit `ask`.
-- **Refuses keys at `/` and `$HOME`.** A session started in `~` gets no folder grants; grants
-  require a named subdirectory.
+- **Any path can be a key, including `$HOME` and `/`.** There are no special cases: a grant is a
+  path root, the dialog offers the parents it computed, and the deny list is what protects
+  credentials and pi's own state.
 - **Writes are atomic**: temp file plus rename, re-read and merge before writing, one retry on
   conflict, mode `0600`. Subagents really do run concurrently and write here.
 - **`updated`** lets `/permissions` list and prune entries for folders that no longer exist.
@@ -127,14 +128,22 @@ Wrapper:
 ```bash
 #!/bin/bash
 # ~/.local/bin/pi-sandboxed-bash
-profile="$HOME/.pi/sandbox/sessions/${PI_SESSION_ID}.sb"
-[[ -f $profile ]] || exec /bin/bash "$@"          # no profile yet: unsandboxed
-exec /usr/bin/sandbox-exec -f "$profile" /bin/bash "$@"
+set -u
+if [[ -n "${PI_SANDBOX_PROFILE:-}" && -f "${PI_SANDBOX_PROFILE}" ]]; then
+  exec /usr/bin/sandbox-exec -f "${PI_SANDBOX_PROFILE}" /bin/bash "$@"
+fi
+echo "pi-sandboxed-bash: warning: no sandbox profile; running unsandboxed" >&2
+exec /bin/bash "$@"
 ```
 
-- `PI_SESSION_ID` is exported to children, so the profile path needs no env mutation.
-- The permissions extension writes `<session-id>.sb` at `session_start` and rewrites it on every
-  grant. `sandbox-exec` reads the file at exec time, so no restart is needed.
+- The profile path travels in `PI_SANDBOX_PROFILE`, set by the extension. `PI_SESSION_ID` is
+  stripped from the bash child environment, so a session-named file cannot be found by guessing.
+- One profile per session and workspace: `<workspace-hash>.<session-id>.sb`. Subagents share the
+  workspace with their parent, and a workspace-keyed file lets the last session to start overwrite
+  the others' grants and mode.
+- Allow mode renders `(version 1)
+(allow default)` as the profile, so bypass is one mechanism, not
+  two. Grants rewrite the file, and `sandbox-exec` reads it at exec time, so no restart is needed.
 - `!` commands are sandboxed by the same path. Provide `/sandbox off` for one deliberate
   unsandboxed command, and list current grants in the status line.
 
@@ -176,7 +185,7 @@ that parser is the thing we are deleting. `EPERM` plus retry needs no parsing.
 ## 7. Subagents and multiagent
 
 - Child pi processes inherit `~/.pi/agent/settings.json`, so `shellPath` applies and their `bash`
-  is sandboxed with their own `PI_SESSION_ID` profile.
+  is sandboxed with its own `<workspace-hash>.<session-id>.sb` profile.
 - Their permissions extension resolves the **same grants file by its own `cwd`**, so a subagent
   started in the parent folder inherits everything the parent has, with no env plumbing. A subagent
   started with a different `cwd` (multiagent accepts one) gets *that* folder's grants, which is the
@@ -356,12 +365,12 @@ The kernel enforces what the profile says. Writes outside the allowlist, credent
 
 | Mode | Symbol | Gate | Kernel sandbox | Behaviour |
 |---|---|---|---|---|
-| `allow` | 🟢 green | off | off (`.off` marker) | the permissions system is bypassed entirely |
+| `allow` | 🟢 green | off | off (profile permits everything) | the permissions system is bypassed entirely |
 | `sandbox` | 📦 box | on | on | policy decides; ask band and destructive patterns prompt |
 | `ask` | 🔴 red | on | on | prompt for every call; `deny` still blocks |
 
 `deny` is absolute in `sandbox` and `ask`. `allow` is the only way past the policy, and it is a
-full bypass: the extension swaps the workspace's `.sb` profile for a `.off` marker, so the shell
+full bypass: the extension renders a `(allow default)` profile, so the shell
 wrapper and `py_explore` run without `sandbox-exec` at all.
 
 ### Removed
@@ -410,8 +419,7 @@ the inconsistency a permissions system must not have.
 Fixes:
 
 - `deny` is evaluated in every mode except `allow`, and `allow` is now a real bypass rather than a
-  half-bypass: it also removes the kernel sandbox, via a `.off` marker next to the profile. A
-  `.off` marker cannot be mistaken for a profile, and the wrapper picks it up without a restart.
+  half-bypass: it also removes the kernel sandbox, by rendering a profile that permits everything.
 - The mode axis was renamed to what it does: `allow`, `sandbox`, `ask`. `classify` and `auto`
   restore as `sandbox`, so old sessions migrate silently.
 - The policy file's own `mode` key (`enforce`/`shadow`/`off`) is gone; one `enabled` boolean
@@ -419,3 +427,30 @@ Fixes:
 
 Grant dialog now carries symbols: 📁 folder, 🌳 wider ancestor, 📄 exact files, ⏳ session only,
 🚫 no.
+
+## 17. Uniformity pass: no $HOME exceptions
+
+The first cut special-cased `$HOME` and `/` in three places: the workspace was not writable when a
+session started in `$HOME`, `grantScopes` filtered those paths out, and grants were refused as folder
+keys. Three special cases, three ways to surprise the reader, and none of them necessary.
+
+What replaced them:
+
+- `resolveFs` and `renderProfile` expand `<workspace>` like any other entry, so a session started in
+  `$HOME` makes `$HOME` writable, minus the deny list.
+- `grantScopes` returns parents, the common ancestor and the files, whatever they are. Choosing 🌳
+  for two paths on different volumes grants `/`; the dialog names it, the user chose it.
+- `folderKeyFor` is `realpathLoose(workspace)`, so a grant can be stored under `$HOME` and inherited
+  by sessions beneath it.
+
+The one asset that must not be reachable by a grant is the wrapper script itself: pi executes
+`~/.local/bin/pi-sandboxed-bash` **outside** the sandbox, so a write grant covering it turns
+sandboxed writes into unsandboxed code execution. That belongs in `deny`, which is a plain data
+entry, not a special case:
+
+```json
+"deny": [ ..., "~/.local/bin/pi-sandboxed-bash" ]
+```
+
+The extension cannot add it: writes to `~/.pi/agent` are denied for the agent by design, which is
+also why the self-grant hole is closed.

@@ -21,7 +21,8 @@ import {
   resolveFs,
   saveFolderGrant,
   workspaceProfilePath,
-  bypassMarkerPath,
+  sessionProfilePath,
+  BYPASS_PROFILE,
   toolPathArg,
   withSessionGrants,
 } from "../shared/permissions-policy.ts";
@@ -73,11 +74,18 @@ describe("policy file", () => {
     writeFileSync(policyFilePath(), JSON.stringify(DEFAULT_POLICY));
   });
 
-  test("bypass marker is the profile path with an .off suffix", () => {
-    const profile = workspaceProfilePath(workspace);
-    const marker = bypassMarkerPath(workspace);
-    expect(marker.endsWith(".off")).toBe(true);
-    expect(marker.slice(0, -4)).toBe(profile.slice(0, -3));
+  test("profiles are keyed by session as well as workspace", () => {
+    const a = sessionProfilePath(workspace, "session-a");
+    const b = sessionProfilePath(workspace, "session-b");
+    const other = sessionProfilePath(outside, "session-a");
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(other);
+    expect(a).toEndWith("session-a.sb");
+  });
+
+  test("the bypass profile permits everything", () => {
+    expect(renderProfile({ policy, grants: empty, workspace, bypass: true })).toBe(BYPASS_PROFILE);
+    expect(BYPASS_PROFILE).toContain("(allow default)");
   });
 
   test("expandPath handles ~, <workspace> and relative paths", () => {
@@ -138,22 +146,12 @@ describe("resolveFs", () => {
     expect(resolveFs({ policy, grants: tightened, op: "write", path: join(realpathLoose(outside), "priv", "k"), workspace }).decision).toBe("deny");
   });
 
-  test("a workspace at $HOME does not make $HOME writable", () => {
-    const verdict = resolveFs({
-      policy,
-      grants: empty,
-      op: "write",
-      path: join(homedir(), "Documents", "x.md"),
-      workspace: homedir(),
-    });
-    expect(verdict.decision).toBe("ask");
-  });
 });
 
 describe("folder grants store", () => {
-  test("refuses $HOME and / as keys", () => {
-    expect(folderKeyFor(homedir())).toBeUndefined();
-    expect(folderKeyFor("/")).toBeUndefined();
+  test("keys are the workspace's physical path, whatever it is", () => {
+    expect(folderKeyFor(homedir())).toBe(realpathLoose(homedir()));
+    expect(folderKeyFor("/")).toBe("/");
     expect(folderKeyFor(workspace)).toBe(realpathLoose(workspace));
   });
 
@@ -180,10 +178,9 @@ describe("folder grants store", () => {
   test("session grants merge without touching the store", () => {
     const merged = withSessionGrants(empty, workspace, [realpathLoose(outside)]);
     expect(merged.folders[realpathLoose(workspace)].write).toEqual([realpathLoose(outside)]);
-    expect(saveFolderGrant(homedir(), { write: ["/x"] })).toEqual({
-      ok: false,
-      reason: "refusing to store a grant for $HOME or /",
-    });
+    expect(saveFolderGrant(homedir(), { write: ["/x"] }).ok).toBe(true);
+    expect(loadGrants().folders[realpathLoose(homedir())].write).toEqual(["/x"]);
+    clearFolderGrant(homedir());
   });
 });
 
@@ -224,6 +221,13 @@ describe("denial parsing", () => {
     expect(denials.length).toBe(2);
     expect(denials[0].path).toBe("/Users/x/sbx-a/x.txt");
     expect(denials[1].path).toBe("/Users/x/sbx-b/y.txt");
+  });
+
+  test("ignores implausible paths and non-command tools", () => {
+    // "/i" is what a mis-parse yields, and its parent is "/".
+    expect(parseDenials("something Operation not permitted: /i", "bash")[0].path).toBeNull();
+    expect(parseDenials("/bin/bash: /Users/x/y.txt: Operation not permitted", "read")).toEqual([]);
+    expect(parseDenials("/bin/bash: /Users/x/y.txt: Operation not permitted", "bash")[0].path).toBe("/Users/x/y.txt");
   });
 
   test("handles python PermissionError and messages without a path", () => {
@@ -316,32 +320,33 @@ describe("extension wiring", () => {
 });
 
 describe("audit regressions", () => {
-  test("a workspace at $HOME leaves the rest of the allowlist intact", () => {
-    // The full default list here: the shared fixture above drops the caches.
+  test("a workspace at $HOME behaves like any other workspace", () => {
     const check = (path: string) =>
-      resolveFs({ policy: DEFAULT_POLICY, grants: empty, op: "write", path, workspace: homedir() }).decision;
+      resolveFs({ policy, grants: empty, op: "write", path, workspace: homedir() }).decision;
     expect(check(join(realpathLoose("/tmp"), "x"))).toBe("allow");
     expect(check(join(homedir(), ".cache", "x"))).toBe("allow");
-    expect(check(join(homedir(), "Documents", "x"))).toBe("ask");
+    // $HOME is the workspace, so it is writable, minus the deny list.
+    expect(check(join(homedir(), "Documents", "x"))).toBe("allow");
+    expect(check(join(homedir(), ".ssh", "id_ed25519"))).toBe("deny");
   });
 
-  test("a workspace at $HOME does not emit a $HOME write rule", () => {
+  test("a workspace at $HOME emits a $HOME write rule", () => {
     const sbpl = renderProfile({ policy, grants: empty, workspace: homedir() });
     const writeLine = sbpl.split("\n").find((line) => line.startsWith("(allow file-write*")) ?? "";
-    expect(writeLine).not.toContain(`(subpath "${realpathLoose(homedir())}")`);
+    expect(writeLine).toContain(`(subpath "${realpathLoose(homedir())}")`);
   });
 
-  test("grant scopes never offer $HOME or / to widen to", () => {
+  test("grant scopes are plain parents, ancestor and files", () => {
     expect(grantScopes([join(homedir(), "Documents", "a.txt")]).common).toBe(join(homedir(), "Documents"));
 
-    // Two distant directories share only "/": the dialog must not offer it.
+    // Two distant directories share only "/", and that is what gets offered.
     const wide = grantScopes(["/Users/x/a/one.txt", "/Volumes/Data/b/two.txt"]);
-    expect(wide.common).not.toBe("/");
+    expect(wide.common).toBe("/");
     expect(wide.parents.length).toBe(2);
 
-    // A denied file directly in $HOME cannot become a $HOME grant.
+    // A denied file directly in $HOME offers $HOME like any other parent.
     const atHome = grantScopes([join(homedir(), "loose.txt")]);
-    expect(atHome.parents).toEqual([]);
+    expect(atHome.parents).toEqual([realpathLoose(homedir())]);
     expect(atHome.files.length).toBe(1);
   });
 });

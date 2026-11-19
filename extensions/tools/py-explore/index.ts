@@ -16,7 +16,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
-import { bypassMarkerPath, loadPolicy, workspaceProfilePath } from "../../shared/permissions-policy.ts";
+import { PROFILE_ENV } from "../../shared/permissions-policy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -191,17 +191,14 @@ function venvToPython(venv: string, cwd: string): string {
 function sandboxed(
   command: string,
   args: string[],
-  cwd: string,
+  _cwd: string,
 ): { command: string; args: string[] } {
-  const policy = loadPolicy();
-  if (!policy.enabled) return { command, args };
-  if (existsSync(bypassMarkerPath(cwd))) return { command, args };
-  const profile = workspaceProfilePath(cwd);
-  if (!existsSync(profile)) return { command, args };
-  return {
-    command: "/usr/bin/sandbox-exec",
-    args: ["-f", profile, command, ...args],
-  };
+  // The permissions extension exports the session's profile path; python then
+  // runs under the same profile as bash, and allow mode is just a profile that
+  // permits everything.
+  const profile = process.env[PROFILE_ENV];
+  if (!profile || !existsSync(profile)) return { command, args };
+  return { command: "/usr/bin/sandbox-exec", args: ["-f", profile, command, ...args] };
 }
 
 function collectCommandOutput(

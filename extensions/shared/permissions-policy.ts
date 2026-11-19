@@ -161,12 +161,18 @@ const DEVICE_WRITE = ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"];
 export const SANDBOX_PROFILE_DIR = "~/.pi/sandbox/workspaces";
 
 /**
- * Marker that tells the shell wrapper and py_explore to skip the sandbox for
- * this workspace. Written in `allow` mode, removed in the other modes.
+ * Profile for one session in one workspace.
+ *
+ * Keyed by session as well as workspace: subagent and multiagent sessions share
+ * a workspace with their parent, and a workspace-keyed file lets whichever
+ * session starts last overwrite the others' grants and mode.
  */
-export function bypassMarkerPath(workspace: string): string {
-  return join(profileDirPath(), `${workspaceHash(workspace)}.off`);
+export function sessionProfilePath(workspace: string, sessionId: string): string {
+  return join(profileDirPath(), `${workspaceHash(workspace)}.${sessionId}.sb`);
 }
+
+/** Environment variable the shell wrapper and py_explore read the profile from. */
+export const PROFILE_ENV = "PI_SANDBOX_PROFILE";
 
 /** Tools whose path argument the middleware checks. */
 export const PATH_TOOLS = ["read", "write", "edit", "grep", "find", "ls"] as const;
@@ -239,19 +245,6 @@ export function isUnder(child: string, root: string): boolean {
   return child === root || child.startsWith(root + sep);
 }
 
-function isHomeOrRoot(path: string): boolean {
-  const real = realpathLoose(path);
-  return real === "/" || real === realpathLoose(home());
-}
-
-/**
- * A workspace that is $HOME or / must not become writable: starting pi in the
- * home directory would otherwise allow writes to everything below it.
- */
-export function workspaceWritable(workspace: string): boolean {
-  return !isHomeOrRoot(workspace);
-}
-
 function readJsonFile<T>(file: string): T | undefined {
   try {
     return JSON.parse(readFileSync(file, "utf8")) as T;
@@ -312,13 +305,9 @@ export function loadGrants(): LocalGrants {
   return { version: 1, folders: raw.folders };
 }
 
-/**
- * Key used when storing a grant for `workspace`. Refuses $HOME and /, so a
- * session started in the home directory can never grant home-wide writes.
- */
-export function folderKeyFor(workspace: string): string | undefined {
-  const real = realpathLoose(workspace);
-  return isHomeOrRoot(real) ? undefined : real;
+/** Key used when storing a grant: the workspace's physical path. */
+export function folderKeyFor(workspace: string): string {
+  return realpathLoose(workspace);
 }
 
 export interface FolderLookup {
@@ -333,7 +322,7 @@ export function lookupFolderGrants(grants: LocalGrants, workspace: string): Fold
     const entry = grants.folders[current];
     if (entry) return { key: current, grants: entry };
     const parent = dirname(current);
-    if (parent === current || isHomeOrRoot(parent)) return undefined;
+    if (parent === current) return undefined;
     current = parent;
   }
 }
@@ -407,11 +396,7 @@ export function resolveFs(args: {
     return { decision: "allow", path: target, reason: "reads are allowed except denied paths" };
   }
 
-  // Only the workspace entry is dropped when the session starts in $HOME or /;
-  // the rest of the list (temp, caches, project roots) still applies.
-  const allowed = policy.write
-    .map((p) => realpathLoose(expandPath(p, ws)))
-    .filter((root) => root !== ws || workspaceWritable(ws));
+  const allowed = policy.write.map((p) => realpathLoose(expandPath(p, ws)));
   if (allowed.some((root) => isUnder(target, root))) {
     return { decision: "allow", path: target, reason: "inside the write allowlist" };
   }
@@ -460,21 +445,25 @@ function denyRule(op: string, roots: string[]): string {
  * allowlist aborts children (dyld cannot map the shared cache), so the deny
  * list is the only workable shape.
  */
+/** Profile that permits everything: used by `allow` mode and `enabled: false`. */
+export const BYPASS_PROFILE = "(version 1)\n(allow default)\n";
+
 export function renderProfile(args: {
   policy: Policy;
   grants: LocalGrants;
   workspace: string;
+  bypass?: boolean;
 }): string {
+  if (args.bypass) return BYPASS_PROFILE;
   const { policy, grants, workspace } = args;
   const ws = realpathLoose(workspace);
   const folder = lookupFolderGrants(grants, ws);
 
   const writeRoots = unique([
-    ...(workspaceWritable(ws) ? [ws] : []),
     ...policy.write.map((p) => realpathLoose(expandPath(p, ws))),
     ...(folder?.grants.write ?? []).map((p) => realpathLoose(expandPath(p, ws))),
     ...DEVICE_WRITE.map((p) => expandPath(p, ws)),
-  ]).filter((root) => root !== ws || workspaceWritable(ws));
+  ]);
 
   const readDeny = unique([
     ...policy.deny.map((p) => realpathLoose(expandPath(p, ws))),
@@ -528,8 +517,7 @@ export function workspaceProfilePath(workspace: string): string {
 }
 
 /** Write the profile pi's child shells read through the wrapper script. */
-export function writeWorkspaceProfile(workspace: string, profile: string): string {
-  const file = workspaceProfilePath(workspace);
+export function writeProfile(file: string, profile: string): string {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, profile, { mode: 0o600 });
@@ -553,7 +541,21 @@ const ABS_PATH = /(?:~|\/)[^\s'"`;|&<>()]+/g;
  * A single command reports every blocked path, because the shell does not
  * abort on EPERM, so one dialog can cover all of them.
  */
-export function parseDenials(text: string): Denial[] {
+const COMMAND_TOOLS = /^(bash|py_explore|task_start|task_status|task_stop|subagent|multiagent)$/;
+
+/**
+ * A path is only believable if it looks like one: absolute, at least two
+ * segments, no shell glue. Without this, prose such as "Operation not permitted"
+ * inside a log line yields "/i", and a grant dialog offers "/" because that is
+ * the parent of "/i".
+ */
+function plausiblePath(candidate: string): boolean {
+  if (!/^\/(?:[^/\s'"]+\/)+[^/\s'"]*$/.test(candidate)) return false;
+  return candidate.split("/").filter(Boolean).length >= 2;
+}
+
+export function parseDenials(text: string, toolName?: string): Denial[] {
+  if (toolName && !COMMAND_TOOLS.test(toolName)) return [];
   const out: Denial[] = [];
   for (const line of text.split("\n")) {
     if (!DENIAL.test(line)) continue;
@@ -561,23 +563,16 @@ export function parseDenials(text: string): Denial[] {
     const after = line.slice(line.search(DENIAL));
     const candidates = [...before.matchAll(ABS_PATH)].map((m) => m[0].replace(/[:,]+$/, ""));
     const fallback = [...after.matchAll(ABS_PATH)].map((m) => m[0].replace(/[:,]+$/, ""));
-    const raw = candidates.at(-1) ?? fallback[0] ?? null;
-    out.push({ raw: line.trim(), path: raw ? realpathLoose(expandPath(raw)) : null });
+    const picked = [candidates.at(-1), fallback[0]].find((value) => value && plausiblePath(value));
+    out.push({ raw: line.trim(), path: picked ? realpathLoose(expandPath(picked)) : null });
   }
   return out;
 }
 
-/**
- * Directory scopes offered by the grant dialog.
- *
- * `$HOME` and `/` are never offered: granting either is a policy edit, not a
- * click on a denial. When every candidate is unusable the dialog falls back to
- * the exact files.
- */
+/** Directory scopes offered by the grant dialog: parents, common ancestor, files. */
 export function grantScopes(paths: string[]): GrantScopes {
   const files = unique(paths.map((p) => realpathLoose(p)));
-  const storable = (path: string): boolean => path !== "/" && !isHomeOrRoot(path);
-  const parents = unique(files.map((p) => dirname(p))).filter(storable);
+  const parents = unique(files.map((p) => dirname(p)));
 
   let common = parents[0] ?? files[0] ?? "/";
   for (const parent of parents.slice(1)) {
@@ -587,7 +582,6 @@ export function grantScopes(paths: string[]): GrantScopes {
       common = next;
     }
   }
-  if (!storable(common)) common = parents[0] ?? files[0] ?? common;
   return { parents, common, files };
 }
 

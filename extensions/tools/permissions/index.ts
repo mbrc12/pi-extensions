@@ -20,10 +20,12 @@ import { promptWait } from "../../session/notify-on-idle";
 import type { PermissionMode } from "./types";
 import { showAskDialog } from "./ask-dialog";
 import { COMMAND_PREVIEW_LENGTH } from "./types";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
+import { basename, join } from "node:path";
 import {
   DEFAULT_POLICY,
-  bypassMarkerPath,
+  PROFILE_ENV,
+  profileDirPath,
   clearFolderGrant,
   describePolicy,
   grantScopes,
@@ -38,8 +40,9 @@ import {
   saveFolderGrant,
   toolPathArg,
   withSessionGrants,
+  sessionProfilePath,
+  writeProfile,
   workspaceProfilePath,
-  writeWorkspaceProfile,
   type LocalGrants,
   type Policy,
 } from "../../shared/permissions-policy.ts";
@@ -316,33 +319,33 @@ function mergedGrants(ctx: ExtensionContext): LocalGrants {
 }
 
 function refreshProfile(ctx: ExtensionContext): void {
-  const profileFile = workspaceProfilePath(ctx.cwd);
-  const markerFile = bypassMarkerPath(ctx.cwd);
-
-  // allow mode bypasses the permissions system: no profile, and the wrapper
-  // and py_explore skip sandbox-exec when the marker is present.
-  if (!policy.enabled || currentMode === "allow") {
-    removeIfPresent(profileFile);
-    try {
-      writeFileSync(markerFile, "bypassed\n", { mode: 0o600 });
-      profileActive = false;
-    } catch (error) {
-      ctx.ui.notify(`permissions: cannot write bypass marker: ${String(error)}`, "error");
-    }
-    return;
-  }
+  const sessionId = ctx.sessionManager.getSessionId();
+  const profileFile = sessionProfilePath(ctx.cwd, sessionId);
+  const bypass = !policy.enabled || currentMode === "allow";
 
   try {
-    writeWorkspaceProfile(
-      ctx.cwd,
-      renderProfile({ policy, grants: mergedGrants(ctx), workspace: ctx.cwd }),
+    writeProfile(
+      profileFile,
+      renderProfile({
+        policy,
+        grants: mergedGrants(ctx),
+        workspace: ctx.cwd,
+        bypass,
+      }),
     );
-    removeIfPresent(markerFile);
-    profileActive = existsSync(profileFile);
+    // The wrapper reads the profile from the environment rather than guessing a
+    // name: subagent sessions share the workspace and must not share the file.
+    process.env[PROFILE_ENV] = profileFile;
+    profileActive = !bypass;
   } catch (error) {
     profileActive = false;
     ctx.ui.notify(`permissions: cannot write sandbox profile: ${String(error)}`, "error");
+    return;
   }
+
+  // Retire files from the workspace-keyed scheme.
+  removeIfPresent(workspaceProfilePath(ctx.cwd));
+  removeIfPresent(join(profileDirPath(), `${basename(profileFile, ".sb")}.off`));
 }
 
 function removeIfPresent(file: string): void {
@@ -369,14 +372,8 @@ function policyOperation(toolName: string): "read" | "write" | undefined {
  * never disagree: if a marker was left behind, or a mode change has not been
  * re-rendered yet, both layers still answer the same way.
  */
-function bypassed(ctx: ExtensionContext): boolean {
-  if (!policy.enabled) return true;
-  if (currentMode === "allow") return true;
-  try {
-    return existsSync(bypassMarkerPath(ctx.cwd));
-  } catch {
-    return false;
-  }
+function bypassed(): boolean {
+  return !policy.enabled || currentMode === "allow";
 }
 
 /** True when a bash command matches a destructive pattern from policy. */
@@ -421,7 +418,7 @@ function policyGate(
   event: { toolName: string; input: Record<string, unknown> },
   ctx: ExtensionContext,
 ): { block: true; reason: string } | "allow" | "ask" | undefined {
-  if (bypassed(ctx)) return undefined;
+  if (bypassed()) return undefined;
 
   if (event.toolName === "bash") {
     const command = typeof event.input.command === "string" ? event.input.command : "";
@@ -476,8 +473,8 @@ async function handleSandboxDenials(
   },
   ctx: ExtensionContext,
 ): Promise<{ content: unknown[] } | undefined> {
-  if (bypassed(ctx)) return undefined;
-  const denials = parseDenials(resultText(event.content)).filter((item) => item.path);
+  if (bypassed()) return undefined;
+  const denials = parseDenials(resultText(event.content), event.toolName).filter((item) => item.path);
   if (denials.length === 0) return undefined;
 
   const workspace = ctx.cwd;
@@ -516,12 +513,14 @@ async function handleSandboxDenials(
       notes.push(`🚫 grant limit reached (${policy.maxGrants} per session); denial is final`);
     } else {
       const scopes = grantScopes(grantable);
-      const items: Array<{ key: "parents" | "common" | "files" | "session" | "no"; label: string }> = [];
-      if (scopes.parents.length > 0) {
-        items.push({ key: "parents", label: `📁 Grant ${scopes.parents.join(", ")} to this folder` });
-        if (scopes.common !== scopes.parents[0] && !scopes.parents.includes(scopes.common)) {
-          items.push({ key: "common", label: `🌳 Grant ${scopes.common} (wider)` });
-        }
+      // Parents always exist (they are the denied files' directories), so the
+      // dialog shape never depends on where the denial happened.
+      const items: Array<{
+        key: "parents" | "common" | "files" | "session" | "no";
+        label: string;
+      }> = [{ key: "parents", label: `📁 Grant ${scopes.parents.join(", ")} to this folder` }];
+      if (scopes.common !== scopes.parents[0] && !scopes.parents.includes(scopes.common)) {
+        items.push({ key: "common", label: `🌳 Grant ${scopes.common} (wider)` });
       }
       items.push({
         key: "files",
@@ -530,9 +529,7 @@ async function handleSandboxDenials(
             ? `📄 Grant only ${scopes.files[0]}`
             : `📄 Grant only these ${scopes.files.length} files`,
       });
-      if (scopes.parents.length > 0) {
-        items.push({ key: "session", label: `⏳ Grant ${scopes.parents.join(", ")} for this session only` });
-      }
+      items.push({ key: "session", label: `⏳ Grant ${scopes.parents.join(", ")} for this session only` });
       items.push({ key: "no", label: "🚫 No, leave it denied" });
 
       const choice = await ctx.ui.select(
@@ -540,29 +537,30 @@ async function handleSandboxDenials(
         items.map((item) => item.label),
       );
       const picked = items.find((item) => item.label === choice)?.key ?? "no";
-      const persist = async (roots: string[]): Promise<void> => {
+      const persist = async (roots: string[], symbol: string): Promise<void> => {
         const saved = saveFolderGrant(workspace, { write: roots });
         grants = loadGrants();
         grantCount += 1;
         refreshProfile(ctx);
         notes.push(
           saved.ok
-            ? `📁 granted ${roots.join(", ")} for ${saved.key}; re-run the command`
+            ? `${symbol} granted ${roots.join(", ")} for ${saved.key}; re-run the command`
             : `🚫 could not store grant: ${saved.reason}`,
         );
       };
 
       if (picked === "parents") {
-        await persist(scopes.parents);
+        await persist(scopes.parents, "📁");
       } else if (picked === "common") {
-        await persist([scopes.common]);
+        await persist([scopes.common], "🌳");
       } else if (picked === "files") {
-        await persist(scopes.files);
+        await persist(scopes.files, "📄");
       } else if (picked === "session") {
-        sessionWrites.push(...scopes.parents);
+        const roots = scopes.parents;
+        sessionWrites.push(...roots);
         grantCount += 1;
         refreshProfile(ctx);
-        notes.push(`⏳ granted ${scopes.parents.join(", ")} for this session only; re-run the command`);
+        notes.push(`⏳ granted ${roots.join(", ")} for this session only; re-run the command`);
       }
     }
   }
