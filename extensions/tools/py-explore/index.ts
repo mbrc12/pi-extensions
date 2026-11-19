@@ -1,28 +1,27 @@
 /**
  * py_explore extension
  *
- * Registers a `py_explore` tool that runs inline Python scripts after a
- * write/delete gate. The gate is:
- *   1. Fast regex deny-list for obvious writes/deletes.
- *   2. Cheap LLM failsafe that answers "does this code write/delete anything?"
+ * Registers a `py_explore` tool that runs inline Python scripts.
+ *
+ * The python process runs under the workspace's Seatbelt profile, so writes,
+ * credential reads and network are decided by the same policy as bash. There is
+ * no separate write gate: a script that writes inside the write allowlist is
+ * allowed, and one that writes outside it fails with an EPERM the model can see.
  *
  * Callers must pass `timeoutSeconds` and `memoryLimitMb`. The script runs in
  * its own process group; the group is killed when either limit is exceeded,
  * and the tool reports which limit was hit.
- *
- * Also registers `/py-explore-test` to tune the LLM prompt against a suite of
- * safe/unsafe Python snippets.
  */
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
+import { bypassMarkerPath, loadPolicy, workspaceProfilePath } from "../../shared/permissions-policy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
-  checkWriteAllowedFromExtension,
   regexSuggestsWrite,
   llmSaysWrite,
   WRITE_CHECK_SYSTEM_PROMPT,
@@ -182,6 +181,29 @@ function venvToPython(venv: string, cwd: string): string {
   return found;
 }
 
+/**
+ * Wrap a command in the session's Seatbelt profile when one exists.
+ *
+ * The permissions extension renders ~/.pi/sandbox/sessions/<id>.sb at session
+ * start, so python inherits the same read/write/network policy as bash. With no
+ * profile the command runs unsandboxed rather than failing.
+ */
+function sandboxed(
+  command: string,
+  args: string[],
+  cwd: string,
+): { command: string; args: string[] } {
+  const policy = loadPolicy();
+  if (!policy.enabled) return { command, args };
+  if (existsSync(bypassMarkerPath(cwd))) return { command, args };
+  const profile = workspaceProfilePath(cwd);
+  if (!existsSync(profile)) return { command, args };
+  return {
+    command: "/usr/bin/sandbox-exec",
+    args: ["-f", profile, command, ...args],
+  };
+}
+
 function collectCommandOutput(
   command: string,
   args: string[],
@@ -189,7 +211,8 @@ function collectCommandOutput(
   signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const exec = sandboxed(command, args, cwd);
+    const child = spawn(exec.command, exec.args, {
       cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -305,7 +328,8 @@ async function runPython(
   const python = await resolvePython(cwd, signal, venv);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(python.command, [...python.args, "-c", code], {
+    const exec = sandboxed(python.command, [...python.args, "-c", code], cwd);
+    const child = spawn(exec.command, exec.args, {
       cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -503,25 +527,10 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
       }
 
       onUpdate?.({
-        content: [{ type: "text", text: "Checking code for write/delete operations..." }],
-      });
-
-      const check = await checkWriteAllowedFromExtension(code, ctx);
-      if (!check.allowed) {
-        return {
-          content: [
-            { type: "text", text: `Blocked by py_explore write gate: ${check.reason}` },
-          ],
-          details: { gate: check, code },
-          isError: true,
-        };
-      }
-
-      onUpdate?.({
         content: [
           {
             type: "text",
-            text: `Write gate passed (${check.source}). Resolving Python (limits: ${formatSeconds(
+            text: `Resolving Python (limits: ${formatSeconds(
               limits.timeoutMs,
             )} timeout, ${formatMiB(limits.memoryLimitBytes)} memory)...`,
           },
@@ -536,7 +545,7 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: "text", text: `py_explore could not start Python: ${message}` }],
-          details: { gate: check, code, venv: params.venv, limits },
+          details: { code, venv: params.venv, limits },
           isError: true,
         };
       }
@@ -554,7 +563,7 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
           : termination.message;
         return {
           content: [{ type: "text", text }],
-          details: { stdout, stderr, exitCode, gate: check, code, python, limits, termination },
+          details: { stdout, stderr, exitCode, code, python, limits, termination },
           isError: true,
         };
       }
@@ -562,14 +571,14 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
       if (exitCode !== 0) {
         return {
           content: [{ type: "text", text: truncated }],
-          details: { stdout, stderr, exitCode, gate: check, code, python, limits, termination: null },
+          details: { stdout, stderr, exitCode, code, python, limits, termination: null },
           isError: true,
         };
       }
 
       return {
         content: [{ type: "text", text: truncated }],
-        details: { stdout, stderr, exitCode, gate: check, code, python, limits, termination: null },
+        details: { stdout, stderr, exitCode, code, python, limits, termination: null },
       };
     },
 
@@ -584,7 +593,6 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         stdout?: string;
         stderr?: string;
         exitCode?: number;
-        gate?: { allowed: boolean; source: string; reason: string };
         python?: PythonCommand;
         limits?: RunLimits;
         termination?: Termination | null;
@@ -627,12 +635,6 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
         : theme.fg("success", "✓ py_explore finished");
       container.addChild(new Text(header, 0, 0));
 
-      if (details.gate) {
-        const gateText = details.gate.allowed
-          ? `Gate: ${details.gate.source} allow`
-          : `Gate: ${details.gate.source} block — ${details.gate.reason}`;
-        container.addChild(new Text(theme.fg("dim", gateText), 0, 0));
-      }
 
       if (details.python) {
         container.addChild(
@@ -681,61 +683,5 @@ export default function pyExploreExtension(pi: ExtensionAPI) {
       return container;
     },
 
-  });
-
-  pi.registerCommand("py-explore-test", {
-    description: "Run the py_explore LLM write-check prompt against a test suite",
-    handler: async (_args, ctx) => {
-      const results: string[] = [];
-      let pass = 0;
-      let fail = 0;
-
-      ctx.ui?.notify(`Running ${LLM_TEST_CASES.length} LLM write-check cases...`, "info");
-
-      for (const tc of LLM_TEST_CASES) {
-        // Skip cases caught by the regex deny-list; the suite is for tuning the LLM.
-        const regex = regexSuggestsWrite(tc.code);
-        if (regex.matches) {
-          const expected = tc.expect === "block" ? "block" : "allow";
-          const ok = expected === "block";
-          if (ok) pass++; else fail++;
-          results.push(`${ok ? "✓" : "✗"} regex-caught ${expected.padEnd(5)} | ${tc.label}`);
-          continue;
-        }
-
-        try {
-          const llm = await llmSaysWrite(tc.code, {
-            model: ctx.model,
-            modelRegistry: ctx.modelRegistry,
-            cwd: ctx.cwd,
-            signal: ctx.signal,
-          });
-          const predicted = llm.writes ? "block" : "allow";
-          const ok = predicted === tc.expect;
-          if (ok) pass++; else fail++;
-          results.push(
-            `${ok ? "✓" : "✗"} ${predicted.padEnd(5)} (expected ${tc.expect.padEnd(5)}) | ${tc.label}\n    ${llm.raw}`,
-          );
-        } catch (error) {
-          fail++;
-          results.push(
-            `✗ ERROR | ${tc.label}\n    ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-
-      const report = [
-        `py_explore LLM write-check test — ${pass}/${LLM_TEST_CASES.length} passed`,
-        `System prompt:\n${WRITE_CHECK_SYSTEM_PROMPT}`,
-        "",
-        ...results,
-      ].join("\n");
-
-      pi.sendMessage({
-        customType: "py-explore-test",
-        content: report,
-        display: true,
-      });
-    },
   });
 }

@@ -14,6 +14,7 @@ import type { BashToolDetails, EditToolDetails, ExtensionAPI, ReadToolDetails } 
 import { createBashTool, createEditTool, createReadTool, createWriteTool, createFindTool, createGrepTool, createLsTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "os";
+import { join } from "node:path";
 import { foldedResult } from "../shared/result-fold.ts";
 
 function shortenPath(path: string): string {
@@ -108,6 +109,34 @@ const BASH_DESCRIPTION = (() => {
 })();
 
 export default function (pi: ExtensionAPI) {
+	/**
+	 * This file rebuilds the built-in tools, so it must forward the shell the
+	 * session is configured to use. Without this, `shellPath` from settings is
+	 * ignored and the bash tool bypasses any wrapper installed there — which
+	 * silently unsandboxes every command.
+	 */
+	let shellPath: string | undefined;
+	const resolveShell = (): void => {
+		try {
+			const raw = (pi.getSettings() as { shellPath?: string } | undefined)?.shellPath;
+			// This path is passed straight to spawn, which does not expand `~`.
+			shellPath =
+				typeof raw === "string"
+					? raw === "~"
+						? homedir()
+						: raw.startsWith("~/")
+							? join(homedir(), raw.slice(2))
+							: raw
+					: undefined;
+		} catch {
+			// Settings are not readable during extension loading.
+		}
+	};
+	if (typeof pi.on === "function") {
+		pi.on("session_start", () => resolveShell());
+	}
+	const bashTool = () => (shellPath ? createBashTool(cwd, { shellPath }) : tools.bash);
+
 	// Bash tool with compressed display
 	pi.registerTool({
 		name: "bash",
@@ -121,13 +150,14 @@ export default function (pi: ExtensionAPI) {
 			"Pass a timeout to bash on every call; never omit it.",
 		],
 
-		async execute(toolCallId, params, signal, onUpdate) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			// Schema validation already rejects a missing timeout; this keeps the
 			// contract explicit for any path that reaches execute unvalidated.
 			if (typeof params.timeout !== "number" || !Number.isFinite(params.timeout) || params.timeout <= 0) {
 				throw new Error("bash requires a positive timeout in seconds.");
 			}
-			return tools.bash.execute(toolCallId, params, signal, onUpdate);
+			if (shellPath === undefined) resolveShell();
+			return bashTool().execute(toolCallId, params, signal, onUpdate, ctx);
 		},
 
 		renderCall(args, theme, context) {
