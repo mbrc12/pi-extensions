@@ -15,8 +15,16 @@
  *   grants   ~/.pi/agent/permissions.local.json  per-folder grant state
  *   profile  ~/.pi/sandbox/workspaces/<hash>.sb  rendered per workspace
  *
- * Decision order for a path: policy.deny > folder.deny > policy.write >
- * folder.write > ask. Reads are a denylist; writes are an allowlist.
+ * Four path classes, strongest first. Everything else falls through the last
+ * row, so `permissions.json` only lists what deviates from it:
+ *
+ *   deny       read deny   write deny    deny[]       no grant opens it
+ *   askRead    read ask    write deny    askRead[]    read prompts, write refused
+ *   (default)  read allow  write ask     —            reads free, writes prompt
+ *   write      read allow  write allow   write[]      neither prompts
+ *
+ * Reads are a denylist plus the askRead list; writes are an allowlist. A read
+ * grant reopens an askRead path for reads, and never for writes.
  */
 
 import {
@@ -43,6 +51,8 @@ export interface Policy {
   enabled: boolean;
   /** Paths no grant can open, for reads or writes. */
   deny: string[];
+  /** Paths that prompt on read and stay unwritable even with a write grant. */
+  askRead: string[];
   /** Writable roots. `<workspace>` expands to the session workspace. */
   write: string[];
   /** Network for child processes. Seatbelt cannot filter by host. */
@@ -56,6 +66,8 @@ export interface Policy {
 }
 
 export interface FolderGrants {
+  /** Read grants, which reopen askRead paths for reads only. */
+  read?: string[];
   write?: string[];
   deny?: string[];
   network?: boolean;
@@ -96,7 +108,6 @@ export interface GrantScopes {
 export const DEFAULT_POLICY: Policy = {
   enabled: true,
   deny: [
-    "~/.ssh",
     "~/.aws",
     "~/.gnupg",
     "~/.netrc",
@@ -106,6 +117,7 @@ export const DEFAULT_POLICY: Policy = {
     "~/.pi/agent/auth.json",
     "~/.pi/agent/auth",
   ],
+  askRead: ["~/.ssh"],
   write: [
     "<workspace>",
     "~/dev/tmp/random-tasks",
@@ -281,6 +293,7 @@ export function loadPolicy(): Policy {
   return {
     enabled: raw.enabled === false ? false : true,
     deny: stringList(raw.deny) ?? DEFAULT_POLICY.deny,
+    askRead: stringList(raw.askRead) ?? DEFAULT_POLICY.askRead,
     write: stringList(raw.write) ?? DEFAULT_POLICY.write,
     network: raw.network === "deny" ? "deny" : "allow",
     commands: {
@@ -343,6 +356,7 @@ export function saveFolderGrant(
     const entry = current.folders[key] ?? {};
     current.folders[key] = {
       ...entry,
+      read: unique([...(entry.read ?? []), ...(patch.read ?? [])]),
       write: unique([...(entry.write ?? []), ...(patch.write ?? [])]),
       deny: unique([...(entry.deny ?? []), ...(patch.deny ?? [])]),
       network: patch.network ?? entry.network,
@@ -377,9 +391,10 @@ export function resolveFs(args: {
   const ws = realpathLoose(workspace);
   const target = realpathLoose(expandPath(args.path, ws));
   const folder = lookupFolderGrants(grants, ws);
+  const roots = (values: string[] | undefined): string[] =>
+    (values ?? []).map((p) => realpathLoose(expandPath(p, ws)));
 
-  const policyDeny = policy.deny.map((p) => realpathLoose(expandPath(p, ws)));
-  if (policyDeny.some((root) => isUnder(target, root))) {
+  if (roots(policy.deny).some((root) => isUnder(target, root))) {
     return { decision: "deny", path: target, reason: "in the policy deny list" };
   }
 
@@ -387,22 +402,30 @@ export function resolveFs(args: {
     return { decision: "deny", path: target, reason: "pi's own policy directory is never writable" };
   }
 
-  const folderDeny = (folder?.grants.deny ?? []).map((p) => realpathLoose(expandPath(p, ws)));
-  if (folderDeny.some((root) => isUnder(target, root))) {
+  if (roots(folder?.grants.deny).some((root) => isUnder(target, root))) {
     return { decision: "deny", path: target, reason: "in this folder's deny list" };
   }
 
+  // The askRead class: readable only after an explicit grant, never writable.
+  const asksRead = roots(policy.askRead).some((root) => isUnder(target, root));
+  const readGranted = roots(folder?.grants.read).some((root) => isUnder(target, root));
+
   if (op === "read") {
+    if (asksRead && !readGranted) {
+      return { decision: "ask", path: target, reason: "in the askRead list (reads prompt)" };
+    }
     return { decision: "allow", path: target, reason: "reads are allowed except denied paths" };
   }
 
-  const allowed = policy.write.map((p) => realpathLoose(expandPath(p, ws)));
-  if (allowed.some((root) => isUnder(target, root))) {
+  if (asksRead) {
+    return { decision: "deny", path: target, reason: "in the askRead list (never writable)" };
+  }
+
+  if (roots(policy.write).some((root) => isUnder(target, root))) {
     return { decision: "allow", path: target, reason: "inside the write allowlist" };
   }
 
-  const folderWrite = (folder?.grants.write ?? []).map((p) => realpathLoose(expandPath(p, ws)));
-  if (folderWrite.some((root) => isUnder(target, root))) {
+  if (roots(folder?.grants.write).some((root) => isUnder(target, root))) {
     return { decision: "allow", path: target, reason: `granted for ${folder?.key ?? ws}` };
   }
 
@@ -441,9 +464,13 @@ function denyRule(op: string, roots: string[]): string {
 /**
  * Render the Seatbelt profile for one workspace.
  *
- * Reads: allow everything, then deny the credential list. An explicit read
- * allowlist aborts children (dyld cannot map the shared cache), so the deny
- * list is the only workable shape.
+ * Reads: allow everything, then deny the deny list and the askRead list. An
+ * explicit read allowlist aborts children (dyld cannot map the shared cache),
+ * so a denylist is the only workable shape. Read grants are emitted after the
+ * denies they reopen, because the last matching rule decides.
+ *
+ * Writes: an allowlist, then a final deny covering everything reads refuse, so
+ * an askRead path is never writable whatever the write grants say.
  */
 /** Profile that permits everything: used by `allow` mode and `enabled: false`. */
 export const BYPASS_PROFILE = "(version 1)\n(allow default)\n";
@@ -470,9 +497,21 @@ export function renderProfile(args: {
     ...(folder?.grants.deny ?? []).map((p) => realpathLoose(expandPath(p, ws))),
   ]);
 
-  // A folder deny must never be widened by a folder write grant.
+  // Reads that prompt rather than fail outright. The kernel cannot ask, so it
+  // refuses them and the extension offers a grant from the denial.
+  const asksRead = unique(policy.askRead.map((p) => realpathLoose(expandPath(p, ws))));
+
+  // A read grant reopens an askRead path and never a deny, so it is filtered
+  // against the deny roots before being emitted after them.
+  const readGrant = unique(
+    (folder?.grants.read ?? []).map((p) => realpathLoose(expandPath(p, ws))),
+  ).filter((root) => !readDeny.some((deny) => isUnder(root, deny)));
+
+  // A folder deny must never be widened by a folder write grant, and an
+  // askRead path is read-only at best.
   const writeDeny = unique([
     ...readDeny,
+    ...asksRead,
     realpathLoose(selfDir()),
   ]);
   const writeAllow = writeRoots.filter((root) => !writeDeny.some((deny) => isUnder(root, deny)));
@@ -489,6 +528,8 @@ export function renderProfile(args: {
     "(allow mach-lookup)",
     "(allow file-read*)",
     denyRule("file-read*", readDeny),
+    denyRule("file-read*", asksRead),
+    rule("file-read*", readGrant),
     rule("file-write*", writeAllow),
     denyRule("file-write*", writeDeny),
     networkAllowed ? "(allow network*)" : "(deny network*)",
@@ -530,6 +571,19 @@ export function writeProfile(file: string, profile: string): string {
 // ---------------------------------------------------------------------------
 
 const DENIAL = /(Operation not permitted|Permission denied|Read-only file system|Sandbox:.*deny)/i;
+
+/**
+ * A line counts only when it starts like a program reporting the failure. The
+ * same sentence appears verbatim in tests, docs and log files, and a command
+ * that merely prints one must not open a grant dialog.
+ *
+ *   /bin/bash: /Users/x/y: Operation not permitted
+ *   cat: /Users/x/y: Operation not permitted
+ *   zsh:1: operation not permitted: /Users/x/y
+ *   PermissionError: [Errno 1] Operation not permitted: '/Users/x/y'
+ */
+const DENIAL_LINE = /^(?:[A-Za-z_][\w.+-]*|(?:\/[\w.+-]+)+)(?::\d+)*:/;
+const DENIAL_BARE = /^(?:Operation not permitted|Permission denied|Read-only file system)\b/i;
 const ABS_PATH = /(?:~|\/)[^\s'"`;|&<>()]+/g;
 
 /**
@@ -557,8 +611,10 @@ function plausiblePath(candidate: string): boolean {
 export function parseDenials(text: string, toolName?: string): Denial[] {
   if (toolName && !COMMAND_TOOLS.test(toolName)) return [];
   const out: Denial[] = [];
-  for (const line of text.split("\n")) {
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
     if (!DENIAL.test(line)) continue;
+    if (!DENIAL_LINE.test(line) && !DENIAL_BARE.test(line)) continue;
     const before = line.slice(0, line.search(DENIAL));
     const after = line.slice(line.search(DENIAL));
     const candidates = [...before.matchAll(ABS_PATH)].map((m) => m[0].replace(/[:,]+$/, ""));
@@ -592,12 +648,17 @@ export function grantScopes(paths: string[]): GrantScopes {
 export function describePolicy(policy: Policy, workspace: string): string {
   const folder = lookupFolderGrants(loadGrants(), workspace);
   const grantLines = folder
-    ? [`folder ${folder.key}: write=[${(folder.grants.write ?? []).join(", ")}] network=${folder.grants.network === true}`]
+    ? [
+        `folder ${folder.key}: read=[${(folder.grants.read ?? []).join(", ")}] ` +
+          `write=[${(folder.grants.write ?? []).join(", ")}] network=${folder.grants.network === true}`,
+      ]
     : [`folder ${realpathLoose(workspace)}: no grants`];
   return [
     `enabled: ${policy.enabled}`,
     `network: ${policy.network}`,
-    `deny: ${policy.deny.length} paths`,
+    `deny: ${policy.deny.length} paths (read denied, write denied)`,
+    `askRead: ${policy.askRead.length} paths (read prompts, write denied)`,
+    `write: ${policy.write.length} paths (read and write allowed)`,
     ...grantLines,
     existsSync(policyFilePath()) ? `policy: ${policyFilePath()}` : "policy: (defaults, not yet written)",
   ].join("\n");
@@ -607,9 +668,11 @@ export function describePolicy(policy: Policy, workspace: string): string {
 export function withSessionGrants(
   grants: LocalGrants,
   workspace: string,
-  roots: string[],
+  patch: { write?: string[]; read?: string[] },
 ): LocalGrants {
-  if (roots.length === 0) return grants;
+  const write = patch.write ?? [];
+  const read = patch.read ?? [];
+  if (write.length === 0 && read.length === 0) return grants;
   const key = folderKeyFor(workspace);
   if (!key) return grants;
   const entry = grants.folders[key] ?? {};
@@ -617,7 +680,11 @@ export function withSessionGrants(
     version: 1,
     folders: {
       ...grants.folders,
-      [key]: { ...entry, write: unique([...(entry.write ?? []), ...roots]) },
+      [key]: {
+        ...entry,
+        read: unique([...(entry.read ?? []), ...read]),
+        write: unique([...(entry.write ?? []), ...write]),
+      },
     },
   };
 }

@@ -39,6 +39,7 @@ import {
   resolveFs,
   saveFolderGrant,
   toolPathArg,
+  unique,
   withSessionGrants,
   sessionProfilePath,
   writeProfile,
@@ -65,6 +66,7 @@ let modeGeneration = 0;
 let policy: Policy = DEFAULT_POLICY;
 let grants: LocalGrants = { version: 1, folders: {} };
 let sessionWrites: string[] = [];
+let sessionReads: string[] = [];
 let profileActive = false;
 let grantCount = 0;
 
@@ -317,12 +319,13 @@ function loadPolicyState(ctx: ExtensionContext): void {
   policy = loadPolicy();
   grants = loadGrants();
   sessionWrites = [];
+  sessionReads = [];
   grantCount = 0;
   refreshProfile(ctx);
 }
 
 function mergedGrants(ctx: ExtensionContext): LocalGrants {
-  return withSessionGrants(grants, ctx.cwd, sessionWrites);
+  return withSessionGrants(grants, ctx.cwd, { write: sessionWrites, read: sessionReads });
 }
 
 function refreshProfile(ctx: ExtensionContext): void {
@@ -473,11 +476,86 @@ function resultText(content: unknown): string {
 }
 
 /**
+ * One dialog for one operation class.
+ *
+ * Read and write grants are separate lists, so approving reads never widens
+ * writes. The title names the operation because the denial message does not:
+ * "2 reads" and "2 writes" are different questions with different answers.
+ */
+async function offerGrant(
+  ctx: ExtensionContext,
+  op: "read" | "write",
+  paths: string[],
+  notes: string[],
+): Promise<void> {
+  const workspace = ctx.cwd;
+  const scopes = grantScopes(paths);
+  const noun = op === "write" ? "writes" : "reads";
+
+  const items: Array<{
+    key: "parents" | "common" | "files" | "session" | "no";
+    label: string;
+  }> = [{ key: "parents", label: `📁 Allow ${noun} in ${scopes.parents.join(", ")} for this folder` }];
+  if (scopes.common !== scopes.parents[0] && !scopes.parents.includes(scopes.common)) {
+    items.push({ key: "common", label: `🌳 Allow ${noun} in ${scopes.common} (wider)` });
+  }
+  items.push({
+    key: "files",
+    label:
+      scopes.files.length === 1
+        ? `📄 Allow ${noun} only in ${scopes.files[0]}`
+        : `📄 Allow ${noun} only in these ${scopes.files.length} files`,
+  });
+  items.push({
+    key: "session",
+    label: `⏳ Allow ${noun} in ${scopes.parents.join(", ")} for this session only`,
+  });
+  items.push({ key: "no", label: "🚫 No, leave it denied" });
+
+  const choice = await ctx.ui.select(
+    `📦 Sandbox denied ${paths.length} ${noun}`,
+    items.map((item) => item.label),
+  );
+  const picked = items.find((item) => item.label === choice)?.key ?? "no";
+
+  const persist = (roots: string[]): void => {
+    const saved = saveFolderGrant(workspace, op === "read" ? { read: roots } : { write: roots });
+    grants = loadGrants();
+    grantCount += 1;
+    refreshProfile(ctx);
+    notes.push(
+      saved.ok
+        ? `✅ granted ${op} access to ${roots.join(", ")} for ${saved.key}; re-run the command`
+        : `🚫 could not store grant: ${saved.reason}`,
+    );
+  };
+
+  if (picked === "parents") {
+    persist(scopes.parents);
+  } else if (picked === "common") {
+    persist([scopes.common]);
+  } else if (picked === "files") {
+    persist(scopes.files);
+  } else if (picked === "session") {
+    const roots = scopes.parents;
+    if (op === "read") sessionReads.push(...roots);
+    else sessionWrites.push(...roots);
+    grantCount += 1;
+    refreshProfile(ctx);
+    notes.push(`⏳ granted ${op} access to ${roots.join(", ")} for this session only; re-run the command`);
+  }
+}
+
+/**
  * Turn sandbox denials into a grant dialog.
  *
  * bash does not abort on EPERM, so one command reports every blocked path in
  * a single result. Grants are directory roots stored per folder, so the next
- * command writing a different file in the same directory needs no prompt.
+ * command touching a different file in the same directory needs no prompt.
+ *
+ * The message does not say which operation was refused, so each path is asked
+ * both ways. The classes settle it: a path that asks for reads denies writes,
+ * so a denial there can only be a read.
  */
 async function handleSandboxDenials(
   event: {
@@ -492,91 +570,46 @@ async function handleSandboxDenials(
 
   const workspace = ctx.cwd;
   const active = mergedGrants(ctx);
-  const grantable: string[] = [];
+  const reads: string[] = [];
+  const writes: string[] = [];
   const blocked: string[] = [];
 
   for (const denial of denials) {
     const path = denial.path as string;
-    // A denial message does not say which operation was refused, so ask policy
-    // both ways: a path denied for reads is not grantable, a path only refused
-    // for writes is.
-    const asWrite = resolveFs({ policy, grants: active, op: "write", path, workspace });
     const asRead = resolveFs({ policy, grants: active, op: "read", path, workspace });
-    if (asWrite.decision === "ask") grantable.push(asWrite.path);
-    else if (asWrite.decision === "deny" || asRead.decision === "deny") blocked.push(asWrite.path);
+    const asWrite = resolveFs({ policy, grants: active, op: "write", path, workspace });
+    if (asRead.decision === "ask") reads.push(asRead.path);
+    else if (asWrite.decision === "ask") writes.push(asWrite.path);
+    else if (asRead.decision === "deny" || asWrite.decision === "deny") blocked.push(asRead.path);
   }
 
   logDenial(
     {
       tool: event.toolName,
       workspace,
-      grantable,
-      blocked,
+      reads: unique(reads),
+      writes: unique(writes),
+      blocked: unique(blocked),
     },
     policy,
   );
 
   const notes: string[] = [];
-  const blockedUnique = [...new Set(blocked)];
+  const blockedUnique = unique(blocked);
   if (blockedUnique.length > 0) {
     notes.push(`🚫 denied by policy, not grantable: ${blockedUnique.join(", ")}`);
   }
 
-  if (grantable.length > 0 && ctx.hasUI) {
+  for (const grant of [
+    { op: "read" as const, paths: unique(reads) },
+    { op: "write" as const, paths: unique(writes) },
+  ]) {
+    if (grant.paths.length === 0 || !ctx.hasUI) continue;
     if (grantCount >= policy.maxGrants) {
-      notes.push(`🚫 grant limit reached (${policy.maxGrants} per session); denial is final`);
-    } else {
-      const scopes = grantScopes(grantable);
-      // Parents always exist (they are the denied files' directories), so the
-      // dialog shape never depends on where the denial happened.
-      const items: Array<{
-        key: "parents" | "common" | "files" | "session" | "no";
-        label: string;
-      }> = [{ key: "parents", label: `📁 Grant ${scopes.parents.join(", ")} to this folder` }];
-      if (scopes.common !== scopes.parents[0] && !scopes.parents.includes(scopes.common)) {
-        items.push({ key: "common", label: `🌳 Grant ${scopes.common} (wider)` });
-      }
-      items.push({
-        key: "files",
-        label:
-          scopes.files.length === 1
-            ? `📄 Grant only ${scopes.files[0]}`
-            : `📄 Grant only these ${scopes.files.length} files`,
-      });
-      items.push({ key: "session", label: `⏳ Grant ${scopes.parents.join(", ")} for this session only` });
-      items.push({ key: "no", label: "🚫 No, leave it denied" });
-
-      const choice = await ctx.ui.select(
-        `📦 Sandbox denied ${new Set(grantable).size} write${new Set(grantable).size === 1 ? "" : "s"}`,
-        items.map((item) => item.label),
-      );
-      const picked = items.find((item) => item.label === choice)?.key ?? "no";
-      const persist = async (roots: string[], symbol: string): Promise<void> => {
-        const saved = saveFolderGrant(workspace, { write: roots });
-        grants = loadGrants();
-        grantCount += 1;
-        refreshProfile(ctx);
-        notes.push(
-          saved.ok
-            ? `${symbol} granted ${roots.join(", ")} for ${saved.key}; re-run the command`
-            : `🚫 could not store grant: ${saved.reason}`,
-        );
-      };
-
-      if (picked === "parents") {
-        await persist(scopes.parents, "📁");
-      } else if (picked === "common") {
-        await persist([scopes.common], "🌳");
-      } else if (picked === "files") {
-        await persist(scopes.files, "📄");
-      } else if (picked === "session") {
-        const roots = scopes.parents;
-        sessionWrites.push(...roots);
-        grantCount += 1;
-        refreshProfile(ctx);
-        notes.push(`⏳ granted ${roots.join(", ")} for this session only; re-run the command`);
-      }
+      notes.push(`🚫 grant limit reached (${policy.maxGrants} per session); ${grant.op} denial is final`);
+      continue;
     }
+    await offerGrant(ctx, grant.op, grant.paths, notes);
   }
 
   if (notes.length === 0) return undefined;
@@ -649,7 +682,10 @@ export default function (pi: ExtensionAPI) {
       } else if (arg === "local") {
         // Resolve like the enforcement path does: exact folder, then ancestors,
         // with session-only grants merged in so this shows what is in force.
-        const found = lookupFolderGrants(withSessionGrants(grants, ctx.cwd, sessionWrites), ctx.cwd);
+        const found = lookupFolderGrants(
+          withSessionGrants(grants, ctx.cwd, { write: sessionWrites, read: sessionReads }),
+          ctx.cwd,
+        );
         ctx.ui.notify(
           found
             ? `${found.key}: ${JSON.stringify(found.grants)}`
@@ -661,6 +697,7 @@ export default function (pi: ExtensionAPI) {
         const cleared = inherited ? clearFolderGrant(inherited.key) : false;
         grants = loadGrants();
         sessionWrites = [];
+        sessionReads = [];
         refreshProfile(ctx);
         ctx.ui.notify(
           cleared

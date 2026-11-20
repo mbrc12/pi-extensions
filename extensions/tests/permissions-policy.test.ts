@@ -54,7 +54,8 @@ describe("policy file", () => {
   test("seeds defaults on first load", () => {
     const loaded = loadPolicy();
     expect(loaded.enabled).toBe(true);
-    expect(loaded.deny).toContain("~/.ssh");
+    expect(loaded.deny).toContain("~/.aws");
+    expect(loaded.askRead).toContain("~/.ssh");
     expect(loaded.write).toContain("~/dev/tmp/random-tasks");
     const onDisk = JSON.parse(readFileSync(policyFilePath(), "utf8"));
     expect(onDisk.write).toContain("<workspace>");
@@ -106,10 +107,30 @@ describe("resolveFs", () => {
   });
 
   test("deny list beats everything, including a folder grant", () => {
-    const target = join(homedir(), ".ssh", "id_ed25519");
+    const target = join(homedir(), ".aws", "credentials");
     const grants = { version: 1 as const, folders: { [realpathLoose(workspace)]: { write: [homedir()] } } };
     expect(resolveFs({ policy, grants, op: "read", path: target, workspace }).decision).toBe("deny");
     expect(resolveFs({ policy, grants, op: "write", path: target, workspace }).decision).toBe("deny");
+  });
+
+  test("askRead prompts on read, refuses writes, and a write grant cannot open it", () => {
+    const ssh = join(homedir(), ".ssh");
+    const target = join(ssh, "id_ed25519");
+    const key = realpathLoose(workspace);
+    const check = (op: "read" | "write", grants = empty) =>
+      resolveFs({ policy, grants, op, path: target, workspace }).decision;
+
+    expect(check("read")).toBe("ask");
+    expect(check("write")).toBe("deny");
+
+    // A write grant for the whole home directory still cannot write a key.
+    const wide = { version: 1 as const, folders: { [key]: { write: [homedir()] } } };
+    expect(check("write", wide)).toBe("deny");
+
+    // A read grant opens reads and only reads.
+    const readGrant = { version: 1 as const, folders: { [key]: { read: [ssh] } } };
+    expect(check("read", readGrant)).toBe("allow");
+    expect(check("write", readGrant)).toBe("deny");
   });
 
   test("pi's own agent dir is never writable, so the agent cannot self-grant", () => {
@@ -176,8 +197,11 @@ describe("folder grants store", () => {
   });
 
   test("session grants merge without touching the store", () => {
-    const merged = withSessionGrants(empty, workspace, [realpathLoose(outside)]);
+    const merged = withSessionGrants(empty, workspace, { write: [realpathLoose(outside)] });
     expect(merged.folders[realpathLoose(workspace)].write).toEqual([realpathLoose(outside)]);
+    const both = withSessionGrants(merged, workspace, { read: [join(homedir(), ".ssh")] });
+    expect(both.folders[realpathLoose(workspace)].read).toEqual([join(homedir(), ".ssh")]);
+    expect(both.folders[realpathLoose(workspace)].write).toEqual([realpathLoose(outside)]);
     expect(saveFolderGrant(homedir(), { write: ["/x"] }).ok).toBe(true);
     expect(loadGrants().folders[realpathLoose(homedir())].write).toEqual(["/x"]);
     clearFolderGrant(homedir());
@@ -208,6 +232,19 @@ describe("profile", () => {
     expect(sbpl).toContain(`(deny file-write* `);
     expect(sbpl).toContain(`(subpath "${realpathLoose(permissionsDir())}")`);
   });
+
+  test("a read grant reopens an askRead path after its deny, and never the write", () => {
+    const ssh = join(homedir(), ".ssh");
+    const grants = { version: 1 as const, folders: { [realpathLoose(workspace)]: { read: [ssh] } } };
+    const sbpl = renderProfile({ policy, grants, workspace });
+    const readDeny = sbpl.indexOf(`(deny file-read* (subpath "${ssh}")`);
+    const readAllow = sbpl.indexOf(`(allow file-read* (subpath "${ssh}")`);
+    // Seatbelt's last matching rule wins, so the allow must come after the deny.
+    expect(readDeny).toBeGreaterThan(-1);
+    expect(readAllow).toBeGreaterThan(readDeny);
+    const writeLine = sbpl.split("\n").find((line) => line.startsWith("(allow file-write*")) ?? "";
+    expect(writeLine).not.toContain(ssh);
+  });
 });
 
 describe("denial parsing", () => {
@@ -223,17 +260,37 @@ describe("denial parsing", () => {
     expect(denials[1].path).toBe("/Users/x/sbx-b/y.txt");
   });
 
-  test("ignores implausible paths and non-command tools", () => {
+  test("ignores implausible paths, prose, and non-command tools", () => {
     // "/i" is what a mis-parse yields, and its parent is "/".
-    expect(parseDenials("something Operation not permitted: /i", "bash")[0].path).toBeNull();
+    expect(parseDenials("bash: something failed: /i", "bash")).toEqual([]);
+    expect(parseDenials("something Operation not permitted: /i", "bash")).toEqual([]);
     expect(parseDenials("/bin/bash: /Users/x/y.txt: Operation not permitted", "read")).toEqual([]);
     expect(parseDenials("/bin/bash: /Users/x/y.txt: Operation not permitted", "bash")[0].path).toBe("/Users/x/y.txt");
   });
 
-  test("handles python PermissionError and messages without a path", () => {
+  test("handles python PermissionError and a program line without a path", () => {
     expect(parseDenials("PermissionError: [Errno 1] Operation not permitted: '/Users/x/f.py'")[0].path).toBe("/Users/x/f.py");
     expect(parseDenials("curl: (6) Could not resolve host: example.com")[0]).toBeUndefined();
-    expect(parseDenials("something failed, Operation not permitted")[0].path).toBeNull();
+    // A sentence is not a report; nothing to parse, rather than an empty entry.
+    expect(parseDenials("something failed, Operation not permitted")).toEqual([]);
+    expect(parseDenials("cat: /Users/x/y: Operation not permitted")[0].path).toBe("/Users/x/y");
+  });
+
+  test("text that merely quotes a denial does not open a dialog", () => {
+    // The exact fixture lines in this file, seen through `sed` output, once
+    // produced a grant dialog for /Users/x. A result is only a denial when a
+    // program reports it at the start of the line.
+    const quoted = [
+      '      "/bin/bash: /Users/x/sbx-a/x.txt: Operation not permitted",',
+      '    expect(parseDenials("/bin/bash: /Users/x/y.txt: Operation not permitted", "read")).toEqual([]);',
+      '| `/bin/bash: /Users/x/y.txt: Operation not permitted` | prose |',
+    ].join("\n");
+    expect(parseDenials(quoted, "bash")).toEqual([]);
+
+    // The real thing still parses.
+    expect(parseDenials("/bin/bash: /Users/x/y.txt: Operation not permitted", "bash")[0].path).toBe(
+      "/Users/x/y.txt",
+    );
   });
 
   test("grant scopes are parent dirs, a common ancestor, and the files", () => {
