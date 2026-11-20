@@ -19,7 +19,6 @@ symlink to this folder.
 | `tools/deslop` | `deslop` rewrites text or a file into readable prose: measures it against a 43-rule pack, rewrites only the failing sections, keeps every fact and link, re-measures, and keeps the better version. Also `/deslop` for the last answer |
 | `tools/consult` | `consult`: search, list, and summarize other Pi sessions, or this session's branch with `self: true` |
 | `tools/export-md` | `/export-md` writes the session branch as a Markdown transcript |
-| `tools/memory-store` | Persistent memory in SQLite with FTS5 search plus LLM rerank |
 | `tools/permissions` | Classifies and approves tool calls (`allow`, `classify`, `ask`) |
 | `tools/py-explore` | `py_explore` runs read-only Python, gated by deny-list and LLM check, killed at the required timeout and memory limits |
 | `tools/self_compact` | `self_compact` lets the model compact at a boundary it chooses, with a note |
@@ -48,6 +47,7 @@ symlink to this folder.
 `package.json` lists it, and it stays in git so the reason survives a fresh checkout. To re-enable
 one, move it back into its topic folder and add it to that folder's `pi.extensions` array.
 
+- `disabled/memory-store/` — `memory_search`, `memory_add`, `memory_remove`, `memory_update` and the `/memory-*` commands: SQLite + FTS5 with LLM rerank. Disabled by the user; the store at `~/.pi/agent/memory-store/` is untouched. To re-enable, move the folder back to `tools/` and add `./memory-store/index.ts` to `tools/package.json`.
 - `disabled/notes.ts` — scratch notes panel; superseded by the memory store.
 - `disabled/plan-mode.ts` — deny-by-default plan mode; reference only, it imports a missing `./types`.
 - `disabled/plan-mode.test.ts` — tests for plan mode.
