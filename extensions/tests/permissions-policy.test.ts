@@ -407,3 +407,16 @@ describe("audit regressions", () => {
     expect(atHome.files.length).toBe(1);
   });
 });
+
+describe("dialogs notify", () => {
+  /**
+   * `agent_settled` never fires while a tool call sits in a dialog, so
+   * `prompt_wait` is the only notification a blocked run can produce. Both
+   * permission dialogs must emit it.
+   */
+  test("both permission dialogs emit prompt_wait", async () => {
+    const source = await Bun.file(new URL("../tools/permissions/index.ts", import.meta.url)).text();
+    const calls = source.match(/promptWait\(/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+  });
+});

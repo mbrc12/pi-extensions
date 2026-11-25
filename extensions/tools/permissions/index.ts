@@ -236,7 +236,12 @@ async function promptForToolCall(
         ? "⚠️ Outside the permission policy"
         : "🔴 Ask mode — approve this call";
 
-  promptWait(pi, { title: "Pi", body: header });
+  // Notify before the dialog blocks: pi's idle notification cannot fire while a
+  // tool call sits in a prompt, so this is the only alert the user gets.
+  promptWait(pi, {
+    title: "Pi",
+    body: subtitleParts.length > 0 ? `${header}\n${subtitleParts.join(" · ")}` : header,
+  });
   const allowed = await showAskDialog(ctx, {
     header,
     subtitle,
@@ -483,6 +488,7 @@ function resultText(content: unknown): string {
  * "2 reads" and "2 writes" are different questions with different answers.
  */
 async function offerGrant(
+  pi: ExtensionAPI,
   ctx: ExtensionContext,
   op: "read" | "write",
   paths: string[],
@@ -512,6 +518,12 @@ async function offerGrant(
   });
   items.push({ key: "no", label: "🚫 No, leave it denied" });
 
+  // Same reason as the allow/deny prompt: the run is blocked, so `agent_settled`
+  // never fires and this is the only notification that can reach the user.
+  promptWait(pi, {
+    title: "Pi",
+    body: `Sandbox denied ${paths.length} ${noun}\n${paths.slice(0, 3).join(", ")}${paths.length > 3 ? ", …" : ""}`,
+  });
   const choice = await ctx.ui.select(
     `📦 Sandbox denied ${paths.length} ${noun}`,
     items.map((item) => item.label),
@@ -558,6 +570,7 @@ async function offerGrant(
  * so a denial there can only be a read.
  */
 async function handleSandboxDenials(
+  pi: ExtensionAPI,
   event: {
     toolName: string;
     content: unknown;
@@ -609,7 +622,7 @@ async function handleSandboxDenials(
       notes.push(`🚫 grant limit reached (${policy.maxGrants} per session); ${grant.op} denial is final`);
       continue;
     }
-    await offerGrant(ctx, grant.op, grant.paths, notes);
+    await offerGrant(pi, ctx, grant.op, grant.paths, notes);
   }
 
   if (notes.length === 0) return undefined;
@@ -656,7 +669,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ---------- Sandbox denials → grant dialog ----------
-  pi.on("tool_result", async (event, ctx) => handleSandboxDenials(event, ctx));
+  pi.on("tool_result", async (event, ctx) => handleSandboxDenials(pi, event, ctx));
 
   // ---------- /permissions command ----------
   pi.registerCommand("permissions", {

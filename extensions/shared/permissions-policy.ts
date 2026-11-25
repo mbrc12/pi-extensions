@@ -537,8 +537,9 @@ export function renderProfile(args: {
   ].join("\n");
 }
 
+/** Profile directory: the constant, unless a session overrides it (tests). */
 export function profileDirPath(): string {
-  return expandPath(SANDBOX_PROFILE_DIR);
+  return expandPath(process.env.PI_SANDBOX_DIR ?? SANDBOX_PROFILE_DIR);
 }
 
 /**
