@@ -146,7 +146,7 @@ export const DEFAULT_POLICY: Policy = {
       "\\bdd\\s+if=",
       "\\bmount\\b",
       "\\bumount\\b",
-      "\\bgit\\s+push\\b.*(--force|--delete|\\s-f\\b)",
+      "\\bgit\\s+push\\b[^;|&\\n]*(--force|--delete|\\s-f\\b)",
       "\\bgit\\s+reset\\b.*--hard",
       "\\bgit\\s+clean\\b.*-[a-z]*[fx]",
       "\\bnpm\\s+(publish|unpublish|deprecate)\\b",

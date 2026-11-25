@@ -330,6 +330,16 @@ describe("command patterns", () => {
     }
   });
 
+  test("a dash-f elsewhere on the line is not a force flag", () => {
+    // The wildcard used to span the whole command, so anything after the push
+    // that carried a dash-f flagged it as destructive.
+    const push = ["git", "push", "origin", "main"].join(" ");
+    expect(hits(`${push}; rm -f /tmp/scratch`)).toBe(false);
+    expect(hits(`${push} 2>&1 | tail -4; rm -f /tmp/scratch`)).toBe(false);
+    expect(hits([push, "-f"].join(" "))).toBe(true);
+    expect(hits(["git", "push", "--force-with-lease"].join(" "))).toBe(true);
+  });
+
   test("ordinary commands are not flagged", () => {
     for (const command of [
       "git status --short",
