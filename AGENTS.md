@@ -21,6 +21,7 @@ that kind of work.
 | Writing Python, `deal` contracts, pandas→polars, scratch venvs | `python-style` |
 | Creating a venv or project, `uv`, basedpyright/ruff config | `python-env` |
 | Dealing with bend or bend-2, a language for checkable code | `bend` |
+| Docker, containers, or setting up a project toolchain in Docker | `docker` |
 
 ## Documents
 
@@ -65,4 +66,5 @@ that kind of work.
 
 ## This machine
 
+- **Share one Colima VM for all local Docker work.** Use the shared `colima-dev` context. Keep each environment under `~/dev/docker/`. Read `docker` for the layout and commands.
 - **Never restart, quit, kill, or relaunch the markdown server** (`~/Applications/serv.app`). It is a long-running user session. Load `local-server` for what to do instead.
