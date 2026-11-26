@@ -284,7 +284,6 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 			if (params.score_only) {
 				const report = analyze(input, profileName);
 				const snapshot: ProgressSnapshot = { phase: "done", label, profile: profileName, score: report.total, report, elapsedMs: Date.now() - started };
-				if (ctx.hasUI) ctx.ui.setStatus("deslop", `deslop ${report.total.toFixed(1)}`);
 				return {
 					content: [{ type: "text" as const, text: reportBlock(report) }],
 					details: { snapshot, report, changed: false, path: absolutePath } as DeslopDetails,
@@ -303,7 +302,6 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 			};
 
 			if (ctx.hasUI) {
-				ctx.ui.setStatus("deslop", `deslop ${label}`);
 				ctx.ui.setWorkingMessage(`deslop: rewriting ${label}`);
 			}
 
@@ -343,7 +341,6 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 				};
 				snapshot = finalSnapshot;
 				if (ctx.hasUI) {
-					ctx.ui.setStatus("deslop", `deslop ${result.after.total.toFixed(1)}`);
 					ctx.ui.setWorkingMessage();
 				}
 
@@ -368,7 +365,6 @@ export default function deslopExtension(pi: ExtensionAPI): void {
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				if (ctx.hasUI) {
-					ctx.ui.setStatus("deslop", undefined);
 					ctx.ui.setWorkingMessage();
 				}
 				return {
