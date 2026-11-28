@@ -145,6 +145,22 @@ describe("multiagent RPC operators", () => {
   const h = harness(); await h.tools.get("multiagent").execute("id", { action: "start", name: "worker", agent: "scout", task: "do once" }, undefined, undefined, h.ctx); await tick();
   expect(commands).toHaveLength(1); expect(h.entries.filter(e => e.data?.action === "status").at(-1).data.operator.status).toBe("failed");
  });
+ test("deletes an operator, stops its process, and keeps its transcripts on disk", async () => {
+  settleMode = "hang"; const h = harness(); const tool = h.tools.get("multiagent");
+  await tool.execute("id", { action: "start", name: "worker", agent: "scout", task: "one" }, undefined, undefined, h.ctx);
+  const op = (await tool.execute("id", { action: "list" }, undefined, undefined, h.ctx)).details.operators[0];
+  const child = children.at(-1);
+  const result = await tool.execute("id", { action: "delete", name: "worker" }, undefined, undefined, h.ctx);
+  expect(child.killed).toBe(true);
+  expect(result.content[0].text).toContain(op.sessionFile);
+  expect((await tool.execute("id", { action: "list" }, undefined, undefined, h.ctx)).content[0].text).toBe("No operators on this planner branch.");
+  expect(h.entries.at(-1).data.action).toBe("remove"); expect(h.statuses.has("multiagent")).toBe(false);
+  // The removal is an entry on the branch, so a restore must not resurrect the operator.
+  h.handlers.get("session_tree")(undefined, h.ctx);
+  expect((await tool.execute("id", { action: "list" }, undefined, undefined, h.ctx)).details.operators).toHaveLength(0);
+  await expect(tool.execute("id", { action: "delete", name: "worker" }, undefined, undefined, h.ctx)).rejects.toThrow("Unknown operator");
+ });
+
  test("creates distinct RPC sessions on restart and responds through the actual RPC protocol", async () => {
   const h = harness(); const tool = h.tools.get("multiagent");
   await tool.execute("id", { action: "start", name: "worker", agent: "scout", task: "first" }, undefined, undefined, h.ctx);

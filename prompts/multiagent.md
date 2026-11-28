@@ -23,6 +23,7 @@ Act as the planner and orchestrator for this goal: $@
 - Operators cannot answer interactive prompts such as permission confirmations. Avoid assigning steps that need them; run those yourself after telling the user.
 - Read `inspect` output when a result looks wrong or an operator reports a blocker. Do not retry a failed assignment blindly; change the brief or `restart` with fresh context.
 - Use `stop` when an operator is on the wrong track. Use `restart` only when its accumulated context is hurting.
+- Use `delete` to drop an operator you no longer need. It stops the process and removes the operator from this branch; the session transcript file stays on disk.
 
 ## Deliver
 
