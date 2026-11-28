@@ -22,6 +22,7 @@ that kind of work.
 | Creating a venv or project, `uv`, basedpyright/ruff config | `python-env` |
 | Dealing with bend or bend-2, a language for checkable code | `bend` |
 | Docker, containers, or setting up a project toolchain in Docker | `docker` |
+| Teaching a topic, "teach me X", lessons from first principles | `teach` |
 
 ## Documents
 
